@@ -1,4 +1,4 @@
-## [Unreleased]
+## [5.2.0] - 2026-07-25
 
 * Harden resize behavior for synchronized output, tab stops, and size reports.
 * Reduce parser, allocation, and cell-copy overhead during dense TUI output.
