@@ -3,7 +3,7 @@ import 'package:xterm2/src/core/color_scheme.dart';
 class EscapeEmitter {
   const EscapeEmitter();
 
-  static const _packageVersion = '5.0.0';
+  static const _packageVersion = '5.3.0';
   static const _defaultXtVersion = 'xterm2 $_packageVersion';
   static const _maxXtVersionLength = 256;
 

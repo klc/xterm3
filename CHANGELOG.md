@@ -16,6 +16,7 @@
 * Report mouse buttons immediately without gesture-recognizer delays.
 * Report back and forward mouse buttons through extended mouse protocols.
 * Respond to legacy DECID terminal identification requests.
+* Report the current xterm2 version to terminal applications.
 * Render the British national replacement character set.
 * Render text decorations consistently across blank cells.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
