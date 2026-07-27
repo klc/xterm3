@@ -12,6 +12,7 @@
 * Encode modified Enter keys distinctly for modern interactive CLIs.
 * Preserve distinct Ctrl+Shift letter chords with fixterms encoding.
 * Add standard Ctrl+Insert copy and Shift+Insert paste shortcuts.
+* Correct Ctrl+Alt+Backspace and DEC backarrow modifier handling.
 
 ## [5.2.0] - 2026-07-25
 

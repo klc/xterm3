@@ -77,8 +77,9 @@ void main() {
       final terminal = Terminal(onOutput: output.add);
 
       terminal.keyInput(TerminalKey.backspace, alt: true);
+      terminal.keyInput(TerminalKey.backspace, alt: true, ctrl: true);
 
-      expect(output, ['\x1b\x7f']);
+      expect(output, ['\x1b\x7f', '\x1b\b']);
     });
 
     test('supports xterm alt escape prefix modes', () {
@@ -140,10 +141,19 @@ void main() {
       terminal.write('\x1b[?67h');
       terminal.keyInput(TerminalKey.backspace);
       terminal.keyInput(TerminalKey.backspace, alt: true);
+      terminal.keyInput(TerminalKey.backspace, ctrl: true);
+      terminal.keyInput(TerminalKey.backspace, alt: true, ctrl: true);
       terminal.write('\x1b[?67l');
       terminal.keyInput(TerminalKey.backspace);
 
-      expect(output, ['\x7f', '\b', '\x1b\b', '\x7f']);
+      expect(output, [
+        '\x7f',
+        '\b',
+        '\x1b\b',
+        '\x7f',
+        '\x1b\x7f',
+        '\x7f',
+      ]);
     });
 
     test('keeps cursor keys normal in application keypad mode', () {

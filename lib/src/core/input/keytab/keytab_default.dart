@@ -42,7 +42,8 @@ key Return +Shift-Alt+Control : "\E[27;6;13~"
 key Return -Shift+Alt+Control : "\E[27;7;13~"
 key Return +Shift+Alt+Control : "\E[27;8;13~"
 
-key Backspace  +Alt : "\E\x7f"
+key Backspace  +Alt+Control : "\E\b"
+key Backspace  +Alt-Control : "\E\x7f"
 
 # Backspace and Delete codes are preserving CTRL-H.
 #

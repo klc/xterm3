@@ -48,11 +48,15 @@ class BackspaceInputHandler implements TerminalInputHandler {
     if (event.key != TerminalKey.backspace) return null;
     if (!event.state.backarrowKeyMode) return null;
 
+    final backspace = switch (event.ctrl) {
+      true => '\x7f',
+      false => '\b',
+    };
     final prefix = switch (event.alt) {
       true => '\x1b',
       false => '',
     };
-    return '$prefix\b';
+    return '$prefix$backspace';
   }
 }
 
