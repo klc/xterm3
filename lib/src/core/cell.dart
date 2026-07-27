@@ -76,8 +76,11 @@ abstract class CellAttr {
   static const frameMask = framed | encircled;
   static const visualMask = 0xffff & ~protected;
   static const hyperlinkShift = 16;
-  static const hyperlinkMask = 0xffff << hyperlinkShift;
+  static const hyperlinkMask = 0x3fff << hyperlinkShift;
   static const hyperlinkMarker = 1 << hyperlinkShift;
+  static const semanticPrompt = 1 << 30;
+  static const semanticInput = 2 << 30;
+  static const semanticMask = 3 << 30;
 }
 
 abstract class CellColor {

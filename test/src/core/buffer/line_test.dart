@@ -225,6 +225,19 @@ void main() {
     expect(line.getUnderlineColor(3), 0);
   });
 
+  test('semantic content and hyperlink identifiers occupy distinct bits', () {
+    final line = BufferLine(1);
+    final style = CursorStyle(
+      hyperlinkId: 4096,
+      semanticAttrs: CellAttr.semanticPrompt,
+    );
+
+    line.setCell(0, 0x41, 1, style);
+
+    expect(line.getHyperlinkId(0), 4096);
+    expect(line.getSemanticContent(0), CellAttr.semanticPrompt);
+  });
+
   group('BufferLine anchors', () {
     test('move with content shifted by inserted cells', () {
       final terminal = Terminal()..resize(5, 1);

@@ -70,6 +70,18 @@ class BufferLine with IndexedItem {
         CellAttr.hyperlinkShift;
   }
 
+  int getSemanticContent(int index) {
+    return getAttributes(index) & CellAttr.semanticMask;
+  }
+
+  void setSemanticContent(int index, int value) {
+    final attributes = getAttributes(index);
+    setAttributes(
+      index,
+      (attributes & ~CellAttr.semanticMask) | (value & CellAttr.semanticMask),
+    );
+  }
+
   bool isProtected(int index) {
     return getAttributes(index) & CellAttr.protected != 0;
   }
@@ -168,8 +180,9 @@ class BufferLine with IndexedItem {
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
     _data[offset + _cellBackground] = style.background;
-    _data[offset + _cellAttributes] =
-        style.attrs | (style.hyperlinkId << CellAttr.hyperlinkShift);
+    _data[offset + _cellAttributes] = style.attrs |
+        (style.hyperlinkId << CellAttr.hyperlinkShift) |
+        style.semanticAttrs;
     _data[offset + _cellContent] = char | (witdh << CellContent.widthShift);
     _setUnderlineColor(index, style.underlineColor);
     _combiningCharacters?.remove(index);
@@ -191,8 +204,9 @@ class BufferLine with IndexedItem {
 
     final foreground = style.foreground;
     final background = style.background;
-    final attributes =
-        style.attrs | (style.hyperlinkId << CellAttr.hyperlinkShift);
+    final attributes = style.attrs |
+        (style.hyperlinkId << CellAttr.hyperlinkShift) |
+        style.semanticAttrs;
     for (var offset = 0; offset < count; offset++) {
       final cellOffset = (start + offset) * _cellSize;
       final codeUnit = text.codeUnitAt(textStart + offset);

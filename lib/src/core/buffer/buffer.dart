@@ -1334,7 +1334,7 @@ class Buffer {
       if (line.getContent(column) != 0) return true;
       if (line.getForeground(column) != CellColor.normal) return true;
       if (line.getBackground(column) != CellColor.normal) return true;
-      if (line.getAttributes(column) != 0) return true;
+      if (line.getAttributes(column) & ~CellAttr.semanticMask != 0) return true;
       if (line.getUnderlineColor(column) != CellColor.normal) return true;
     }
     return false;
@@ -1442,6 +1442,7 @@ class Buffer {
       background: style.background,
       underlineColor: style.underlineColor,
       attrs: style.attrs,
+      semanticAttrs: style.semanticAttrs,
     );
   }
 

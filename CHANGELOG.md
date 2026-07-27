@@ -3,6 +3,7 @@
 * Render bounded search matches with a distinct active result.
 * Auto-scroll scrollback while extending a selection beyond the viewport.
 * Add Shift+Home/End/PageUp/PageDown scrollback navigation.
+* Track primary OSC 133/633 prompts across scrollback and reflow.
 
 ## [5.2.0] - 2026-07-25
 

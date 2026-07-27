@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' show max, min;
 
@@ -431,12 +432,46 @@ class Terminal
     content: TerminalSemanticPromptContent.output,
   );
   bool _semanticInputTerminatesAtLineFeed = false;
+  final Queue<CellAnchor> _semanticPromptAnchors = Queue<CellAnchor>();
 
   int _nextHyperlinkId = 1;
 
   int get colorRevision => _colorRevision;
 
   TerminalSemanticPromptState get semanticPromptState => _semanticPromptState;
+
+  /// Returns whether [line] starts a primary semantic prompt.
+  bool isSemanticPromptLine(int line) {
+    _pruneSemanticPromptAnchors();
+    for (final anchor in _semanticPromptAnchors) {
+      if (!_isValidSemanticPromptAnchor(anchor)) continue;
+      if (anchor.y == line) return true;
+      if (anchor.y > line) return false;
+    }
+    return false;
+  }
+
+  /// Finds the nearest primary semantic prompt strictly before [line].
+  int? semanticPromptLineBefore(int line) {
+    _pruneSemanticPromptAnchors();
+    int? result;
+    for (final anchor in _semanticPromptAnchors) {
+      if (!_isValidSemanticPromptAnchor(anchor)) continue;
+      if (anchor.y >= line) break;
+      result = anchor.y;
+    }
+    return result;
+  }
+
+  /// Finds the nearest primary semantic prompt strictly after [line].
+  int? semanticPromptLineAfter(int line) {
+    _pruneSemanticPromptAnchors();
+    for (final anchor in _semanticPromptAnchors) {
+      if (!_isValidSemanticPromptAnchor(anchor)) continue;
+      if (anchor.y > line) return anchor.y;
+    }
+    return null;
+  }
 
   Iterable<MapEntry<int, int>> get indexedColorOverrides {
     return _indexedColorOverrides.entries;
@@ -755,7 +790,9 @@ class Terminal
   /// Clears the viewport and scrollback, then moves renderers to the bottom.
   void clear() {
     if (_isDisposed) return;
+    final activePrompt = _activeSemanticPromptOffset();
     _buffer.clear();
+    _restoreActiveSemanticPrompt(activePrompt);
     if (_synchronizedUpdateMode) return;
     notifyListeners();
   }
@@ -769,6 +806,7 @@ class Terminal
     clearListeners();
     _clipboardCaptureSelector = null;
     _clipboardCaptureBuffer = null;
+    _clearSemanticPromptAnchors();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
   }
@@ -1271,8 +1309,13 @@ class Terminal
     _buffer = _mainBuffer;
     _precedingCodepoint = 0;
     _semanticInputTerminatesAtLineFeed = false;
+    _semanticPromptState = const TerminalSemanticPromptState(
+      content: TerminalSemanticPromptContent.output,
+    );
+    _clearSemanticPromptAnchors();
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
+    _cursorStyle.semanticAttrs = 0;
     _protectionMode = _ProtectionMode.off;
     _insertMode = false;
     _sendReceiveMode = true;
@@ -1328,8 +1371,13 @@ class Terminal
     _synchronizedUpdateTimer = null;
     _synchronizedUpdateMode = false;
     _precedingCodepoint = 0;
+    _semanticInputTerminatesAtLineFeed = false;
+    _semanticPromptState = const TerminalSemanticPromptState(
+      content: TerminalSemanticPromptContent.output,
+    );
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
+    _cursorStyle.semanticAttrs = 0;
     _protectionMode = _ProtectionMode.off;
     _insertMode = false;
     _sendReceiveMode = true;
@@ -2725,12 +2773,16 @@ class Terminal
   void useAltBuffer() {
     _endScreenHyperlinkState();
     _buffer = _altBuffer;
+    _cursorStyle.semanticAttrs = 0;
   }
 
   @override
   void useMainBuffer() {
     _endScreenHyperlinkState();
     _buffer = _mainBuffer;
+    _cursorStyle.semanticAttrs = _semanticAttributes(
+      _semanticPromptState.content,
+    );
   }
 
   void _endScreenHyperlinkState() {
@@ -3917,6 +3969,10 @@ class Terminal
     );
     _semanticInputTerminatesAtLineFeed = actionCode == 0x49;
     _semanticPromptState = state;
+    _cursorStyle.semanticAttrs = _semanticAttributes(content);
+    if (_isPrimarySemanticPrompt(state)) {
+      _recordSemanticPromptAnchor();
+    }
     onSemanticPrompt?.call(state);
   }
 
@@ -3939,6 +3995,7 @@ class Terminal
       lastCommandExitCode: _semanticPromptState.lastCommandExitCode,
     );
     _semanticPromptState = state;
+    _cursorStyle.semanticAttrs = 0;
     onSemanticPrompt?.call(state);
   }
 
@@ -3973,7 +4030,111 @@ class Terminal
       lastCommandExitCode: exitCode,
     );
     _semanticPromptState = state;
+    _cursorStyle.semanticAttrs = _semanticAttributes(content);
+    if (content == TerminalSemanticPromptContent.prompt) {
+      _recordSemanticPromptAnchor();
+    }
     onSemanticPrompt?.call(state);
+  }
+
+  bool _isPrimarySemanticPrompt(TerminalSemanticPromptState state) {
+    if (state.content != TerminalSemanticPromptContent.prompt) return false;
+    return switch (state.promptKind) {
+      TerminalSemanticPromptKind.continuation ||
+      TerminalSemanticPromptKind.secondary =>
+        false,
+      _ => true,
+    };
+  }
+
+  void _recordSemanticPromptAnchor() {
+    if (!identical(_buffer, _mainBuffer)) return;
+    _pruneSemanticPromptAnchors();
+
+    final last = switch (_semanticPromptAnchors.isEmpty) {
+      true => null,
+      false => _semanticPromptAnchors.last,
+    };
+    if (last != null &&
+        _isValidSemanticPromptAnchor(last) &&
+        last.y == _mainBuffer.absoluteCursorY) {
+      return;
+    }
+
+    while (_semanticPromptAnchors.length >= _mainBuffer.lines.maxLength) {
+      _semanticPromptAnchors.removeFirst().dispose();
+    }
+    _mainBuffer.currentLine.setSemanticContent(
+      _mainBuffer.cursorX,
+      CellAttr.semanticPrompt,
+    );
+    _semanticPromptAnchors.add(_mainBuffer.createAnchorFromCursor());
+  }
+
+  void _pruneSemanticPromptAnchors() {
+    while (_semanticPromptAnchors.isNotEmpty &&
+        !_isValidSemanticPromptAnchor(_semanticPromptAnchors.first)) {
+      _semanticPromptAnchors.removeFirst().dispose();
+    }
+  }
+
+  bool _isValidSemanticPromptAnchor(CellAnchor anchor) {
+    if (!_mainBuffer.ownsAnchor(anchor)) return false;
+    final line = anchor.line;
+    if (line == null) return false;
+    for (var column = 0; column < line.length; column++) {
+      if (line.getSemanticContent(column) == CellAttr.semanticPrompt) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _clearSemanticPromptAnchors() {
+    for (final anchor in _semanticPromptAnchors) {
+      anchor.dispose();
+    }
+    _semanticPromptAnchors.clear();
+  }
+
+  ({int rowsAboveCursor, int column})? _activeSemanticPromptOffset() {
+    if (!identical(_buffer, _mainBuffer)) return null;
+    if (_semanticPromptState.content == TerminalSemanticPromptContent.output) {
+      return null;
+    }
+
+    _pruneSemanticPromptAnchors();
+    CellAnchor? anchor;
+    for (final candidate in _semanticPromptAnchors) {
+      if (_isValidSemanticPromptAnchor(candidate)) anchor = candidate;
+    }
+    if (anchor == null) return null;
+    final rowsAboveCursor = _mainBuffer.absoluteCursorY - anchor.y;
+    if (rowsAboveCursor < 0 || rowsAboveCursor >= _mainBuffer.viewHeight) {
+      return null;
+    }
+    return (rowsAboveCursor: rowsAboveCursor, column: anchor.x);
+  }
+
+  void _restoreActiveSemanticPrompt(
+    ({int rowsAboveCursor, int column})? prompt,
+  ) {
+    _pruneSemanticPromptAnchors();
+    if (prompt == null) return;
+
+    final line = _mainBuffer.absoluteCursorY - prompt.rowsAboveCursor;
+    if (line < 0 || line >= _mainBuffer.lines.length) return;
+    final column = prompt.column.clamp(0, _mainBuffer.viewWidth - 1);
+    _semanticPromptAnchors.add(_mainBuffer.createAnchor(column, line));
+  }
+
+  int _semanticAttributes(TerminalSemanticPromptContent content) {
+    if (!identical(_buffer, _mainBuffer)) return 0;
+    return switch (content) {
+      TerminalSemanticPromptContent.prompt => CellAttr.semanticPrompt,
+      TerminalSemanticPromptContent.input => CellAttr.semanticInput,
+      TerminalSemanticPromptContent.output => 0,
+    };
   }
 }
 

@@ -1825,6 +1825,109 @@ void main() {
     );
   });
 
+  test('Terminal indexes primary OSC 133 prompts', () {
+    final terminal = Terminal(maxLines: 20)..resize(12, 4);
+
+    terminal.write('\x1b]133;A\x1b\\first\r\n');
+    terminal.write('\x1b]133;A;k=c\x1b\\continuation\r\n');
+    terminal.write('\x1b]133;A\x1b\\second');
+
+    expect(terminal.isSemanticPromptLine(0), isTrue);
+    expect(terminal.isSemanticPromptLine(1), isFalse);
+    expect(terminal.isSemanticPromptLine(2), isTrue);
+    expect(terminal.semanticPromptLineBefore(2), 0);
+    expect(terminal.semanticPromptLineAfter(0), 2);
+    expect(terminal.semanticPromptLineBefore(0), isNull);
+    expect(terminal.semanticPromptLineAfter(2), isNull);
+  });
+
+  test('Terminal keeps semantic prompt indexes through reflow', () {
+    final terminal = Terminal(maxLines: 20)..resize(8, 3);
+
+    terminal.write('\x1b]133;A\x1b\\1234567890\r\n');
+    terminal.write('\x1b]133;A\x1b\\second');
+    terminal.resize(4, 3);
+
+    expect(terminal.isSemanticPromptLine(0), isTrue);
+    final secondPrompt = terminal.semanticPromptLineAfter(0);
+    expect(secondPrompt, isNotNull);
+    if (secondPrompt != null) {
+      expect(terminal.isSemanticPromptLine(secondPrompt), isTrue);
+      expect(secondPrompt, greaterThan(0));
+    }
+  });
+
+  test('Terminal prunes semantic prompts with scrollback overflow', () {
+    final terminal = Terminal(maxLines: 4)..resize(8, 2);
+    final capacity = terminal.buffer.lines.maxLength;
+
+    for (var index = 0; index < capacity + 2; index++) {
+      terminal.write('\x1b]133;A\x1b\\p$index\r\n');
+    }
+
+    expect(terminal.semanticPromptLineAfter(-1), 0);
+    expect(terminal.semanticPromptLineBefore(99), capacity - 2);
+  });
+
+  test('Terminal preserves the active semantic prompt index when cleared', () {
+    final terminal = Terminal(maxLines: 20)..resize(12, 4);
+
+    terminal.write('old\r\n\x1b]133;A\x1b\\~/simon ');
+    terminal.write('\x1b]133;B\x1b\\');
+    terminal.clear();
+
+    expect(terminal.isSemanticPromptLine(3), isTrue);
+    expect(terminal.semanticPromptLineBefore(4), 3);
+  });
+
+  test('Terminal invalidates erased semantic prompt indexes', () {
+    final terminal = Terminal(maxLines: 20)..resize(12, 4);
+
+    terminal.write('\x1b]133;A\x1b\\prompt');
+    expect(terminal.isSemanticPromptLine(0), isTrue);
+
+    terminal.write('\x1b]133;C\x1b\\\r\x1b[2K');
+
+    expect(terminal.isSemanticPromptLine(0), isFalse);
+    expect(terminal.semanticPromptLineAfter(-1), isNull);
+  });
+
+  test('Terminal replaces an erased semantic prompt index', () {
+    final terminal = Terminal(maxLines: 20)..resize(12, 4);
+
+    terminal.write('\x1b]133;A\x1b\\first\r\n');
+    terminal.write('\x1b]133;A\x1b\\erased');
+    terminal.write('\x1b]133;C\x1b\\\r\x1b[2K');
+    terminal.write('\x1b]133;A\x1b\\replacement');
+
+    expect(terminal.isSemanticPromptLine(0), isTrue);
+    expect(terminal.isSemanticPromptLine(1), isTrue);
+    expect(terminal.semanticPromptLineAfter(0), 1);
+  });
+
+  test('Terminal keeps semantic content across SGR resets', () {
+    final terminal = Terminal(maxLines: 20)..resize(12, 4);
+
+    terminal.write('\x1b]133;A\x1b\\one\x1b[0mtwo');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getSemanticContent(0), CellAttr.semanticPrompt);
+    expect(line.getSemanticContent(3), CellAttr.semanticPrompt);
+  });
+
+  test('Terminal reset clears semantic prompt indexes', () {
+    final terminal = Terminal(maxLines: 20)..resize(12, 4);
+
+    terminal.write('\x1b]133;A\x1b\\prompt');
+    terminal.reset();
+
+    expect(terminal.semanticPromptLineAfter(-1), isNull);
+    expect(
+      terminal.semanticPromptState.content,
+      TerminalSemanticPromptContent.output,
+    );
+  });
+
   test('Terminal applies OSC 133 fresh-line actions', () {
     final states = <TerminalSemanticPromptState>[];
     final terminal = Terminal(onSemanticPrompt: states.add)..resize(10, 4);
@@ -1903,6 +2006,7 @@ void main() {
     ]);
     expect(states.last.lastCommandExitCode, 7);
     expect(terminal.semanticPromptState.lastCommandExitCode, 7);
+    expect(terminal.isSemanticPromptLine(0), isTrue);
   });
 
   test('Terminal reports OSC 633 shell integration cwd property', () {

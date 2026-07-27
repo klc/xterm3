@@ -17,12 +17,15 @@ class CursorStyle {
 
   int hyperlinkId;
 
+  int semanticAttrs;
+
   CursorStyle({
     this.foreground = 0,
     this.background = 0,
     this.underlineColor = 0,
     this.attrs = 0,
     this.hyperlinkId = 0,
+    this.semanticAttrs = 0,
   });
 
   static final empty = CursorStyle();
