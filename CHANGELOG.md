@@ -1,4 +1,4 @@
-## [Unreleased]
+## [5.3.0] - 2026-07-28
 
 * Render bounded search matches with a distinct active result.
 * Auto-scroll scrollback while extending a selection beyond the viewport.
@@ -17,6 +17,8 @@
 * Bound streaming clipboard capture memory and recover after overflow.
 * Reduce allocation overhead for non-ASCII terminal output.
 * Avoid duplicate Unicode width lookups while processing terminal output.
+* Ignore unsupported control bytes instead of rendering them as glyphs.
+* Harden hyperlink hit testing during concurrent resize and reflow.
 
 ## [5.2.0] - 2026-07-25
 
