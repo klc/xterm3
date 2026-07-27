@@ -10,20 +10,61 @@ void main() {
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
 
     final shortcuts = defaultTerminalShortcuts;
-    final pasteShortcut = shortcuts.entries
+    final pasteShortcuts = shortcuts.entries
         .where((entry) => entry.value is PasteTextIntent)
         .map((entry) => entry.key)
         .whereType<SingleActivator>()
-        .single;
+        .toList();
+    final copyShortcuts = shortcuts.entries
+        .where((entry) => entry.value is CopySelectionTextIntent)
+        .map((entry) => entry.key)
+        .whereType<SingleActivator>()
+        .toList();
     final selectAllShortcut = shortcuts.entries
         .where((entry) => entry.value is SelectAllTextIntent)
         .map((entry) => entry.key)
         .whereType<SingleActivator>()
         .single;
 
-    expect(pasteShortcut.trigger, LogicalKeyboardKey.keyV);
-    expect(pasteShortcut.control, isTrue);
-    expect(pasteShortcut.shift, isTrue);
+    expect(
+      pasteShortcuts,
+      contains(
+        isA<SingleActivator>()
+            .having(
+              (shortcut) => shortcut.trigger,
+              'trigger',
+              LogicalKeyboardKey.keyV,
+            )
+            .having((shortcut) => shortcut.control, 'control', isTrue)
+            .having((shortcut) => shortcut.shift, 'shift', isTrue),
+      ),
+    );
+    expect(
+      pasteShortcuts,
+      contains(
+        isA<SingleActivator>()
+            .having(
+              (shortcut) => shortcut.trigger,
+              'trigger',
+              LogicalKeyboardKey.insert,
+            )
+            .having((shortcut) => shortcut.control, 'control', isFalse)
+            .having((shortcut) => shortcut.shift, 'shift', isTrue),
+      ),
+    );
+    expect(
+      copyShortcuts,
+      contains(
+        isA<SingleActivator>()
+            .having(
+              (shortcut) => shortcut.trigger,
+              'trigger',
+              LogicalKeyboardKey.insert,
+            )
+            .having((shortcut) => shortcut.control, 'control', isTrue)
+            .having((shortcut) => shortcut.shift, 'shift', isFalse),
+      ),
+    );
     expect(selectAllShortcut.trigger, LogicalKeyboardKey.keyA);
     expect(selectAllShortcut.control, isTrue);
     expect(selectAllShortcut.shift, isTrue);
