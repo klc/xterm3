@@ -65,6 +65,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   Offset? _lastDragPosition;
 
+  var _reportingPointerDrag = false;
+
   LongPressStartDetails? _lastLongPressStartDetails;
 
   EdgeDraggingAutoScroller? _selectionAutoScroller;
@@ -135,18 +137,6 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     if (buttons & kSecondaryMouseButton != 0) return TerminalMouseButton.right;
     if (buttons & kMiddleMouseButton != 0) return TerminalMouseButton.middle;
     return TerminalMouseButton.none;
-  }
-
-  bool get _terminalReportsDrag {
-    if (widget.readOnly ||
-        _bypassesMouseReportingWithShift ||
-        !widget.terminalController.shouldSendPointerInput(PointerInput.drag)) {
-      return false;
-    }
-    return switch (widget.terminalView.widget.terminal.mouseMode) {
-      MouseMode.upDownScrollDrag || MouseMode.upDownScrollMove => true,
-      _ => false,
-    };
   }
 
   void _tapDown(
@@ -282,7 +272,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     _stopSelectionAutoScroll();
     _lastDragStartDetails = details;
     _lastDragPosition = details.localPosition;
-    if (_terminalReportsDrag) return;
+    _reportingPointerDrag = _applicationHandlesTap;
+    if (_reportingPointerDrag) return;
 
     if (details.kind != PointerDeviceKind.mouse) {
       renderTerminal.selectWord(details.localPosition);
@@ -297,18 +288,34 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onDragUpdate(DragUpdateDetails details) {
-    if (_terminalReportsDrag) return;
     _lastDragPosition = details.localPosition;
+    if (_reportingPointerDrag) return;
     _updateDragSelection();
     _startSelectionAutoScroll(details.localPosition);
   }
 
   void onDragEnd(DragEndDetails details) {
+    _releaseReportedDrag();
     _finishDragSelection();
   }
 
   void onDragCancel() {
+    _releaseReportedDrag();
     _finishDragSelection();
+  }
+
+  void _releaseReportedDrag() {
+    if (!_reportingPointerDrag) return;
+    _reportingPointerDrag = false;
+    final position = _lastDragPosition;
+    if (position == null) return;
+
+    renderTerminal.mouseEvent(
+      TerminalMouseButton.left,
+      TerminalMouseButtonState.up,
+      position,
+      modifiers: _currentModifiers(),
+    );
   }
 
   void _updateDragSelection() {

@@ -1406,6 +1406,55 @@ void main() {
       controller.dispose();
     });
 
+    testWidgets('mouse-reporting apps receive drag releases', (tester) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)..write('drag target');
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+      final controller = TerminalController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              controller: controller,
+              autoResize: false,
+            ),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final start = state.renderTerminal.localToGlobal(
+        Offset(
+          state.renderTerminal.cellSize.width * 0.5,
+          state.renderTerminal.cellSize.height * 0.5,
+        ),
+      );
+      final end = state.renderTerminal.localToGlobal(
+        Offset(
+          state.renderTerminal.cellSize.width * 5.5,
+          state.renderTerminal.cellSize.height * 0.5,
+        ),
+      );
+      final gesture = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+      );
+
+      await gesture.down(start);
+      await tester.pump(kPressTimeout);
+      await gesture.moveTo(end);
+      await tester.pump();
+      await gesture.up();
+      await tester.pump();
+
+      expect(output.where((value) => value.endsWith('M')), hasLength(1));
+      expect(output.where((value) => value.endsWith('m')), hasLength(1));
+      expect(controller.selection, isNull);
+
+      controller.dispose();
+    });
+
     testWidgets('dragging beyond the viewport scrolls the selection', (
       tester,
     ) async {
