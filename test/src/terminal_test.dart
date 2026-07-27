@@ -433,6 +433,47 @@ void main() {
     expect(terminal.buffer.cursorY, 0);
   });
 
+  test('Terminal preserves pending wrap when reflow ends at the edge', () {
+    final terminal = Terminal()..resize(4, 3);
+
+    terminal.write('abcd');
+    terminal.resize(2, 3);
+    terminal.write('X');
+
+    expect(terminal.buffer.lines[0].getText(), 'ab');
+    expect(terminal.buffer.lines[1].getText(), 'cd');
+    expect(terminal.buffer.lines[2].getText(), 'X');
+    expect(terminal.buffer.cursorX, 1);
+    expect(terminal.buffer.cursorY, 1);
+  });
+
+  test('Terminal preserves saved pending wrap at a reflow edge', () {
+    final terminal = Terminal()..resize(4, 3);
+
+    terminal.write('abcd\x1b7');
+    terminal.resize(2, 3);
+    terminal.write('\x1b8X');
+
+    expect(terminal.buffer.lines[0].getText(), 'ab');
+    expect(terminal.buffer.lines[1].getText(), 'cd');
+    expect(terminal.buffer.lines[2].getText(), 'X');
+    expect(terminal.buffer.cursorX, 1);
+    expect(terminal.buffer.cursorY, 1);
+  });
+
+  test('Terminal preserves pending wrap across height-only resize', () {
+    final terminal = Terminal()..resize(4, 2);
+
+    terminal.write('abcd');
+    terminal.resize(4, 3);
+    terminal.write('X');
+
+    expect(terminal.buffer.lines[0].getText(), 'abcd');
+    expect(terminal.buffer.lines[1].getText(), 'X');
+    expect(terminal.buffer.cursorX, 1);
+    expect(terminal.buffer.cursorY, 1);
+  });
+
   test('Terminal applies DECCOLM screen reset side effects', () {
     final terminal = Terminal(maxLines: 10)..resize(4, 2);
     terminal.write('scrollback\n\x1b[31;44mcontent\x1b[2;2r\x1b[2;3H');

@@ -1641,7 +1641,7 @@ class Buffer {
       }
     }
 
-    _cursorX = _cursorX.clamp(0, newWidth - 1);
+    _cursorX = _cursorX.clamp(0, newWidth);
     _marginLeft = 0;
     _marginRight = newWidth - 1;
   }
