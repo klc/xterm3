@@ -213,6 +213,9 @@ class KeytabInputHandler implements TerminalInputHandler {
     if (record == null) {
       return null;
     }
+    if (record.action.type == KeytabActionType.shortcut) {
+      return null;
+    }
 
     final result = record.action.unescapedValue();
     return insertModifiers(event, result);

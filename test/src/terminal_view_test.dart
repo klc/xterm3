@@ -934,10 +934,11 @@ void main() {
 
       await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
       await tester.pump();
 
-      expect(output, isNotEmpty);
+      expect(output, contains('\x1b[1;2A'));
     });
 
     testWidgets('semantic prompt navigation follows prompt history', (

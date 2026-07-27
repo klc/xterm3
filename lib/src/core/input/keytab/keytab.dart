@@ -4,6 +4,8 @@ import 'package:xterm2/src/core/input/keytab/keytab_parse.dart';
 import 'package:xterm2/src/core/input/keytab/keytab_record.dart';
 import 'package:xterm2/src/core/input/keytab/keytab_token.dart';
 
+export 'package:xterm2/src/core/input/keytab/keytab_record.dart';
+
 class Keytab {
   Keytab({
     required this.name,

@@ -408,6 +408,53 @@ void main() {
 
       expect(output, ['\x1b[27;6;72~', '\x1b[27;3;56~', '\x08']);
     });
+
+    test('encodes every legacy arrow-key modifier combination', () {
+      final output = <String>[];
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.linux,
+      );
+
+      terminal.keyInput(TerminalKey.arrowUp, shift: true);
+      terminal.keyInput(TerminalKey.arrowDown, alt: true);
+      terminal.keyInput(TerminalKey.arrowRight, alt: true);
+      terminal.keyInput(TerminalKey.arrowLeft, alt: true, ctrl: true);
+      terminal.keyInput(
+        TerminalKey.arrowRight,
+        shift: true,
+        alt: true,
+        ctrl: true,
+      );
+
+      expect(output, [
+        '\x1b[1;2A',
+        '\x1b[1;3B',
+        '\x1b[1;3C',
+        '\x1b[1;7D',
+        '\x1b[1;8C',
+      ]);
+    });
+
+    test('preserves macOS Option word navigation', () {
+      final output = <String>[];
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.macos,
+      );
+
+      terminal.keyInput(TerminalKey.arrowRight, alt: true);
+      terminal.keyInput(TerminalKey.arrowLeft, alt: true);
+      terminal.keyInput(TerminalKey.arrowRight, alt: true, ctrl: true);
+      terminal.keyInput(TerminalKey.arrowLeft, shift: true, alt: true);
+
+      expect(output, [
+        '\x1bf',
+        '\x1bb',
+        '\x1b[1;7C',
+        '\x1b[1;4D',
+      ]);
+    });
   });
 
   group('KeytabInputHandler', () {
@@ -431,6 +478,19 @@ void main() {
       terminal.keyInput(TerminalKey.home, shift: true);
 
       expect(output, '\x1b[1;2H');
+    });
+
+    test('does not emit keytab shortcut action names', () {
+      final output = <String>[];
+      final terminal = Terminal(
+        inputHandler: KeytabInputHandler(
+          Keytab.parse('key Home : scrollUpToTop'),
+        ),
+        onOutput: output.add,
+      );
+
+      expect(terminal.keyInput(TerminalKey.home), isFalse);
+      expect(output, isEmpty);
     });
   });
 }
