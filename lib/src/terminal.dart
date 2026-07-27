@@ -974,29 +974,29 @@ class Terminal
   String _sanitizePasteText(String text) {
     if (!_pasteNeedsSanitization(text)) return text;
 
-    final codePoints = text.runes.toList(growable: false);
-    var sanitized = StringBuffer();
-    var changed = false;
-
-    for (var i = 0; i < codePoints.length; i++) {
-      final codePoint = codePoints[i];
-      if (codePoint == 0x1b) {
-        i = _skipPastedEscapeSequence(codePoints, i);
-        changed = true;
+    final sanitized = StringBuffer();
+    var copyStart = 0;
+    var index = 0;
+    while (index < text.length) {
+      final codeUnit = text.codeUnitAt(index);
+      if (codeUnit == 0x1b) {
+        sanitized.write(text.substring(copyStart, index));
+        index = _skipPastedEscapeSequence(text, index) + 1;
+        copyStart = index;
         continue;
       }
-      if (_shouldReplacePastedControl(codePoint)) {
+      if (_shouldReplacePastedControl(codeUnit)) {
+        sanitized.write(text.substring(copyStart, index));
         sanitized.writeCharCode(0x20);
-        changed = true;
+        index++;
+        copyStart = index;
         continue;
       }
-      sanitized.writeCharCode(codePoint);
+      index++;
     }
 
-    return switch (changed) {
-      true => sanitized.toString(),
-      false => text,
-    };
+    sanitized.write(text.substring(copyStart));
+    return sanitized.toString();
   }
 
   bool _pasteNeedsSanitization(String text) {
@@ -1011,54 +1011,67 @@ class Terminal
     return codePoint >= 0x80 && codePoint <= 0x9f;
   }
 
-  int _skipPastedEscapeSequence(List<int> codePoints, int escapeIndex) {
+  int _skipPastedEscapeSequence(String text, int escapeIndex) {
     final nextIndex = escapeIndex + 1;
-    if (nextIndex >= codePoints.length) return escapeIndex;
+    if (nextIndex >= text.length) return escapeIndex;
 
-    final next = codePoints[nextIndex];
+    final next = text.codeUnitAt(nextIndex);
     if (next == 0x5b) {
-      return _skipPastedCsiSequence(codePoints, nextIndex);
+      return _skipPastedCsiSequence(text, nextIndex);
     }
     if (next == 0x5d) {
-      return _skipPastedOscSequence(codePoints, nextIndex);
+      return _skipPastedOscSequence(text, nextIndex);
     }
     if (next == 0x50 || next == 0x5e || next == 0x5f) {
-      return _skipPastedStringControl(codePoints, nextIndex);
+      return _skipPastedStringControl(text, nextIndex);
+    }
+    if (_isHighSurrogate(next) &&
+        nextIndex + 1 < text.length &&
+        _isLowSurrogate(text.codeUnitAt(nextIndex + 1))) {
+      return nextIndex + 1;
     }
 
     return nextIndex;
   }
 
-  int _skipPastedCsiSequence(List<int> codePoints, int csiIndex) {
-    for (var i = csiIndex + 1; i < codePoints.length; i++) {
-      final codePoint = codePoints[i];
-      if (codePoint >= 0x40 && codePoint <= 0x7e) return i;
-    }
-    return codePoints.length - 1;
+  bool _isHighSurrogate(int codeUnit) {
+    return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
   }
 
-  int _skipPastedOscSequence(List<int> codePoints, int oscIndex) {
-    for (var i = oscIndex + 1; i < codePoints.length; i++) {
-      final codePoint = codePoints[i];
-      if (codePoint == 0x07) return i;
-      if (codePoint == 0x1b &&
-          i + 1 < codePoints.length &&
-          codePoints[i + 1] == 0x5c) {
-        return i + 1;
-      }
-    }
-    return codePoints.length - 1;
+  bool _isLowSurrogate(int codeUnit) {
+    return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
   }
 
-  int _skipPastedStringControl(List<int> codePoints, int controlIndex) {
-    for (var i = controlIndex + 1; i < codePoints.length; i++) {
-      if (codePoints[i] == 0x1b &&
-          i + 1 < codePoints.length &&
-          codePoints[i + 1] == 0x5c) {
-        return i + 1;
+  int _skipPastedCsiSequence(String text, int csiIndex) {
+    for (var index = csiIndex + 1; index < text.length; index++) {
+      final codeUnit = text.codeUnitAt(index);
+      if (codeUnit >= 0x40 && codeUnit <= 0x7e) return index;
+    }
+    return text.length - 1;
+  }
+
+  int _skipPastedOscSequence(String text, int oscIndex) {
+    for (var index = oscIndex + 1; index < text.length; index++) {
+      final codeUnit = text.codeUnitAt(index);
+      if (codeUnit == 0x07) return index;
+      if (codeUnit == 0x1b &&
+          index + 1 < text.length &&
+          text.codeUnitAt(index + 1) == 0x5c) {
+        return index + 1;
       }
     }
-    return codePoints.length - 1;
+    return text.length - 1;
+  }
+
+  int _skipPastedStringControl(String text, int controlIndex) {
+    for (var index = controlIndex + 1; index < text.length; index++) {
+      if (text.codeUnitAt(index) == 0x1b &&
+          index + 1 < text.length &&
+          text.codeUnitAt(index + 1) == 0x5c) {
+        return index + 1;
+      }
+    }
+    return text.length - 1;
   }
 
   /// Reports a terminal viewport focus change to the underlying application.
