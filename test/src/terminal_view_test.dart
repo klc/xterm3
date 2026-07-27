@@ -954,6 +954,102 @@ void main() {
   });
 
   group('TerminalView selection gestures', () {
+    testWidgets('dragging beyond the viewport scrolls the selection', (
+      tester,
+    ) async {
+      final terminal = Terminal(maxLines: 100)..resize(20, 5);
+      final controller = TerminalController();
+      final scrollController = ScrollController();
+
+      terminal.write(
+        List.generate(40, (index) => 'line $index\r\n').join(),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 400,
+              height: 120,
+              child: TerminalView(
+                terminal,
+                controller: controller,
+                scrollController: scrollController,
+                autoResize: false,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      scrollController.jumpTo(0);
+      await tester.pump();
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final renderTerminal = state.renderTerminal;
+      final start = renderTerminal.localToGlobal(
+        Offset(renderTerminal.cellSize.width, renderTerminal.lineHeight),
+      );
+      final beyondBottom = renderTerminal.localToGlobal(
+        Offset(
+          renderTerminal.cellSize.width * 4,
+          renderTerminal.size.height + renderTerminal.lineHeight * 2,
+        ),
+      );
+
+      final gesture = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.down(start);
+      await gesture.moveTo(beyondBottom);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+
+      expect(scrollController.offset, greaterThan(0));
+      expect(controller.selection, isNotNull);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      final offsetAfterDrag = scrollController.offset;
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(scrollController.offset, offsetAfterDrag);
+
+      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      await tester.pump();
+      final offsetBeforeUpwardDrag = scrollController.offset;
+      final upwardStart = renderTerminal.localToGlobal(
+        Offset(
+          renderTerminal.cellSize.width * 4,
+          renderTerminal.size.height - renderTerminal.lineHeight,
+        ),
+      );
+      final beyondTop = renderTerminal.localToGlobal(
+        Offset(
+          renderTerminal.cellSize.width,
+          -renderTerminal.lineHeight * 2,
+        ),
+      );
+
+      final upwardGesture = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+      );
+      await upwardGesture.down(upwardStart);
+      await upwardGesture.moveTo(beyondTop);
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+
+      expect(scrollController.offset, lessThan(offsetBeforeUpwardDrag));
+
+      await upwardGesture.up();
+      await tester.pumpAndSettle();
+
+      controller.dispose();
+      scrollController.dispose();
+    });
+
     testWidgets('alt drag creates a rectangular block selection', (
       tester,
     ) async {

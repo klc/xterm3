@@ -272,6 +272,8 @@ class TerminalViewState extends State<TerminalView> {
     throw StateError('Terminal viewport render object is not available');
   }
 
+  ScrollableState? get scrollableState => _scrollableKey.currentState;
+
   @override
   void initState() {
     _focusNode = widget.focusNode ?? FocusNode();

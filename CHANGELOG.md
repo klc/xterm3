@@ -1,6 +1,7 @@
 ## [Unreleased]
 
 * Render bounded search matches with a distinct active result.
+* Auto-scroll scrollback while extending a selection beyond the viewport.
 
 ## [5.2.0] - 2026-07-25
 

@@ -55,13 +55,27 @@ class TerminalGestureHandler extends StatefulWidget {
 }
 
 class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
+  static const _selectionScrollVelocity = 30.0;
+
   TerminalViewState get terminalView => widget.terminalView;
 
   RenderTerminal get renderTerminal => terminalView.renderTerminal;
 
   DragStartDetails? _lastDragStartDetails;
 
+  Offset? _lastDragPosition;
+
   LongPressStartDetails? _lastLongPressStartDetails;
+
+  EdgeDraggingAutoScroller? _selectionAutoScroller;
+
+  ScrollableState? _selectionAutoScrollerOwner;
+
+  @override
+  void dispose() {
+    _stopSelectionAutoScroll();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -82,6 +96,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         // onLongPressUp: onLongPressUp,
         onDragStart: onDragStart,
         onDragUpdate: onDragUpdate,
+        onDragEnd: onDragEnd,
+        onDragCancel: onDragCancel,
         onDoubleTapDown: onDoubleTapDown,
         onTripleTapDown: onTripleTapDown,
       ),
@@ -244,8 +260,10 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onLongPressMoveUpdate(LongPressMoveUpdateDetails details) {
+    final startDetails = _lastLongPressStartDetails;
+    if (startDetails == null) return;
     renderTerminal.selectWord(
-      _lastLongPressStartDetails!.localPosition,
+      startDetails.localPosition,
       details.localPosition,
     );
   }
@@ -253,7 +271,9 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   // void onLongPressUp() {}
 
   void onDragStart(DragStartDetails details) {
+    _stopSelectionAutoScroll();
     _lastDragStartDetails = details;
+    _lastDragPosition = details.localPosition;
     if (_terminalReportsDrag) return;
 
     if (details.kind != PointerDeviceKind.mouse) {
@@ -270,11 +290,57 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   void onDragUpdate(DragUpdateDetails details) {
     if (_terminalReportsDrag) return;
+    _lastDragPosition = details.localPosition;
+    _updateDragSelection();
+    _startSelectionAutoScroll(details.localPosition);
+  }
+
+  void onDragEnd(DragEndDetails details) {
+    _finishDragSelection();
+  }
+
+  void onDragCancel() {
+    _finishDragSelection();
+  }
+
+  void _updateDragSelection() {
+    final startDetails = _lastDragStartDetails;
+    final dragPosition = _lastDragPosition;
+    if (startDetails == null || dragPosition == null) return;
     renderTerminal.selectCharacters(
-      _lastDragStartDetails!.localPosition,
-      details.localPosition,
+      startDetails.localPosition,
+      dragPosition,
       _dragSelectionMode,
     );
+  }
+
+  void _startSelectionAutoScroll(Offset dragPosition) {
+    final scrollable = terminalView.scrollableState;
+    if (scrollable == null) return;
+
+    if (_selectionAutoScrollerOwner != scrollable) {
+      _selectionAutoScroller?.stopAutoScroll();
+      _selectionAutoScrollerOwner = scrollable;
+      _selectionAutoScroller = EdgeDraggingAutoScroller(
+        scrollable,
+        velocityScalar: _selectionScrollVelocity,
+        onScrollViewScrolled: _updateDragSelection,
+      );
+    }
+
+    _selectionAutoScroller?.startAutoScrollIfNecessary(
+      Rect.fromCenter(center: dragPosition, width: 0, height: 0),
+    );
+  }
+
+  void _finishDragSelection() {
+    _stopSelectionAutoScroll();
+    _lastDragStartDetails = null;
+    _lastDragPosition = null;
+  }
+
+  void _stopSelectionAutoScroll() {
+    _selectionAutoScroller?.stopAutoScroll();
   }
 
   SelectionMode get _dragSelectionMode {
