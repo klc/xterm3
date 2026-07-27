@@ -466,6 +466,7 @@ class TerminalViewState extends State<TerminalView> {
           modifiers: modifiers,
         );
       },
+      getScrollPosition: () => _scrollableKey.currentState?.position,
       getLineHeight: () => renderTerminal.lineHeight,
       child: child,
     );

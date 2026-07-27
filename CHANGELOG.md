@@ -7,6 +7,7 @@
 * Navigate semantic prompts with native platform shortcuts.
 * Correct modified arrow-key sequences across main and alternate screens.
 * Encode modified F1–F4 keys with xterm-compatible CSI sequences.
+* Preserve Shift+wheel scrollback while applications report mouse input.
 
 ## [5.2.0] - 2026-07-25
 

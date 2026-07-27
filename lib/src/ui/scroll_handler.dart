@@ -20,6 +20,7 @@ class TerminalScrollGestureHandler extends StatefulWidget {
     required this.terminal,
     required this.terminalController,
     required this.sendMouseEvent,
+    required this.getScrollPosition,
     required this.getLineHeight,
     this.simulateScroll = true,
     this.readOnly = false,
@@ -31,6 +32,9 @@ class TerminalScrollGestureHandler extends StatefulWidget {
   final TerminalController terminalController;
 
   final TerminalMouseEventCallback sendMouseEvent;
+
+  /// Returns the scroll position of the terminal's main buffer.
+  final ScrollPosition? Function() getScrollPosition;
 
   /// Returns the pixel height of lines in the terminal.
   final double Function() getLineHeight;
@@ -106,21 +110,53 @@ class _TerminalScrollGestureHandlerState
     if (widget.readOnly ||
         !widget.terminalController
             .shouldSendPointerInput(PointerInput.scroll)) {
+      _scrollMainBuffer(up);
       return;
     }
 
-    final handled = widget.sendMouseEvent(
-      up ? TerminalMouseButton.wheelUp : TerminalMouseButton.wheelDown,
-      TerminalMouseButtonState.down,
-      lastPointerPosition,
-      modifiers: _currentModifiers(),
-    );
+    final modifiers = _currentModifiers();
+    var handled = false;
+    if (!modifiers.shift || widget.terminal.mouseShiftCaptureMode) {
+      handled = widget.sendMouseEvent(
+        up ? TerminalMouseButton.wheelUp : TerminalMouseButton.wheelDown,
+        TerminalMouseButtonState.down,
+        lastPointerPosition,
+        modifiers: modifiers,
+      );
+    }
 
-    if (!handled && widget.simulateScroll && widget.terminal.isUsingAltBuffer) {
+    if (handled) return;
+
+    if (!widget.terminal.isUsingAltBuffer) {
+      _scrollMainBuffer(up);
+      return;
+    }
+
+    if (widget.simulateScroll) {
       widget.terminal.keyInput(
         up ? TerminalKey.arrowUp : TerminalKey.arrowDown,
       );
     }
+  }
+
+  void _scrollMainBuffer(bool up) {
+    if (widget.terminal.isUsingAltBuffer) return;
+
+    final position = widget.getScrollPosition();
+    if (position == null) return;
+
+    final lineHeight = widget.getLineHeight();
+    if (lineHeight <= 0) return;
+
+    final delta = switch (up) {
+      true => -lineHeight,
+      false => lineHeight,
+    };
+    final target = (position.pixels + delta).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    position.jumpTo(target.toDouble());
   }
 
   TerminalMouseModifiers _currentModifiers() {
@@ -156,6 +192,9 @@ class _TerminalScrollGestureHandlerState
     final scrollbackBehavior = ScrollConfiguration.of(context).copyWith(
       physics: const NeverScrollableScrollPhysics(),
     );
+    final applicationScrollBehavior = ScrollConfiguration.of(context).copyWith(
+      pointerAxisModifiers: const <LogicalKeyboardKey>{},
+    );
     return Listener(
       onPointerSignal: (event) {
         lastPointerPosition = event.localPosition;
@@ -163,12 +202,15 @@ class _TerminalScrollGestureHandlerState
       onPointerDown: (event) {
         lastPointerPosition = event.localPosition;
       },
-      child: InfiniteScrollView(
-        key: ValueKey(widget.terminal),
-        onScroll: _onScroll,
-        child: ScrollConfiguration(
-          behavior: scrollbackBehavior,
-          child: widget.child,
+      child: ScrollConfiguration(
+        behavior: applicationScrollBehavior,
+        child: InfiniteScrollView(
+          key: ValueKey(widget.terminal),
+          onScroll: _onScroll,
+          child: ScrollConfiguration(
+            behavior: scrollbackBehavior,
+            child: widget.child,
+          ),
         ),
       ),
     );

@@ -718,6 +718,90 @@ void main() {
       expect(scrollController.offset, scrollOffsetBefore);
     });
 
+    testWidgets('shift scrolls main-buffer history during mouse reporting', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(maxLines: 100, onOutput: output.add);
+      final scrollController = ScrollController();
+      terminal.write(List.generate(100, (index) => '$index\r\n').join());
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: TerminalView(
+                terminal,
+                scrollController: scrollController,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+      await tester.pump();
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final position = state.renderTerminal.localToGlobal(const Offset(2, 2));
+      final scrollOffsetBefore = scrollController.offset;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: position,
+          scrollDelta: Offset(0, -state.renderTerminal.lineHeight),
+        ),
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(output, isEmpty);
+      expect(scrollController.offset, lessThan(scrollOffsetBefore));
+    });
+
+    testWidgets('XTSHIFTESCAPE captures shift scroll reporting', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(maxLines: 100, onOutput: output.add);
+      final scrollController = ScrollController();
+      terminal.write(List.generate(100, (index) => '$index\r\n').join());
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 200,
+              child: TerminalView(
+                terminal,
+                scrollController: scrollController,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      terminal.write('\x1b[?1000h\x1b[?1006h\x1b[>1s');
+      await tester.pump();
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final position = state.renderTerminal.localToGlobal(const Offset(2, 2));
+      final scrollOffsetBefore = scrollController.offset;
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: position,
+          scrollDelta: Offset(0, -state.renderTerminal.lineHeight),
+        ),
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(output, contains('\x1b[<68;1;1M'));
+      expect(scrollController.offset, scrollOffsetBefore);
+    });
+
     testWidgets('restores main-buffer scrollback after mouse reporting', (
       tester,
     ) async {
