@@ -155,6 +155,28 @@ void main() {
       ]);
     });
 
+    test('encodes modified F1 through F4 as CSI sequences', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.keyInput(TerminalKey.f1, shift: true);
+      terminal.keyInput(TerminalKey.f2, alt: true);
+      terminal.keyInput(TerminalKey.f3, ctrl: true);
+      terminal.keyInput(
+        TerminalKey.f4,
+        shift: true,
+        alt: true,
+        ctrl: true,
+      );
+
+      expect(output, [
+        '\x1b[1;2P',
+        '\x1b[1;3Q',
+        '\x1b[1;5R',
+        '\x1b[1;8S',
+      ]);
+    });
+
     test('leaves modified extended function keys to Kitty mode', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);

@@ -6,6 +6,7 @@
 * Track primary OSC 133/633 prompts across scrollback and reflow.
 * Navigate semantic prompts with native platform shortcuts.
 * Correct modified arrow-key sequences across main and alternate screens.
+* Encode modified F1–F4 keys with xterm-compatible CSI sequences.
 
 ## [5.2.0] - 2026-07-25
 
