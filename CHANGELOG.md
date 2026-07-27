@@ -19,6 +19,7 @@
 * Avoid duplicate Unicode width lookups while processing terminal output.
 * Ignore unsupported control bytes instead of rendering them as glyphs.
 * Harden hyperlink hit testing during concurrent resize and reflow.
+* Update hovered OSC 8 links immediately when the platform modifier changes.
 
 ## [5.2.0] - 2026-07-25
 

@@ -286,6 +286,7 @@ class TerminalViewState extends State<TerminalView> {
     _installColorQuery(widget.terminal);
     _installColorSchemeQuery(widget.terminal);
     _installClipboardHandlers(widget.terminal);
+    HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
     super.initState();
   }
 
@@ -331,6 +332,7 @@ class TerminalViewState extends State<TerminalView> {
     _removeColorQuery(widget.terminal);
     _removeColorSchemeQuery(widget.terminal);
     _removeClipboardHandlers(widget.terminal);
+    HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _focusNode.removeListener(_reportFocusChange);
     if (widget.focusNode == null) {
       _focusNode.dispose();
@@ -616,6 +618,11 @@ class TerminalViewState extends State<TerminalView> {
     };
     if (_hyperlinkModifierPressed == pressed) return;
     setState(() => _hyperlinkModifierPressed = pressed);
+  }
+
+  bool _handleGlobalKeyEvent(KeyEvent event) {
+    _updateHyperlinkModifierState();
+    return false;
   }
 
   void _onTapDown(_) {
