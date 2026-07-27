@@ -17,6 +17,7 @@
 * Report back and forward mouse buttons through extended mouse protocols.
 * Respond to legacy DECID terminal identification requests.
 * Render the British national replacement character set.
+* Render text decorations consistently across blank cells.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
 * Encode modified Enter keys distinctly for modern interactive CLIs.
 * Preserve distinct Ctrl+Shift letter chords with fixterms encoding.

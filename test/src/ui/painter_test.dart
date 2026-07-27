@@ -76,7 +76,7 @@ void main() {
     painter.dispose();
   });
 
-  test('paintLine skips undecorated space glyph layouts', () {
+  test('paintLine renders decorated spaces without glyph layouts', () {
     final painter = TerminalPainter(
       theme: TerminalThemes.whiteOnBlack,
       textStyle: const TerminalStyle(fontSize: 20, height: 1),
@@ -88,7 +88,7 @@ void main() {
 
     painter.paintLineForegrounds(canvas, Offset.zero, terminal.buffer.lines[0]);
 
-    expect(painter.paragraphCacheLength, 1);
+    expect(painter.paragraphCacheLength, 0);
 
     recorder.endRecording().dispose();
     painter.dispose();
@@ -857,6 +857,56 @@ void main() {
     }
 
     expect(_hasAnyAlpha(byteData, image.width, image.height), isFalse);
+    expect(painter.paragraphCacheLength, 0);
+
+    image.dispose();
+    painter.dispose();
+  });
+
+  test('paintLine renders decorations across blank cells', () async {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(fontSize: 20, height: 1),
+      textScaler: TextScaler.noScaling,
+    );
+    final line = BufferLine(3);
+    final underlineStyle = CursorStyle()..setUnderline();
+    final strikeStyle = CursorStyle()..setStrikethrough();
+    final overlineStyle = CursorStyle()..setOverline();
+    line.setCell(0, 0x20, 1, underlineStyle);
+    line.setCell(1, 0x20, 1, strikeStyle);
+    line.setCell(2, 0x2800, 1, overlineStyle);
+
+    final image = await _paintLine(painter, line);
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    final byteData = bytes;
+    if (byteData == null) {
+      fail('Expected line image bytes');
+    }
+
+    final cellWidth = painter.cellSize.width;
+    final underlineX = (cellWidth / 2).round();
+    final strikeX = (cellWidth * 1.5).round();
+    final overlineX = (cellWidth * 2.5).round();
+    expect(
+      _hasAlphaNear(
+        byteData,
+        image.width,
+        underlineX,
+        painter.cellSize.height.round() - 1,
+      ),
+      isTrue,
+    );
+    expect(
+      _hasAlphaNear(
+        byteData,
+        image.width,
+        strikeX,
+        (painter.cellSize.height / 2).round(),
+      ),
+      isTrue,
+    );
+    expect(_alphaAt(byteData, image.width, overlineX, 0), greaterThan(0));
     expect(painter.paragraphCacheLength, 0);
 
     image.dispose();

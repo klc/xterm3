@@ -474,20 +474,15 @@ class TerminalPainter {
       _ => resolveForegroundColor(cellData.underlineColor),
     };
 
-    if (combiningCharacters == null &&
-        (charCode == 0x20 || isBlankBraille) &&
-        !isActiveHyperlink &&
-        cellFlags &
-                (CellAttr.underlineMask |
-                    CellAttr.strikethrough |
-                    CellAttr.overline) ==
-            0) {
-      _paintFrameDecoration(
+    if (combiningCharacters == null && (charCode == 0x20 || isBlankBraille)) {
+      _paintManualDecorations(
         canvas,
         offset,
         color,
+        decorationColor,
         cellFlags,
         allocatedWidth: allocatedWidth,
+        isActiveHyperlink: isActiveHyperlink,
       );
       return;
     }
@@ -501,55 +496,14 @@ class TerminalPainter {
           charCode,
           _foregroundPaint,
         )) {
-      if (isActiveHyperlink ||
-          cellFlags &
-                  (CellFlags.underline |
-                      CellAttr.undercurl |
-                      CellAttr.dottedUnderline |
-                      CellAttr.dashedUnderline) !=
-              0) {
-        _paintUnderlineDecoration(
-          canvas,
-          offset,
-          decorationColor,
-          cellFlags,
-          allocatedWidth: allocatedWidth,
-          isHyperlink: isActiveHyperlink,
-        );
-      }
-      if (cellFlags & CellAttr.doubleUnderline != 0) {
-        _foregroundPaint.color = decorationColor;
-        canvas.drawLine(
-          offset.translate(0, _cellSize.height - 3),
-          offset.translate(allocatedWidth, _cellSize.height - 3),
-          _foregroundPaint,
-        );
-        canvas.drawLine(
-          offset.translate(0, _cellSize.height - 1),
-          offset.translate(allocatedWidth, _cellSize.height - 1),
-          _foregroundPaint,
-        );
-      }
-      if (cellFlags & CellAttr.strikethrough != 0) {
-        canvas.drawLine(
-          offset.translate(0, _cellSize.height / 2),
-          offset.translate(allocatedWidth, _cellSize.height / 2),
-          _foregroundPaint,
-        );
-      }
-      if (cellFlags & CellAttr.overline != 0) {
-        canvas.drawLine(
-          offset,
-          offset.translate(allocatedWidth, 0),
-          _foregroundPaint,
-        );
-      }
-      _paintFrameDecoration(
+      _paintManualDecorations(
         canvas,
         offset,
         color,
+        decorationColor,
         cellFlags,
         allocatedWidth: allocatedWidth,
+        isActiveHyperlink: isActiveHyperlink,
       );
       return;
     }
@@ -658,6 +612,59 @@ class TerminalPainter {
                 CellAttr.overline |
                 CellAttr.frameMask) !=
         0;
+  }
+
+  void _paintManualDecorations(
+    Canvas canvas,
+    Offset offset,
+    Color color,
+    Color decorationColor,
+    int cellFlags, {
+    required double allocatedWidth,
+    required bool isActiveHyperlink,
+  }) {
+    if (isActiveHyperlink ||
+        cellFlags &
+                (CellFlags.underline |
+                    CellAttr.undercurl |
+                    CellAttr.dottedUnderline |
+                    CellAttr.dashedUnderline) !=
+            0) {
+      _paintUnderlineDecoration(
+        canvas,
+        offset,
+        decorationColor,
+        cellFlags,
+        allocatedWidth: allocatedWidth,
+        isHyperlink: isActiveHyperlink,
+      );
+    }
+    if (cellFlags & CellAttr.doubleUnderline != 0) {
+      _paintDoubleUnderline(canvas, offset, decorationColor, allocatedWidth);
+    }
+
+    _foregroundPaint.color = decorationColor;
+    if (cellFlags & CellAttr.strikethrough != 0) {
+      canvas.drawLine(
+        offset.translate(0, _cellSize.height / 2),
+        offset.translate(allocatedWidth, _cellSize.height / 2),
+        _foregroundPaint,
+      );
+    }
+    if (cellFlags & CellAttr.overline != 0) {
+      canvas.drawLine(
+        offset,
+        offset.translate(allocatedWidth, 0),
+        _foregroundPaint,
+      );
+    }
+    _paintFrameDecoration(
+      canvas,
+      offset,
+      color,
+      cellFlags,
+      allocatedWidth: allocatedWidth,
+    );
   }
 
   void _paintFrameDecoration(
