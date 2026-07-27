@@ -91,6 +91,48 @@ void main() {
       );
     });
 
+    test('report() encodes extended buttons in textual protocols', () {
+      expect(
+        MouseReporter.report(
+          TerminalMouseButton.back,
+          TerminalMouseButtonState.down,
+          const CellOffset(0, 0),
+          MouseReportMode.sgr,
+        ),
+        '\x1b[<128;1;1M',
+      );
+      expect(
+        MouseReporter.report(
+          TerminalMouseButton.forward,
+          TerminalMouseButtonState.down,
+          const CellOffset(0, 0),
+          MouseReportMode.urxvt,
+        ),
+        '\x1b[161;1;1M',
+      );
+    });
+
+    test('report() rejects extended buttons in byte protocols', () {
+      expect(
+        MouseReporter.report(
+          TerminalMouseButton.back,
+          TerminalMouseButtonState.down,
+          const CellOffset(0, 0),
+          MouseReportMode.normal,
+        ),
+        isNull,
+      );
+      expect(
+        MouseReporter.report(
+          TerminalMouseButton.forward,
+          TerminalMouseButtonState.down,
+          const CellOffset(0, 0),
+          MouseReportMode.utf,
+        ),
+        isNull,
+      );
+    });
+
     test('report() supports sgr pixels mode', () {
       final output = MouseReporter.report(
         TerminalMouseButton.left,

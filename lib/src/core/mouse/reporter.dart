@@ -14,6 +14,14 @@ abstract class MouseReporter {
     TerminalMouseModifiers modifiers = TerminalMouseModifiers.none,
     CellOffset? pixelPosition,
   }) {
+    final isExtendedButton = button == TerminalMouseButton.back ||
+        button == TerminalMouseButton.forward;
+    if (isExtendedButton &&
+        (reportMode == MouseReportMode.normal ||
+            reportMode == MouseReportMode.utf)) {
+      return null;
+    }
+
     // x and y offsets have to be incremented by 1 as the offset if 0-based,
     // The position has to be reported using 1-based coordinates.
     final x = position.x + 1;

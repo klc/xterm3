@@ -61,6 +61,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     (kPrimaryMouseButton, TerminalMouseButton.left),
     (kSecondaryMouseButton, TerminalMouseButton.right),
     (kMiddleMouseButton, TerminalMouseButton.middle),
+    (kBackMouseButton, TerminalMouseButton.back),
+    (kForwardMouseButton, TerminalMouseButton.forward),
   ];
 
   TerminalViewState get terminalView => widget.terminalView;
@@ -222,6 +224,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     if (buttons & kPrimaryMouseButton != 0) return TerminalMouseButton.left;
     if (buttons & kSecondaryMouseButton != 0) return TerminalMouseButton.right;
     if (buttons & kMiddleMouseButton != 0) return TerminalMouseButton.middle;
+    if (buttons & kBackMouseButton != 0) return TerminalMouseButton.back;
+    if (buttons & kForwardMouseButton != 0) return TerminalMouseButton.forward;
     return TerminalMouseButton.none;
   }
 
@@ -276,6 +280,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
       TerminalMouseButton.left => kPrimaryMouseButton,
       TerminalMouseButton.right => kSecondaryMouseButton,
       TerminalMouseButton.middle => kMiddleMouseButton,
+      TerminalMouseButton.back => kBackMouseButton,
+      TerminalMouseButton.forward => kForwardMouseButton,
       _ => 0,
     };
     if (buttonMask == 0) return false;
