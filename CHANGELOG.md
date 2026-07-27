@@ -14,6 +14,7 @@
 * Complete application mouse drags with release events without host selection.
 * Report mouse buttons immediately without gesture-recognizer delays.
 * Report back and forward mouse buttons through extended mouse protocols.
+* Respond to legacy DECID terminal identification requests.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
 * Encode modified Enter keys distinctly for modern interactive CLIs.
 * Preserve distinct Ctrl+Shift letter chords with fixterms encoding.

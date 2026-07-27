@@ -308,6 +308,7 @@ class EscapeParser {
     'V'.charCode: _escHandleStartProtectedArea,
     'W'.charCode: _escHandleEndProtectedArea,
     'X'.charCode: _escHandleStringControl,
+    'Z'.charCode: _escHandleIdentifyTerminal,
     '^'.charCode: _escHandleStringControl,
     '_'.charCode: _escHandleStringControl,
     'c'.charCode: _escHandleReset,
@@ -332,6 +333,12 @@ class EscapeParser {
   /// `ESC W` End of Protected Area (EPA).
   bool _escHandleEndProtectedArea() {
     handler.setIsoProtectedMode(false);
+    return true;
+  }
+
+  /// `ESC Z` Identify Terminal (DECID).
+  bool _escHandleIdentifyTerminal() {
+    handler.sendPrimaryDeviceAttributes();
     return true;
   }
 
