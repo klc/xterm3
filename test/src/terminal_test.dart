@@ -2353,6 +2353,25 @@ void main() {
     ]);
   });
 
+  test('Terminal bounds iTerm2 streaming clipboard capture', () {
+    final stores = <(String, String)>[];
+    final terminal = Terminal(
+      onClipboardStore: (selector, text) => stores.add((selector, text)),
+    );
+    final oversized = ''.padRight(10 * 1024 * 1024 + 1, 'x');
+
+    terminal.write('\x1b]1337;CopyToClipboard=\x1b\\');
+    terminal.write(oversized);
+    terminal.write('\x1b]1337;EndCopy\x1b\\');
+    terminal.write(
+      '\x1b]1337;CopyToClipboard=\x1b\\'
+      'recovered'
+      '\x1b]1337;EndCopy\x1b\\',
+    );
+
+    expect(stores, [('c', 'recovered')]);
+  });
+
   test('Terminal ignores malformed OSC 52 payloads', () {
     final stores = <(String, String)>[];
     final terminal = Terminal(

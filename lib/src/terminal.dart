@@ -235,6 +235,7 @@ class Terminal
       CellAttr.hyperlinkMask >> CellAttr.hyperlinkShift;
   static const _maxKittyKeyboardModeStackDepth = 4096;
   static const _maxTitleStackDepth = 4096;
+  static const _maxClipboardCaptureLength = 10 * 1024 * 1024;
   static const _kittyKeyboardModeMask = 0x1f;
   static const _specialColorBaseIndex = 256;
   static const _specialColorCount = 5;
@@ -426,6 +427,7 @@ class Terminal
 
   String? _clipboardCaptureSelector;
   StringBuffer? _clipboardCaptureBuffer;
+  bool _clipboardCaptureOverflowed = false;
 
   TerminalSemanticPromptState _semanticPromptState =
       const TerminalSemanticPromptState(
@@ -806,6 +808,7 @@ class Terminal
     clearListeners();
     _clipboardCaptureSelector = null;
     _clipboardCaptureBuffer = null;
+    _clipboardCaptureOverflowed = false;
     _clearSemanticPromptAnchors();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
@@ -1187,7 +1190,7 @@ class Terminal
   @override
   void writeText(String text, int start, int end) {
     if (start >= end) return;
-    _clipboardCaptureBuffer?.write(text.substring(start, end));
+    _captureITerm2ClipboardTextRange(text, start, end);
     _buffer.writeAscii(text, start, end);
     _precedingCodepoint = text.codeUnitAt(end - 1);
   }
@@ -1356,6 +1359,7 @@ class Terminal
     _iconTitle = null;
     _clipboardCaptureSelector = null;
     _clipboardCaptureBuffer = null;
+    _clipboardCaptureOverflowed = false;
     _titleStack.clear();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
@@ -3827,21 +3831,41 @@ class Terminal
   void startITerm2ClipboardCapture(String selector) {
     _clipboardCaptureSelector = _resolveITerm2ClipboardSelector(selector);
     _clipboardCaptureBuffer = StringBuffer();
+    _clipboardCaptureOverflowed = false;
   }
 
   @override
   void endITerm2ClipboardCapture() {
     final selector = _clipboardCaptureSelector;
     final buffer = _clipboardCaptureBuffer;
+    final overflowed = _clipboardCaptureOverflowed;
     _clipboardCaptureSelector = null;
     _clipboardCaptureBuffer = null;
+    _clipboardCaptureOverflowed = false;
 
-    if (selector == null || buffer == null) return;
+    if (selector == null || buffer == null || overflowed) return;
     onClipboardStore?.call(selector, buffer.toString());
   }
 
   void _captureITerm2ClipboardText(String text) {
-    _clipboardCaptureBuffer?.write(text);
+    _captureITerm2ClipboardTextRange(text, 0, text.length);
+  }
+
+  void _captureITerm2ClipboardTextRange(String text, int start, int end) {
+    final buffer = _clipboardCaptureBuffer;
+    if (buffer == null || _clipboardCaptureOverflowed) return;
+
+    if (buffer.length + end - start > _maxClipboardCaptureLength) {
+      _clipboardCaptureBuffer = null;
+      _clipboardCaptureOverflowed = true;
+      return;
+    }
+
+    if (start == 0 && end == text.length) {
+      buffer.write(text);
+      return;
+    }
+    buffer.write(text.substring(start, end));
   }
 
   @override
