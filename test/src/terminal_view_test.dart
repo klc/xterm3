@@ -1138,6 +1138,37 @@ void main() {
   });
 
   group('TerminalView shortcuts', () {
+    testWidgets('forwards Ctrl+A and Ctrl+V on non-Apple platforms', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: TerminalView(
+                terminal,
+                autofocus: true,
+                hardwareKeyboardOnly: true,
+              ),
+            ),
+          ),
+        );
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+
+      expect(output, ['\x01', '\x16']);
+    });
+
     testWidgets('select all includes scrollback', (tester) async {
       final terminal = Terminal(maxLines: 10)..resize(4, 2);
       final controller = TerminalController();

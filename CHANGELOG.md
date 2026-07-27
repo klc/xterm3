@@ -8,6 +8,7 @@
 * Correct modified arrow-key sequences across main and alternate screens.
 * Encode modified F1–F4 keys with xterm-compatible CSI sequences.
 * Preserve Shift+wheel scrollback while applications report mouse input.
+* Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
 
 ## [5.2.0] - 2026-07-25
 
