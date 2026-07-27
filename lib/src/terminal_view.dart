@@ -470,6 +470,7 @@ class TerminalViewState extends State<TerminalView> {
       },
       getScrollPosition: () => _scrollableKey.currentState?.position,
       getLineHeight: () => renderTerminal.lineHeight,
+      getCellWidth: () => renderTerminal.cellSize.width,
       child: child,
     );
 

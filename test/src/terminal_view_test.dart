@@ -905,6 +905,74 @@ void main() {
 
       expect(output, ['\x1b[<65;1;1M']);
     });
+
+    testWidgets('reports horizontal wheel input to applications', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(terminal),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final position = state.renderTerminal.localToGlobal(const Offset(2, 2));
+      final cellWidth = state.renderTerminal.cellSize.width;
+
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: position,
+          scrollDelta: Offset(cellWidth, 0),
+        ),
+      );
+      await tester.pump();
+      await tester.sendEventToBinding(
+        PointerScrollEvent(
+          position: position,
+          scrollDelta: Offset(-cellWidth, 0),
+        ),
+      );
+      await tester.pump();
+
+      expect(output, ['\x1b[<67;1;1M', '\x1b[<66;1;1M']);
+    });
+
+    testWidgets('simulates horizontal wheel input in alternate screens', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      terminal.write('\x1b[?1049h');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(terminal),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final position = state.renderTerminal.localToGlobal(const Offset(2, 2));
+      final partialDelta = state.renderTerminal.cellSize.width * 0.6;
+      for (var index = 0; index < 2; index++) {
+        await tester.sendEventToBinding(
+          PointerScrollEvent(
+            position: position,
+            scrollDelta: Offset(partialDelta, 0),
+          ),
+        );
+        await tester.pump();
+      }
+
+      expect(output, ['\x1b[C']);
+    });
   });
 
   group('TerminalView.autofocus', () {

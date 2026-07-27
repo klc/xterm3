@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:xterm2/core.dart';
@@ -22,6 +23,7 @@ class TerminalScrollGestureHandler extends StatefulWidget {
     required this.sendMouseEvent,
     required this.getScrollPosition,
     required this.getLineHeight,
+    required this.getCellWidth,
     this.simulateScroll = true,
     this.readOnly = false,
     required this.child,
@@ -38,6 +40,9 @@ class TerminalScrollGestureHandler extends StatefulWidget {
 
   /// Returns the pixel height of lines in the terminal.
   final double Function() getLineHeight;
+
+  /// Returns the pixel width of cells in the terminal.
+  final double Function() getCellWidth;
 
   /// Whether to simulate scroll events in the terminal when the application
   /// doesn't declare it supports mouse wheel events. true by default as it
@@ -60,6 +65,8 @@ class _TerminalScrollGestureHandlerState
   /// The variable that tracks the line offset in last scroll event. Used to
   /// determine how many the scroll events should be sent to the terminal.
   var lastLineOffset = 0;
+
+  var horizontalScrollRemainder = 0.0;
 
   /// This variable tracks the last offset where the scroll gesture started.
   /// Used to calculate the cell offset of the terminal mouse event.
@@ -85,6 +92,7 @@ class _TerminalScrollGestureHandlerState
       widget.terminal.addListener(_onTerminalUpdated);
       handlesApplicationScroll = _shouldHandleApplicationScroll();
       lastLineOffset = 0;
+      horizontalScrollRemainder = 0;
     }
     super.didUpdateWidget(oldWidget);
   }
@@ -95,6 +103,7 @@ class _TerminalScrollGestureHandlerState
 
     handlesApplicationScroll = shouldHandleApplicationScroll;
     lastLineOffset = 0;
+    horizontalScrollRemainder = 0;
     setState(() {});
   }
 
@@ -159,6 +168,38 @@ class _TerminalScrollGestureHandlerState
     position.jumpTo(target.toDouble());
   }
 
+  void _sendHorizontalScrollEvent(bool left) {
+    if (widget.readOnly ||
+        !widget.terminalController
+            .shouldSendPointerInput(PointerInput.scroll)) {
+      return;
+    }
+
+    final modifiers = _currentModifiers();
+    var handled = false;
+    if (!modifiers.shift || widget.terminal.mouseShiftCaptureMode) {
+      handled = widget.sendMouseEvent(
+        switch (left) {
+          true => TerminalMouseButton.wheelLeft,
+          false => TerminalMouseButton.wheelRight,
+        },
+        TerminalMouseButtonState.down,
+        lastPointerPosition,
+        modifiers: modifiers,
+      );
+    }
+
+    if (handled) return;
+    if (!widget.terminal.isUsingAltBuffer || !widget.simulateScroll) return;
+
+    widget.terminal.keyInput(
+      switch (left) {
+        true => TerminalKey.arrowLeft,
+        false => TerminalKey.arrowRight,
+      },
+    );
+  }
+
   TerminalMouseModifiers _currentModifiers() {
     final pressedKeys = HardwareKeyboard.instance.logicalKeysPressed;
     return TerminalMouseModifiers(
@@ -183,6 +224,32 @@ class _TerminalScrollGestureHandlerState
     lastLineOffset = currentLineOffset;
   }
 
+  void _onPointerSignal(PointerSignalEvent event) {
+    lastPointerPosition = event.localPosition;
+    if (event is! PointerScrollEvent) return;
+
+    final delta = event.scrollDelta;
+    if (delta.dx == 0 || delta.dx.abs() <= delta.dy.abs()) return;
+
+    GestureBinding.instance.pointerSignalResolver.register(event, (_) {
+      _onHorizontalScroll(delta.dx);
+    });
+  }
+
+  void _onHorizontalScroll(double offset) {
+    final cellWidth = widget.getCellWidth();
+    if (cellWidth <= 0) return;
+
+    horizontalScrollRemainder += offset;
+    final columns = (horizontalScrollRemainder / cellWidth).truncate();
+    if (columns == 0) return;
+
+    for (var index = 0; index < columns.abs(); index++) {
+      _sendHorizontalScrollEvent(columns < 0);
+    }
+    horizontalScrollRemainder -= columns * cellWidth;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!handlesApplicationScroll) {
@@ -195,18 +262,16 @@ class _TerminalScrollGestureHandlerState
     final applicationScrollBehavior = ScrollConfiguration.of(context).copyWith(
       pointerAxisModifiers: const <LogicalKeyboardKey>{},
     );
-    return Listener(
-      onPointerSignal: (event) {
-        lastPointerPosition = event.localPosition;
-      },
-      onPointerDown: (event) {
-        lastPointerPosition = event.localPosition;
-      },
-      child: ScrollConfiguration(
-        behavior: applicationScrollBehavior,
-        child: InfiniteScrollView(
-          key: ValueKey(widget.terminal),
-          onScroll: _onScroll,
+    return ScrollConfiguration(
+      behavior: applicationScrollBehavior,
+      child: InfiniteScrollView(
+        key: ValueKey(widget.terminal),
+        onScroll: _onScroll,
+        child: Listener(
+          onPointerSignal: _onPointerSignal,
+          onPointerDown: (event) {
+            lastPointerPosition = event.localPosition;
+          },
           child: ScrollConfiguration(
             behavior: scrollbackBehavior,
             child: widget.child,
