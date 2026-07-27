@@ -156,7 +156,7 @@ class Buffer {
   /// characters are not interpreted and directly added to the buffer.
   ///
   /// See also: [Terminal.writeChar]
-  void writeChar(int codePoint) {
+  int writeChar(int codePoint) {
     codePoint = charset.translate(codePoint);
 
     final cellWidth = unicodeV11.wcwidth(codePoint);
@@ -166,23 +166,25 @@ class Buffer {
           _resizePreviousGrapheme(codePoint)) {
         _addCombiningCharacter(codePoint);
       }
-      return;
+      return cellWidth;
     }
     if (cellWidth == 0) {
       if (!terminal.graphemeClusterMode || _joinsPreviousGrapheme(codePoint)) {
         _addCombiningCharacter(codePoint);
       }
-      return;
+      return cellWidth;
     }
-    if (cellWidth < 0) return;
+    if (cellWidth < 0) return cellWidth;
     if (terminal.graphemeClusterMode && _joinRegionalIndicator(codePoint)) {
-      return;
+      return cellWidth;
     }
     if (terminal.graphemeClusterMode && _joinsPreviousGrapheme(codePoint)) {
       final previousWidth = _joinedPreviousGraphemeWidth(codePoint, cellWidth);
-      if (previousWidth == 2 && !_setPreviousGraphemeWidth(2)) return;
+      if (previousWidth == 2 && !_setPreviousGraphemeWidth(2)) {
+        return cellWidth;
+      }
       _addCombiningCharacter(codePoint);
-      return;
+      return cellWidth;
     }
 
     final rightLimit = _rightLimit;
@@ -197,13 +199,13 @@ class Buffer {
 
     if (cellWidth > rightLimit - _marginLeft) {
       _cursorX = rightLimit;
-      return;
+      return cellWidth;
     }
 
     if (cellWidth == 2 && _cursorX == rightLimit - 1) {
       if (!terminal.autoWrapMode) {
         _cursorX = rightLimit;
-        return;
+        return cellWidth;
       }
 
       currentLine.setCell(_cursorX, 0, 1, terminal.cursor);
@@ -228,6 +230,7 @@ class Buffer {
     }
 
     _cursorX += cellWidth;
+    return cellWidth;
   }
 
   void _addCombiningCharacter(int codePoint) {

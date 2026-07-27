@@ -25,7 +25,6 @@ import 'package:xterm2/src/core/state.dart';
 import 'package:xterm2/src/core/tabs.dart';
 import 'package:xterm2/src/utils/ascii.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
-import 'package:xterm2/src/utils/unicode_v11.dart';
 
 enum _ProtectionMode { off, iso, dec }
 
@@ -1181,10 +1180,10 @@ class Terminal
   @override
   void writeChar(int char) {
     _captureITerm2ClipboardChar(char);
-    if (unicodeV11.wcwidth(char) > 0) {
+    final cellWidth = _buffer.writeChar(char);
+    if (cellWidth > 0) {
       _precedingCodepoint = char;
     }
-    _buffer.writeChar(char);
   }
 
   @override

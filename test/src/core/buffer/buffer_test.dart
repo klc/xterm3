@@ -3,6 +3,14 @@ import 'package:xterm2/xterm.dart';
 
 void main() {
   group('Buffer.writeChar()', () {
+    test('returns the resolved display width', () {
+      final terminal = Terminal();
+
+      expect(terminal.buffer.writeChar('a'.codeUnitAt(0)), 1);
+      expect(terminal.buffer.writeChar('界'.codeUnitAt(0)), 2);
+      expect(terminal.buffer.writeChar(0x0301), 0);
+    });
+
     test('shifts cells in insert mode', () {
       final terminal = Terminal()..resize(5, 3);
       terminal.write('abcde\r\x1b[2C\x1b[4hX');

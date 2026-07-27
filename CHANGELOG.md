@@ -16,6 +16,7 @@
 * Encode modified Escape keys distinctly for interactive applications.
 * Bound streaming clipboard capture memory and recover after overflow.
 * Reduce allocation overhead for non-ASCII terminal output.
+* Avoid duplicate Unicode width lookups while processing terminal output.
 
 ## [5.2.0] - 2026-07-25
 
