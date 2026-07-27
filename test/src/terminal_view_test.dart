@@ -856,6 +856,91 @@ void main() {
     });
   });
 
+  group('TerminalView scrollback shortcuts', () {
+    testWidgets('shift navigation scrolls the main buffer', (tester) async {
+      final output = <String>[];
+      final terminal = Terminal(maxLines: 100, onOutput: output.add)
+        ..resize(20, 5);
+      final scrollController = ScrollController();
+      terminal.write(
+        List.generate(40, (index) => 'line $index\r\n').join(),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 120,
+              child: TerminalView(
+                terminal,
+                scrollController: scrollController,
+                autoResize: false,
+                autofocus: true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final maxScrollExtent = scrollController.position.maxScrollExtent;
+      expect(scrollController.offset, maxScrollExtent);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
+      await tester.pump();
+
+      expect(scrollController.offset, lessThan(maxScrollExtent));
+      final pageUpOffset = scrollController.offset;
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
+      await tester.pump();
+
+      expect(scrollController.offset, greaterThan(pageUpOffset));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.home);
+      await tester.pump();
+
+      expect(
+          scrollController.offset, scrollController.position.minScrollExtent);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(scrollController.offset, maxScrollExtent);
+      expect(output, isEmpty);
+
+      scrollController.dispose();
+    });
+
+    testWidgets('shift navigation remains available to alternate-screen apps', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      terminal.write('\x1b[?1049h');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autoResize: false,
+              autofocus: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.pageUp);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+
+      expect(output, isNotEmpty);
+    });
+  });
+
   group('TerminalView shortcuts', () {
     testWidgets('select all includes scrollback', (tester) async {
       final terminal = Terminal(maxLines: 10)..resize(4, 2);
@@ -931,6 +1016,7 @@ void main() {
           home: TerminalActions(
             terminal: terminal,
             controller: controller,
+            getScrollPosition: () => null,
             child: Builder(
               builder: (context) {
                 actionContext = context;

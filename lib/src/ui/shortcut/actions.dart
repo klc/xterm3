@@ -4,17 +4,33 @@ import 'package:xterm2/src/terminal.dart';
 import 'package:xterm2/src/ui/controller.dart';
 import 'package:xterm2/src/ui/selection_mode.dart';
 
+enum TerminalScrollTarget {
+  top,
+  bottom,
+  pageUp,
+  pageDown,
+}
+
+class TerminalScrollIntent extends Intent {
+  const TerminalScrollIntent(this.target);
+
+  final TerminalScrollTarget target;
+}
+
 class TerminalActions extends StatelessWidget {
   const TerminalActions({
     super.key,
     required this.terminal,
     required this.controller,
+    required this.getScrollPosition,
     required this.child,
   });
 
   final Terminal terminal;
 
   final TerminalController controller;
+
+  final ScrollPosition? Function() getScrollPosition;
 
   final Widget child;
 
@@ -61,8 +77,49 @@ class TerminalActions extends StatelessWidget {
             return null;
           },
         ),
+        TerminalScrollIntent: _TerminalScrollAction(
+          terminal: terminal,
+          getScrollPosition: getScrollPosition,
+        ),
       },
       child: child,
     );
+  }
+}
+
+class _TerminalScrollAction extends Action<TerminalScrollIntent> {
+  _TerminalScrollAction({
+    required this.terminal,
+    required this.getScrollPosition,
+  });
+
+  final Terminal terminal;
+
+  final ScrollPosition? Function() getScrollPosition;
+
+  @override
+  bool isEnabled(TerminalScrollIntent intent) {
+    return !terminal.isUsingAltBuffer && getScrollPosition() != null;
+  }
+
+  @override
+  Object? invoke(TerminalScrollIntent intent) {
+    final position = getScrollPosition();
+    if (position == null) return null;
+
+    final target = switch (intent.target) {
+      TerminalScrollTarget.top => position.minScrollExtent,
+      TerminalScrollTarget.bottom => position.maxScrollExtent,
+      TerminalScrollTarget.pageUp =>
+        position.pixels - position.viewportDimension,
+      TerminalScrollTarget.pageDown =>
+        position.pixels + position.viewportDimension,
+    };
+    position.jumpTo(
+      target
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble(),
+    );
+    return null;
   }
 }

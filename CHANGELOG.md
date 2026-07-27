@@ -2,6 +2,7 @@
 
 * Render bounded search matches with a distinct active result.
 * Auto-scroll scrollback while extending a selection beyond the viewport.
+* Add Shift+Home/End/PageUp/PageDown scrollback navigation.
 
 ## [5.2.0] - 2026-07-25
 

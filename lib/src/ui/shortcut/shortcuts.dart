@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:xterm2/src/ui/shortcut/actions.dart';
 
 Map<ShortcutActivator, Intent> get defaultTerminalShortcuts {
   switch (defaultTargetPlatform) {
@@ -22,6 +23,14 @@ final _defaultShortcuts = {
       const PasteTextIntent(SelectionChangedCause.keyboard),
   SingleActivator(LogicalKeyboardKey.keyA, control: true):
       const SelectAllTextIntent(SelectionChangedCause.keyboard),
+  const SingleActivator(LogicalKeyboardKey.home, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.top),
+  const SingleActivator(LogicalKeyboardKey.end, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.bottom),
+  const SingleActivator(LogicalKeyboardKey.pageUp, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.pageUp),
+  const SingleActivator(LogicalKeyboardKey.pageDown, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.pageDown),
 };
 
 final _defaultAppleShortcuts = {
@@ -31,4 +40,12 @@ final _defaultAppleShortcuts = {
       const PasteTextIntent(SelectionChangedCause.keyboard),
   SingleActivator(LogicalKeyboardKey.keyA, meta: true):
       const SelectAllTextIntent(SelectionChangedCause.keyboard),
+  const SingleActivator(LogicalKeyboardKey.home, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.top),
+  const SingleActivator(LogicalKeyboardKey.end, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.bottom),
+  const SingleActivator(LogicalKeyboardKey.pageUp, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.pageUp),
+  const SingleActivator(LogicalKeyboardKey.pageDown, shift: true):
+      const TerminalScrollIntent(TerminalScrollTarget.pageDown),
 };
