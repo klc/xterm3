@@ -165,18 +165,20 @@ class EscapeParser {
   }
 
   void _processChar(int char) {
-    if (char > _sbcHandlers.maxIndex) {
-      handler.writeChar(char);
+    if (char <= _sbcHandlers.maxIndex) {
+      final sbcHandler = _sbcHandlers[char];
+      if (sbcHandler != null) {
+        sbcHandler();
+        return;
+      }
+    }
+
+    if (char < Ascii.space || char == Ascii.DEL) {
+      handler.unknownSBC(char);
       return;
     }
 
-    final sbcHandler = _sbcHandlers[char];
-    if (sbcHandler == null) {
-      handler.unkownEscape(char);
-      return;
-    }
-
-    sbcHandler();
+    handler.writeChar(char);
   }
 
   /// Processes a sequence of characters that starts with an escape character.
