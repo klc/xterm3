@@ -10,6 +10,7 @@
 * Preserve Shift+wheel scrollback while applications report mouse input.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
 * Encode modified Enter keys distinctly for modern interactive CLIs.
+* Preserve distinct Ctrl+Shift letter chords with fixterms encoding.
 
 ## [5.2.0] - 2026-07-25
 

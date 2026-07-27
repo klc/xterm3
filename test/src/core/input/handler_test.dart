@@ -241,15 +241,19 @@ void main() {
       expect(output, ['\x00', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f', '\x1f']);
     });
 
-    test('does not treat Ctrl+Shift+letter as legacy control input', () {
+    test('preserves Ctrl+Shift letter chords with fixterms encoding', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);
 
-      final handled =
-          terminal.keyInput(TerminalKey.keyA, ctrl: true, shift: true);
+      terminal.keyInput(TerminalKey.keyA, ctrl: true, shift: true);
+      terminal.keyInput(
+        TerminalKey.keyM,
+        ctrl: true,
+        shift: true,
+        alt: true,
+      );
 
-      expect(handled, isFalse);
-      expect(output, isEmpty);
+      expect(output, ['\x1b[97;6u', '\x1b[109;8u']);
     });
 
     test('disambiguates modified textual keys in Kitty mode', () {

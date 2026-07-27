@@ -34,6 +34,7 @@ const defaultInputHandler = CascadeInputHandler([
   ExtendedFunctionKeyInputHandler(),
   KeytabInputHandler(),
   CtrlInputHandler(),
+  FixtermsInputHandler(),
   AltInputHandler(),
 ]);
 
@@ -289,6 +290,30 @@ class CtrlInputHandler implements TerminalInputHandler {
       true => '\x1b$value',
       false => value,
     };
+  }
+}
+
+/// Preserves Ctrl+Shift letter chords with the fixterms CSI-u encoding.
+class FixtermsInputHandler implements TerminalInputHandler {
+  const FixtermsInputHandler();
+
+  @override
+  String? call(TerminalKeyboardEvent event) {
+    if (event.type == TerminalKeyEventType.release) return null;
+    if (!event.ctrl || !event.shift || event.superKey) return null;
+
+    final key = event.key;
+    if (key.index < TerminalKey.keyA.index ||
+        key.index > TerminalKey.keyZ.index) {
+      return null;
+    }
+
+    final codepoint = key.index - TerminalKey.keyA.index + 0x61;
+    final modifiers = switch (event.alt) {
+      true => 8,
+      false => 6,
+    };
+    return '\x1b[$codepoint;${modifiers}u';
   }
 }
 
