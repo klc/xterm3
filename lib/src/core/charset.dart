@@ -2,6 +2,7 @@ typedef CharsetTranslator = int Function(int);
 
 final _charsets = <int, CharsetTranslator>{
   '0'.codeUnitAt(0): decSpecGraphicsTranslator,
+  'A'.codeUnitAt(0): britishTranslator,
   'B'.codeUnitAt(0): asciiTranslator,
 };
 
@@ -106,6 +107,11 @@ const decSpecGraphics = <int, int>{
 };
 
 int asciiTranslator(int codePoint) {
+  return codePoint;
+}
+
+int britishTranslator(int codePoint) {
+  if (codePoint == 0x23) return 0x00a3;
   return codePoint;
 }
 

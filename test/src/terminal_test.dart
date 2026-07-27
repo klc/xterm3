@@ -39,6 +39,14 @@ void main() {
     expect(terminal.buffer.lines[0].getText(), '┌─┐abc');
   });
 
+  test('Terminal renders the British national replacement charset', () {
+    final terminal = Terminal();
+
+    terminal.write('\x1b(A#\x1b(B#');
+
+    expect(terminal.buffer.lines[0].getText(), '£#');
+  });
+
   test('Terminal preserves no-wrap and insert modes for ASCII runs', () {
     final noWrapTerminal = Terminal()..resize(4, 1);
     noWrapTerminal.write('\x1b[?7lABCDE');
