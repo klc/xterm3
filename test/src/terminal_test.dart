@@ -518,6 +518,21 @@ void main() {
     expect(line.getCodePoint(2), 0x78);
   });
 
+  test('Terminal preserves supplementary glyphs across output chunks', () {
+    final terminal = Terminal()..resize(10, 2);
+    const emoji = '😀';
+
+    terminal.write(emoji.substring(0, 1));
+    terminal.write(emoji.substring(1));
+    terminal.write('x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.toString(), '😀x');
+    expect(line.getWidth(0), 2);
+    expect(line.getWidth(1), 0);
+    expect(line.getCodePoint(2), 0x78);
+  });
+
   test('Terminal attaches modern Unicode combining marks', () {
     final terminal = Terminal()..resize(10, 2);
 

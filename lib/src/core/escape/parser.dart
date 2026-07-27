@@ -45,6 +45,8 @@ class EscapeParser {
 
   final _queue = ByteConsumer();
 
+  int? _pendingHighSurrogate;
+
   /// Start of sequence or character being processed. Useful for debugging.
   var tokenBegin = 0;
 
@@ -53,8 +55,24 @@ class EscapeParser {
 
   void write(String chunk) {
     _queue.unrefConsumedBlocks();
-    _queue.add(chunk);
+    var data = chunk;
+    if (_pendingHighSurrogate case final pendingHighSurrogate?) {
+      data = '${String.fromCharCode(pendingHighSurrogate)}$data';
+      _pendingHighSurrogate = null;
+    }
+    if (data.isNotEmpty) {
+      final lastCodeUnit = data.codeUnitAt(data.length - 1);
+      if (_isHighSurrogate(lastCodeUnit)) {
+        _pendingHighSurrogate = lastCodeUnit;
+        data = data.substring(0, data.length - 1);
+      }
+    }
+    _queue.add(data);
     _process();
+  }
+
+  bool _isHighSurrogate(int codeUnit) {
+    return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
   }
 
   void _process() {
