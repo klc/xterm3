@@ -396,6 +396,43 @@ void main() {
     expect(terminal.buffer.lines[1].getCodePoint(2), 0x58);
   });
 
+  test('Terminal clamps a saved cursor when the viewport shrinks', () {
+    final terminal = Terminal()..resize(10, 5);
+
+    terminal.write('\x1b[5;10H\x1b7');
+    terminal.resize(5, 2);
+    terminal.write('\x1b8X');
+
+    expect(terminal.buffer.cursorX, 4);
+    expect(terminal.buffer.cursorY, 1);
+    final lastVisibleLine = terminal.buffer.scrollBack + 1;
+    expect(terminal.buffer.lines[lastVisibleLine].getCodePoint(4), 0x58);
+  });
+
+  test('Terminal reflows a saved cursor with its logical line', () {
+    final terminal = Terminal()..resize(2, 3);
+
+    terminal.write('1A2B\x1b7');
+    terminal.resize(5, 3);
+    terminal.write('\x1b8X');
+
+    expect(terminal.buffer.lines[0].getText(), '1A2BX');
+    expect(terminal.buffer.cursorX, 4);
+    expect(terminal.buffer.cursorY, 0);
+  });
+
+  test('Terminal preserves pending wrap across resize reflow', () {
+    final terminal = Terminal()..resize(2, 3);
+
+    terminal.write('1A2B');
+    terminal.resize(5, 3);
+    terminal.write('X');
+
+    expect(terminal.buffer.lines[0].getText(), '1A2BX');
+    expect(terminal.buffer.cursorX, 4);
+    expect(terminal.buffer.cursorY, 0);
+  });
+
   test('Terminal applies DECCOLM screen reset side effects', () {
     final terminal = Terminal(maxLines: 10)..resize(4, 2);
     terminal.write('scrollback\n\x1b[31;44mcontent\x1b[2;2r\x1b[2;3H');

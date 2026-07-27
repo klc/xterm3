@@ -10,6 +10,7 @@
 * Preserve Shift+wheel scrollback while applications report mouse input.
 * Report horizontal wheel gestures and simulate them in alternate screens.
 * Keep application scrolling active when Flutter replaces its scroll position.
+* Preserve active and saved cursor positions through resize reflow.
 * Leave double- and triple-click handling to applications using mouse tracking.
 * Complete application mouse drags with release events without host selection.
 * Report mouse buttons immediately without gesture-recognizer delays.

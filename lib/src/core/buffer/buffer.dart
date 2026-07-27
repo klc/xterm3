@@ -55,6 +55,8 @@ class Buffer {
 
   var _savedCursorY = 0;
 
+  var _savedPendingWrap = false;
+
   var _savedOriginMode = false;
 
   final _savedCursorStyle = CursorStyle();
@@ -1171,6 +1173,7 @@ class Buffer {
   void saveCursor({required bool originMode}) {
     _savedCursorX = _cursorX;
     _savedCursorY = _cursorY;
+    _savedPendingWrap = _cursorX >= _rightLimit;
     _savedOriginMode = originMode;
     _savedCursorStyle.foreground = terminal.cursor.foreground;
     _savedCursorStyle.background = terminal.cursor.background;
@@ -1392,6 +1395,7 @@ class Buffer {
     _cursorY = 0;
     _savedCursorX = 0;
     _savedCursorY = 0;
+    _savedPendingWrap = false;
     _savedOriginMode = false;
     _savedCursorStyle.reset();
     _savedCursorStyle.hyperlinkId = 0;
@@ -1559,6 +1563,7 @@ class Buffer {
           lines.push(_newEmptyLine(newWidth));
         } else {
           _cursorY++;
+          _savedCursorY++;
         }
       }
     } else {
@@ -1575,13 +1580,26 @@ class Buffer {
     // Ensure cursor row is within the screen. The column is clamped after
     // width handling so reflow can preserve its logical offset.
     _cursorY = _cursorY.clamp(0, newHeight - 1);
+    _savedCursorY = _savedCursorY.clamp(0, newHeight - 1);
 
     // 2. Adjust the width.
     if (newWidth != oldWidth) {
       if (terminal.reflowEnabled && !isAltBuffer) {
         final cursorScrollBack = max(lines.length - newHeight, 0);
         final cursorLine = _cursorY + cursorScrollBack;
-        final cursorAnchor = lines[cursorLine].createAnchor(_cursorX);
+        final cursorPendingWrap = _cursorX >= _rightLimit;
+        final cursorAnchorX = switch (cursorPendingWrap) {
+          true => max(0, _cursorX - 1),
+          false => _cursorX,
+        };
+        final cursorAnchor = lines[cursorLine].createAnchor(cursorAnchorX);
+        final savedCursorLine = _savedCursorY + cursorScrollBack;
+        final savedCursorAnchorX = switch (_savedPendingWrap) {
+          true => max(0, _savedCursorX - 1),
+          false => _savedCursorX,
+        };
+        final savedCursorAnchor =
+            lines[savedCursorLine].createAnchor(savedCursorAnchorX);
         final reflowResult = reflow(lines, oldWidth, newWidth);
 
         while (reflowResult.length < newHeight) {
@@ -1591,19 +1609,54 @@ class Buffer {
         lines.replaceWith(reflowResult);
         if (cursorAnchor.attached) {
           final newScrollBack = max(lines.length - newHeight, 0);
-          _cursorX = cursorAnchor.x.clamp(0, newWidth - 1);
+          _cursorX = _reflowedCursorX(
+            cursorAnchor,
+            pendingWrap: cursorPendingWrap,
+            newWidth: newWidth,
+          );
           _cursorY = (cursorAnchor.y - newScrollBack).clamp(0, newHeight - 1);
         }
+        if (savedCursorAnchor.attached) {
+          final newScrollBack = max(lines.length - newHeight, 0);
+          final savedCursorAtRightEdge = savedCursorAnchor.x == newWidth - 1;
+          _savedCursorX = _reflowedCursorX(
+            savedCursorAnchor,
+            pendingWrap: _savedPendingWrap,
+            newWidth: newWidth,
+          );
+          _savedCursorY =
+              (savedCursorAnchor.y - newScrollBack).clamp(0, newHeight - 1);
+          _savedPendingWrap = _savedPendingWrap && savedCursorAtRightEdge;
+        } else {
+          _savedCursorX = _savedCursorX.clamp(0, newWidth - 1);
+          _savedPendingWrap = false;
+        }
         cursorAnchor.dispose();
+        savedCursorAnchor.dispose();
       } else {
         lines.forEach((item) => item.resize(newWidth));
         _cursorX = _cursorX.clamp(0, newWidth - 1);
+        _savedCursorX = _savedCursorX.clamp(0, newWidth - 1);
+        _savedPendingWrap = false;
       }
     }
 
     _cursorX = _cursorX.clamp(0, newWidth - 1);
     _marginLeft = 0;
     _marginRight = newWidth - 1;
+  }
+
+  int _reflowedCursorX(
+    CellAnchor anchor, {
+    required bool pendingWrap,
+    required int newWidth,
+  }) {
+    if (pendingWrap && anchor.x == newWidth - 1) return newWidth;
+    final offset = switch (pendingWrap) {
+      true => 1,
+      false => 0,
+    };
+    return (anchor.x + offset).clamp(0, newWidth - 1);
   }
 
   /// Create a new [CellAnchor] at the specified [x] and [y] coordinates.
