@@ -9,6 +9,7 @@
 * Encode modified F1–F4 keys with xterm-compatible CSI sequences.
 * Preserve Shift+wheel scrollback while applications report mouse input.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
+* Encode modified Enter keys distinctly for modern interactive CLIs.
 
 ## [5.2.0] - 2026-07-25
 

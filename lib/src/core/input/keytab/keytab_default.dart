@@ -32,10 +32,15 @@ key Tab   +Shift-Ansi  : "\t"
 key Backtab     +Ansi  : "\E[Z"
 key Backtab     -Ansi  : "\t"
 
-key Return-Shift-NewLine : "\r"
-key Return-Shift+NewLine : "\r\n"
-
-key Return+Shift         : "\EOM"
+key Return -AnyMod-NewLine : "\r"
+key Return -AnyMod+NewLine : "\r\n"
+key Return +Shift-Alt-Control : "\E[27;2;13~"
+key Return -Shift+Alt-Control : "\E\r"
+key Return +Shift+Alt-Control : "\E[27;4;13~"
+key Return -Shift-Alt+Control : "\E[27;5;13~"
+key Return +Shift-Alt+Control : "\E[27;6;13~"
+key Return -Shift+Alt+Control : "\E[27;7;13~"
+key Return +Shift+Alt+Control : "\E[27;8;13~"
 
 key Backspace  +Alt : "\E\x7f"
 
@@ -145,8 +150,15 @@ key Clear       +KeyPad : "\E[E"
 
 # other grey PC keys
 
-key Enter+NewLine : "\r\n"
-key Enter-NewLine : "\r"
+key Enter -AnyMod-NewLine : "\r"
+key Enter -AnyMod+NewLine : "\r\n"
+key Enter +Shift-Alt-Control : "\E[27;2;13~"
+key Enter -Shift+Alt-Control : "\E\r"
+key Enter +Shift+Alt-Control : "\E[27;4;13~"
+key Enter -Shift-Alt+Control : "\E[27;5;13~"
+key Enter +Shift-Alt+Control : "\E[27;6;13~"
+key Enter -Shift+Alt+Control : "\E[27;7;13~"
+key Enter +Shift+Alt+Control : "\E[27;8;13~"
 
 key NumEnter+NewLine : "\r\n"
 key NumEnter-NewLine : "\r"

@@ -11,6 +11,34 @@ void main() {
       expect(output, ['\r']);
     });
 
+    test('encodes modified enter keys distinctly', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.keyInput(TerminalKey.enter, shift: true);
+      terminal.keyInput(TerminalKey.enter, alt: true);
+      terminal.keyInput(TerminalKey.enter, shift: true, alt: true);
+      terminal.keyInput(TerminalKey.enter, ctrl: true);
+      terminal.keyInput(TerminalKey.enter, shift: true, ctrl: true);
+      terminal.keyInput(TerminalKey.enter, alt: true, ctrl: true);
+      terminal.keyInput(
+        TerminalKey.enter,
+        shift: true,
+        alt: true,
+        ctrl: true,
+      );
+
+      expect(output, [
+        '\x1b[27;2;13~',
+        '\x1b\r',
+        '\x1b[27;4;13~',
+        '\x1b[27;5;13~',
+        '\x1b[27;6;13~',
+        '\x1b[27;7;13~',
+        '\x1b[27;8;13~',
+      ]);
+    });
+
     test('supports DEC application keypad with NumLock compatibility mode', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);
