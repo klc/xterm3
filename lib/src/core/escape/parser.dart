@@ -69,6 +69,7 @@ class EscapeParser {
     }
     _queue.add(data);
     _process();
+    _queue.unrefConsumedBlocks();
   }
 
   bool _isHighSurrogate(int codeUnit) {

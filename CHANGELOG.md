@@ -28,6 +28,7 @@
 * Avoid duplicate Unicode width lookups while processing terminal output.
 * Preserve supplementary Unicode glyphs split across output chunks.
 * Reduce memory overhead when sanitizing unsafe paste payloads.
+* Release consumed terminal input buffers without waiting for more output.
 * Ignore unsupported control bytes instead of rendering them as glyphs.
 * Harden hyperlink hit testing during concurrent resize and reflow.
 * Update hovered OSC 8 links immediately when the platform modifier changes.

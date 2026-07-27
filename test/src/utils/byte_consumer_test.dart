@@ -65,6 +65,17 @@ void main() {
     expect(_consumeAll(consumer), 'second'.runes);
   });
 
+  test('releases consumed prefixes while preserving pending input', () {
+    final consumer = ByteConsumer()..add('${'x' * 1024}pending');
+
+    consumer.consumeAsciiCodeUnits(1024);
+    consumer.unrefConsumedBlocks();
+
+    expect(consumer.currentBlock, 'pending');
+    expect(consumer.currentCodeUnitOffset, 0);
+    expect(_consumeAll(consumer), 'pending'.runes);
+  });
+
   test('handles large ASCII output without changing parser semantics', () {
     final text = 'x' * 1024 * 1024;
     final consumer = ByteConsumer()..add(text);

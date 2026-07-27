@@ -133,6 +133,11 @@ class ByteConsumer {
     while (_queue.isNotEmpty && _currentOffset >= _queue.first.data.length) {
       _currentOffset -= _queue.removeFirst().data.length;
     }
+    if (_queue.isNotEmpty && _currentOffset > 0) {
+      final remainingData = _queue.removeFirst().data.substring(_currentOffset);
+      _queue.addFirst(_StringBlock(remainingData));
+      _currentOffset = 0;
+    }
     _rollbackAvailable = 0;
   }
 
