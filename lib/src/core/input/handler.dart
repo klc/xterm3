@@ -265,18 +265,24 @@ class CtrlInputHandler implements TerminalInputHandler {
       return _withAltPrefix(input, event.alt);
     }
 
-    final text = event.text;
-    final textCodePoint = switch (text?.runes.toList(growable: false)) {
-      [final codePoint] => codePoint,
-      _ => null,
-    };
+    final textCodePoint = _singleCodePoint(event.text);
     final control = switch ((key, textCodePoint)) {
       (TerminalKey.space, _) || (_, 0x20) => 0x00,
+      (TerminalKey.digit0, _) || (_, 0x30) => 0x30,
+      (TerminalKey.digit1, _) || (_, 0x31) => 0x31,
+      (TerminalKey.digit2, _) || (_, 0x32) || (_, 0x40) => 0x00,
+      (TerminalKey.digit3, _) || (_, 0x33) => 0x1B,
+      (TerminalKey.digit4, _) || (_, 0x34) => 0x1C,
+      (TerminalKey.digit5, _) || (_, 0x35) => 0x1D,
+      (TerminalKey.digit7, _) || (_, 0x37) => 0x1F,
+      (TerminalKey.digit8, _) || (_, 0x38) || (_, 0x3F) => 0x7F,
+      (TerminalKey.digit9, _) || (_, 0x39) => 0x39,
       (TerminalKey.bracketLeft, _) || (_, 0x5B) => 0x1B,
       (TerminalKey.backslash, _) || (TerminalKey.intlBackslash, _) => 0x1C,
       (_, 0x5C) => 0x1C,
       (TerminalKey.bracketRight, _) || (_, 0x5D) => 0x1D,
       (TerminalKey.digit6, _) || (_, 0x5E) => 0x1E,
+      (_, 0x7E) => 0x1E,
       (TerminalKey.slash, _) ||
       (TerminalKey.minus, _) ||
       (_, 0x2F) ||
@@ -286,6 +292,16 @@ class CtrlInputHandler implements TerminalInputHandler {
     };
     if (control == null) return null;
     return _withAltPrefix(control, event.alt);
+  }
+
+  int? _singleCodePoint(String? text) {
+    if (text == null) return null;
+
+    final codePoints = text.runes.iterator;
+    if (!codePoints.moveNext()) return null;
+    final codePoint = codePoints.current;
+    if (codePoints.moveNext()) return null;
+    return codePoint;
   }
 
   String _withAltPrefix(int control, bool alt) {

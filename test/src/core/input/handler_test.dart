@@ -279,6 +279,53 @@ void main() {
       expect(output, ['\x00', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f', '\x1f']);
     });
 
+    test('supports legacy control number row chords', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.keyInput(TerminalKey.digit0, ctrl: true);
+      terminal.keyInput(TerminalKey.digit1, ctrl: true);
+      terminal.keyInput(TerminalKey.digit2, ctrl: true);
+      terminal.keyInput(TerminalKey.digit3, ctrl: true);
+      terminal.keyInput(TerminalKey.digit4, ctrl: true);
+      terminal.keyInput(TerminalKey.digit5, ctrl: true);
+      terminal.keyInput(TerminalKey.digit6, ctrl: true);
+      terminal.keyInput(TerminalKey.digit7, ctrl: true);
+      terminal.keyInput(TerminalKey.digit8, ctrl: true);
+      terminal.keyInput(TerminalKey.digit9, ctrl: true);
+
+      expect(
+        output,
+        ['0', '1', '\x00', '\x1b', '\x1c', '\x1d', '\x1e', '\x1f', '\x7f', '9'],
+      );
+    });
+
+    test('supports shifted control punctuation aliases', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.keyInput(
+        TerminalKey.digit2,
+        ctrl: true,
+        shift: true,
+        text: '@',
+      );
+      terminal.keyInput(
+        TerminalKey.slash,
+        ctrl: true,
+        shift: true,
+        text: '?',
+      );
+      terminal.keyInput(
+        TerminalKey.backquote,
+        ctrl: true,
+        shift: true,
+        text: '~',
+      );
+
+      expect(output, ['\x00', '\x7f', '\x1e']);
+    });
+
     test('preserves Ctrl+Shift letter chords with fixterms encoding', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);

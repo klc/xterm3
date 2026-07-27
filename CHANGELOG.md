@@ -14,6 +14,7 @@
 * Add standard Ctrl+Insert copy and Shift+Insert paste shortcuts.
 * Correct Ctrl+Alt+Backspace and DEC backarrow modifier handling.
 * Encode modified Escape keys distinctly for interactive applications.
+* Preserve legacy Ctrl+number-row control chords.
 * Bound streaming clipboard capture memory and recover after overflow.
 * Reduce allocation overhead for non-ASCII terminal output.
 * Avoid duplicate Unicode width lookups while processing terminal output.
