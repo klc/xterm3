@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 import 'package:xterm2/src/core/buffer/buffer.dart';
 import 'package:xterm2/src/core/buffer/cell_offset.dart';
 import 'package:xterm2/src/core/buffer/range.dart';
+import 'package:xterm2/src/core/buffer/range_line.dart';
 import 'package:xterm2/src/core/buffer/segment.dart';
 import 'package:xterm2/src/core/cell.dart';
 import 'package:xterm2/src/core/mouse/button.dart';
@@ -753,6 +754,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       );
     }
 
+    _paintSearchHighlightBackgrounds(
+      canvas,
+      offset,
+      effectFirstLine,
+      effectLastLine,
+    );
+
     _paintHighlights(
       canvas,
       offset,
@@ -820,6 +828,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
           hasBlinkingText;
     }
     _updateTextBlinking(hasBlinkingText);
+
+    _paintSearchHighlightForegrounds(
+      canvas,
+      offset,
+      effectFirstLine,
+      effectLastLine,
+      cursorColumn: switch (shouldPaintBlockCursor && _focusNode.hasFocus) {
+        true => cursorRenderColumn,
+        false => null,
+      },
+      cursorForeground: cursorForeground,
+    );
 
     if (selection != null) {
       _paintSelectionForegrounds(
@@ -1102,6 +1122,117 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _paintSegment(canvas, offset, segment, highlight.color);
       }
     }
+  }
+
+  void _paintSearchHighlightBackgrounds(
+    Canvas canvas,
+    Offset offset,
+    int firstLine,
+    int lastLine,
+  ) {
+    final highlights = _controller.searchHighlights;
+    for (var index = 0; index < highlights.length; index++) {
+      final range = _visibleSearchHighlightRange(
+        highlights[index],
+        firstLine,
+        lastLine,
+      );
+      if (range == null) continue;
+
+      final color = switch (index == _controller.currentSearchHighlight) {
+        true => _painter.searchHitBackgroundCurrentColor,
+        false => _painter.searchHitBackgroundColor,
+      };
+      for (final segment in range.toSegments()) {
+        if (segment.line < firstLine) continue;
+        if (segment.line > lastLine) break;
+        _paintSegment(canvas, offset, segment, color);
+      }
+    }
+  }
+
+  void _paintSearchHighlightForegrounds(
+    Canvas canvas,
+    Offset offset,
+    int firstLine,
+    int lastLine, {
+    required int? cursorColumn,
+    required Color cursorForeground,
+  }) {
+    final clipPath = Path();
+    var hasVisibleHighlights = false;
+    for (final highlight in _controller.searchHighlights) {
+      final range = _visibleSearchHighlightRange(
+        highlight,
+        firstLine,
+        lastLine,
+      );
+      if (range == null) continue;
+
+      for (final segment in range.toSegments()) {
+        if (segment.line < firstLine) continue;
+        if (segment.line > lastLine) break;
+
+        final start = segment.start ?? 0;
+        final end = segment.end ?? _terminal.viewWidth;
+        final segmentOffset = getSegmentOffset(segment, offset);
+        clipPath.addRect(
+          Rect.fromLTWH(
+            segmentOffset.dx,
+            segmentOffset.dy,
+            (end - start) * _painter.cellSize.width,
+            _painter.cellSize.height,
+          ),
+        );
+        hasVisibleHighlights = true;
+      }
+    }
+    if (!hasVisibleHighlights) return;
+
+    canvas.save();
+    canvas.clipPath(clipPath);
+    for (var line = firstLine; line <= lastLine; line++) {
+      _painter.paintLineForegrounds(
+        canvas,
+        offset.translate(
+          _padding.left,
+          line * _painter.cellSize.height + _lineOffset,
+        ),
+        _terminal.buffer.lines[line],
+        blinkVisible: _textBlinkVisible,
+        activeHyperlinkId: _activeHyperlinkId,
+        cursorColumn: switch (
+            cursorColumn != null &&
+                line == _terminal.buffer.absoluteCursorY) {
+          true => cursorColumn,
+          false => null,
+        },
+        cursorForeground: cursorForeground,
+        foregroundOverride: _painter.searchHitForegroundColor,
+        ensureSelectionContrast: true,
+      );
+    }
+    canvas.restore();
+  }
+
+  BufferRangeLine? _visibleSearchHighlightRange(
+    TerminalSearchHighlight highlight,
+    int firstLine,
+    int lastLine,
+  ) {
+    final buffer = _terminal.buffer;
+    if (!buffer.ownsAnchor(highlight.p1) || !buffer.ownsAnchor(highlight.p2)) {
+      return null;
+    }
+
+    final beginY = highlight.p1.y;
+    final endY = highlight.p2.y;
+    if (beginY > lastLine || endY < firstLine) return null;
+
+    return BufferRangeLine(
+      CellOffset(highlight.p1.x, beginY),
+      CellOffset(highlight.p2.x, endY),
+    );
   }
 
   void _paintUnderlines(

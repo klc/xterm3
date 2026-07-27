@@ -1,3 +1,7 @@
+## [Unreleased]
+
+* Render bounded search matches with a distinct active result.
+
 ## [5.2.0] - 2026-07-25
 
 * Harden resize behavior for synchronized output, tab stops, and size reports.

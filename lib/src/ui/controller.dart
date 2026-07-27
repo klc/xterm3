@@ -39,6 +39,12 @@ class TerminalController with ChangeNotifier {
   List<TerminalHighlight> get highlights => _highlights;
   final _highlights = <TerminalHighlight>[];
 
+  List<TerminalSearchHighlight> get searchHighlights => _searchHighlights;
+  final _searchHighlights = <TerminalSearchHighlight>[];
+
+  int get currentSearchHighlight => _currentSearchHighlight;
+  var _currentSearchHighlight = -1;
+
   List<TerminalUnderline> get underlines => _underlines;
   final _underlines = <TerminalUnderline>[];
 
@@ -169,6 +175,68 @@ class TerminalController with ChangeNotifier {
     return highlight;
   }
 
+  /// Replaces all terminal search highlights in one controller update.
+  ///
+  /// The supplied ranges are tracked with buffer anchors, so they remain
+  /// attached to their matched text as the buffer is edited or reflowed.
+  void setSearchHighlights(
+    Buffer buffer,
+    List<BufferRangeLine> ranges, {
+    int currentIndex = 0,
+  }) {
+    _disposeSearchHighlights();
+
+    for (final range in ranges) {
+      final normalized = range.normalized;
+      if (normalized.begin.y < 0 ||
+          normalized.begin.y >= buffer.lines.length ||
+          normalized.end.y < 0 ||
+          normalized.end.y >= buffer.lines.length) {
+        continue;
+      }
+
+      _searchHighlights.add(
+        TerminalSearchHighlight(
+          p1: buffer.createAnchorFromOffset(normalized.begin),
+          p2: buffer.createAnchorFromOffset(normalized.end),
+        ),
+      );
+    }
+
+    _currentSearchHighlight = switch (_searchHighlights.isEmpty) {
+      true => -1,
+      false => currentIndex.clamp(0, _searchHighlights.length - 1),
+    };
+    notifyListeners();
+  }
+
+  /// Changes which search highlight is rendered as the current match.
+  void setCurrentSearchHighlight(int index) {
+    if (_searchHighlights.isEmpty) return;
+
+    final nextIndex = index.clamp(0, _searchHighlights.length - 1);
+    if (_currentSearchHighlight == nextIndex) return;
+
+    _currentSearchHighlight = nextIndex;
+    notifyListeners();
+  }
+
+  /// Removes all search highlights and releases their buffer anchors.
+  void clearSearchHighlights() {
+    if (_searchHighlights.isEmpty && _currentSearchHighlight == -1) return;
+
+    _disposeSearchHighlights();
+    notifyListeners();
+  }
+
+  void _disposeSearchHighlights() {
+    for (final highlight in _searchHighlights) {
+      highlight.dispose();
+    }
+    _searchHighlights.clear();
+    _currentSearchHighlight = -1;
+  }
+
   /// Creates a temporary underline from [p1] to [p2] with the given [color].
   /// The underline will be removed when the returned object is disposed.
   TerminalUnderline underline({
@@ -205,6 +273,7 @@ class TerminalController with ChangeNotifier {
     for (final highlight in highlights) {
       highlight.dispose();
     }
+    _disposeSearchHighlights();
 
     final underlines = List<TerminalUnderline>.of(_underlines);
     for (final underline in underlines) {
@@ -212,6 +281,30 @@ class TerminalController with ChangeNotifier {
     }
 
     super.dispose();
+  }
+}
+
+class TerminalSearchHighlight {
+  TerminalSearchHighlight({
+    required this.p1,
+    required this.p2,
+  });
+
+  final CellAnchor p1;
+  final CellAnchor p2;
+
+  /// Returns the highlight only when both anchors belong to [buffer].
+  BufferRangeLine? rangeFor(Buffer buffer) {
+    if (!buffer.ownsAnchor(p1) || !buffer.ownsAnchor(p2)) {
+      return null;
+    }
+
+    return BufferRangeLine(p1.offset, p2.offset);
+  }
+
+  void dispose() {
+    p1.dispose();
+    p2.dispose();
   }
 }
 

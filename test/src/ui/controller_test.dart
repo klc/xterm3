@@ -184,4 +184,120 @@ void main() {
       expect(underline.rangeFor(terminal.buffer), isNull);
     });
   });
+
+  group('TerminalController search highlights', () {
+    test('replaces highlights in one bounded set', () {
+      final terminal = Terminal()..resize(20, 3);
+      final controller = TerminalController();
+
+      controller.setSearchHighlights(
+        terminal.buffer,
+        [
+          BufferRangeLine(
+            const CellOffset(0, 0),
+            const CellOffset(4, 0),
+          ),
+          BufferRangeLine(
+            const CellOffset(2, 1),
+            const CellOffset(6, 1),
+          ),
+        ],
+        currentIndex: 1,
+      );
+
+      expect(controller.searchHighlights, hasLength(2));
+      expect(controller.currentSearchHighlight, 1);
+      expect(
+        controller.searchHighlights.first.rangeFor(terminal.buffer),
+        BufferRangeLine(
+          const CellOffset(0, 0),
+          const CellOffset(4, 0),
+        ),
+      );
+    });
+
+    test('updates current match without replacing anchors', () {
+      final terminal = Terminal()..resize(20, 3);
+      final controller = TerminalController();
+      controller.setSearchHighlights(
+        terminal.buffer,
+        [
+          BufferRangeLine(
+            const CellOffset(0, 0),
+            const CellOffset(4, 0),
+          ),
+          BufferRangeLine(
+            const CellOffset(2, 1),
+            const CellOffset(6, 1),
+          ),
+        ],
+      );
+      final firstAnchor = controller.searchHighlights.first.p1;
+
+      controller.setCurrentSearchHighlight(1);
+
+      expect(controller.currentSearchHighlight, 1);
+      expect(controller.searchHighlights.first.p1, same(firstAnchor));
+    });
+
+    test('clear and dispose release search anchors', () {
+      final terminal = Terminal()..resize(20, 3);
+      final controller = TerminalController();
+      controller.setSearchHighlights(
+        terminal.buffer,
+        [
+          BufferRangeLine(
+            const CellOffset(0, 0),
+            const CellOffset(4, 0),
+          ),
+        ],
+      );
+      final firstAnchor = controller.searchHighlights.first.p1;
+      final secondAnchor = controller.searchHighlights.first.p2;
+
+      controller.clearSearchHighlights();
+
+      expect(firstAnchor.attached, isFalse);
+      expect(secondAnchor.attached, isFalse);
+      expect(controller.searchHighlights, isEmpty);
+      expect(controller.currentSearchHighlight, -1);
+
+      controller.setSearchHighlights(
+        terminal.buffer,
+        [
+          BufferRangeLine(
+            const CellOffset(0, 1),
+            const CellOffset(4, 1),
+          ),
+        ],
+      );
+      final disposeAnchor = controller.searchHighlights.first.p1;
+
+      controller.dispose();
+
+      expect(disposeAnchor.attached, isFalse);
+      expect(controller.searchHighlights, isEmpty);
+    });
+
+    test('search highlights are isolated to their buffer', () {
+      final terminal = Terminal()..resize(20, 3);
+      final controller = TerminalController();
+      controller.setSearchHighlights(
+        terminal.buffer,
+        [
+          BufferRangeLine(
+            const CellOffset(0, 0),
+            const CellOffset(4, 0),
+          ),
+        ],
+      );
+
+      terminal.write('\x1b[?1049h');
+
+      expect(
+        controller.searchHighlights.first.rangeFor(terminal.buffer),
+        isNull,
+      );
+    });
+  });
 }

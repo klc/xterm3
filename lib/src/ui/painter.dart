@@ -132,6 +132,13 @@ class TerminalPainter {
 
   Color? get selectionForegroundColor => _selectionForegroundColorOverride;
 
+  Color get searchHitBackgroundColor => _theme.searchHitBackground;
+
+  Color get searchHitBackgroundCurrentColor =>
+      _theme.searchHitBackgroundCurrent;
+
+  Color get searchHitForegroundColor => _theme.searchHitForeground;
+
   Color get cursorLineHighlightColor => selectionColor.withValues(alpha: 0.18);
 
   Color? get backgroundColorOverride => _backgroundColorOverride;
