@@ -17,12 +17,24 @@ class TerminalScrollIntent extends Intent {
   final TerminalScrollTarget target;
 }
 
+enum TerminalPromptNavigationTarget {
+  previous,
+  next,
+}
+
+class TerminalPromptNavigationIntent extends Intent {
+  const TerminalPromptNavigationIntent(this.target);
+
+  final TerminalPromptNavigationTarget target;
+}
+
 class TerminalActions extends StatelessWidget {
   const TerminalActions({
     super.key,
     required this.terminal,
     required this.controller,
     required this.getScrollPosition,
+    required this.getLineHeight,
     required this.child,
   });
 
@@ -31,6 +43,8 @@ class TerminalActions extends StatelessWidget {
   final TerminalController controller;
 
   final ScrollPosition? Function() getScrollPosition;
+
+  final double Function() getLineHeight;
 
   final Widget child;
 
@@ -81,6 +95,11 @@ class TerminalActions extends StatelessWidget {
           terminal: terminal,
           getScrollPosition: getScrollPosition,
         ),
+        TerminalPromptNavigationIntent: _TerminalPromptNavigationAction(
+          terminal: terminal,
+          getScrollPosition: getScrollPosition,
+          getLineHeight: getLineHeight,
+        ),
       },
       child: child,
     );
@@ -115,6 +134,52 @@ class _TerminalScrollAction extends Action<TerminalScrollIntent> {
       TerminalScrollTarget.pageDown =>
         position.pixels + position.viewportDimension,
     };
+    position.jumpTo(
+      target
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble(),
+    );
+    return null;
+  }
+}
+
+class _TerminalPromptNavigationAction
+    extends Action<TerminalPromptNavigationIntent> {
+  _TerminalPromptNavigationAction({
+    required this.terminal,
+    required this.getScrollPosition,
+    required this.getLineHeight,
+  });
+
+  final Terminal terminal;
+
+  final ScrollPosition? Function() getScrollPosition;
+
+  final double Function() getLineHeight;
+
+  @override
+  bool isEnabled(TerminalPromptNavigationIntent intent) {
+    return !terminal.isUsingAltBuffer && getScrollPosition() != null;
+  }
+
+  @override
+  Object? invoke(TerminalPromptNavigationIntent intent) {
+    final position = getScrollPosition();
+    if (position == null) return null;
+
+    final lineHeight = getLineHeight();
+    if (lineHeight <= 0) return null;
+
+    final currentLine = (position.pixels / lineHeight).floor();
+    final targetLine = switch (intent.target) {
+      TerminalPromptNavigationTarget.previous =>
+        terminal.semanticPromptLineBefore(currentLine),
+      TerminalPromptNavigationTarget.next =>
+        terminal.semanticPromptLineAfter(currentLine),
+    };
+    if (targetLine == null) return null;
+
+    final target = targetLine * lineHeight;
     position.jumpTo(
       target
           .clamp(position.minScrollExtent, position.maxScrollExtent)

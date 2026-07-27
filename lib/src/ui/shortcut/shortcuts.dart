@@ -31,6 +31,20 @@ final _defaultShortcuts = {
       const TerminalScrollIntent(TerminalScrollTarget.pageUp),
   const SingleActivator(LogicalKeyboardKey.pageDown, shift: true):
       const TerminalScrollIntent(TerminalScrollTarget.pageDown),
+  const SingleActivator(
+    LogicalKeyboardKey.arrowUp,
+    control: true,
+    shift: true,
+  ): const TerminalPromptNavigationIntent(
+    TerminalPromptNavigationTarget.previous,
+  ),
+  const SingleActivator(
+    LogicalKeyboardKey.arrowDown,
+    control: true,
+    shift: true,
+  ): const TerminalPromptNavigationIntent(
+    TerminalPromptNavigationTarget.next,
+  ),
 };
 
 final _defaultAppleShortcuts = {
@@ -48,4 +62,26 @@ final _defaultAppleShortcuts = {
       const TerminalScrollIntent(TerminalScrollTarget.pageUp),
   const SingleActivator(LogicalKeyboardKey.pageDown, shift: true):
       const TerminalScrollIntent(TerminalScrollTarget.pageDown),
+  const SingleActivator(LogicalKeyboardKey.arrowUp, meta: true):
+      const TerminalPromptNavigationIntent(
+    TerminalPromptNavigationTarget.previous,
+  ),
+  const SingleActivator(LogicalKeyboardKey.arrowDown, meta: true):
+      const TerminalPromptNavigationIntent(
+    TerminalPromptNavigationTarget.next,
+  ),
+  const SingleActivator(
+    LogicalKeyboardKey.arrowUp,
+    meta: true,
+    shift: true,
+  ): const TerminalPromptNavigationIntent(
+    TerminalPromptNavigationTarget.previous,
+  ),
+  const SingleActivator(
+    LogicalKeyboardKey.arrowDown,
+    meta: true,
+    shift: true,
+  ): const TerminalPromptNavigationIntent(
+    TerminalPromptNavigationTarget.next,
+  ),
 };

@@ -512,6 +512,7 @@ class TerminalViewState extends State<TerminalView> {
       terminal: widget.terminal,
       controller: _controller,
       getScrollPosition: () => _scrollableKey.currentState?.position,
+      getLineHeight: () => renderTerminal.lineHeight,
       child: child,
     );
 

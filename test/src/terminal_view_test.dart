@@ -939,6 +939,117 @@ void main() {
 
       expect(output, isNotEmpty);
     });
+
+    testWidgets('semantic prompt navigation follows prompt history', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(maxLines: 100, onOutput: output.add)
+        ..resize(20, 5);
+      final scrollController = ScrollController();
+      for (var prompt = 0; prompt < 5; prompt++) {
+        terminal.write('\x1b]133;A\x1b\\prompt $prompt\r\n');
+        for (var line = 0; line < 5; line++) {
+          terminal.write('output $prompt.$line\r\n');
+        }
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 120,
+              child: TerminalView(
+                terminal,
+                scrollController: scrollController,
+                autoResize: false,
+                autofocus: true,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final lineHeight = state.renderTerminal.lineHeight;
+      final maxScrollExtent = scrollController.position.maxScrollExtent;
+      final firstTopLine = (maxScrollExtent / lineHeight).floor();
+      final firstTarget = terminal.semanticPromptLineBefore(firstTopLine);
+      expect(firstTarget, isNotNull);
+
+      await _sendPromptNavigationShortcut(
+        tester,
+        LogicalKeyboardKey.arrowUp,
+      );
+      await tester.pump();
+
+      if (firstTarget != null) {
+        expect(
+          scrollController.offset,
+          closeTo(firstTarget * lineHeight, 0.01),
+        );
+      }
+
+      final secondTarget = terminal.semanticPromptLineBefore(firstTarget ?? 0);
+      expect(secondTarget, isNotNull);
+
+      await _sendPromptNavigationShortcut(
+        tester,
+        LogicalKeyboardKey.arrowUp,
+      );
+      await tester.pump();
+
+      if (secondTarget != null) {
+        expect(
+          scrollController.offset,
+          closeTo(secondTarget * lineHeight, 0.01),
+        );
+      }
+
+      await _sendPromptNavigationShortcut(
+        tester,
+        LogicalKeyboardKey.arrowDown,
+      );
+      await tester.pump();
+
+      if (firstTarget != null) {
+        expect(
+          scrollController.offset,
+          closeTo(firstTarget * lineHeight, 0.01),
+        );
+      }
+      expect(output, isEmpty);
+
+      scrollController.dispose();
+    });
+
+    testWidgets('prompt shortcuts remain available to alternate-screen apps', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      terminal.write('\x1b[?1049h');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autoResize: false,
+              autofocus: true,
+            ),
+          ),
+        ),
+      );
+
+      await _sendPromptNavigationShortcut(
+        tester,
+        LogicalKeyboardKey.arrowUp,
+      );
+      await tester.pump();
+
+      expect(output, isNotEmpty);
+    });
   });
 
   group('TerminalView shortcuts', () {
@@ -1017,6 +1128,7 @@ void main() {
             terminal: terminal,
             controller: controller,
             getScrollPosition: () => null,
+            getLineHeight: () => 1,
             child: Builder(
               builder: (context) {
                 actionContext = context;
@@ -1535,4 +1647,26 @@ void main() {
       expect(terminalOutput.join(), isEmpty);
     });
   });
+}
+
+Future<void> _sendPromptNavigationShortcut(
+  WidgetTester tester,
+  LogicalKeyboardKey key,
+) async {
+  switch (defaultTargetPlatform) {
+    case TargetPlatform.iOS:
+    case TargetPlatform.macOS:
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(key);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    case TargetPlatform.android:
+    case TargetPlatform.fuchsia:
+    case TargetPlatform.linux:
+    case TargetPlatform.windows:
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(key);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  }
 }
