@@ -767,8 +767,8 @@ class Terminal
   }
 
   int hyperlinkIdAt(CellOffset position) {
-    if (position.y < 0 || position.y >= _buffer.lines.length) return 0;
-    final line = _buffer.lines[position.y];
+    final line = _buffer.lines.elementAtOrNull(position.y);
+    if (line == null) return 0;
     if (position.x < 0 || position.x >= line.length) return 0;
     return line.getHyperlinkId(position.x);
   }

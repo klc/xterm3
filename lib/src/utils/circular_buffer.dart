@@ -112,6 +112,14 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     return _getChild(index)!;
   }
 
+  T? elementAtOrNull(int index) {
+    if (index < 0 || index >= length) {
+      return null;
+    }
+
+    return _getChild(index);
+  }
+
   /// Sets the element at the specified [index] in the list. Throws if the
   /// index is out of bounds.
   operator []=(int index, T value) {

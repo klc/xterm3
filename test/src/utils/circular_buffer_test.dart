@@ -39,6 +39,17 @@ void main() {
       expect(cl.maxLength, 1000);
     });
 
+    test('safe lookup returns null outside the logical range', () {
+      final cl = IndexAwareCircularBuffer<IndexedValue<int>>(5);
+      final item = 1.indexed;
+
+      cl.push(item);
+
+      expect(cl.elementAtOrNull(-1), isNull);
+      expect(cl.elementAtOrNull(0), same(item));
+      expect(cl.elementAtOrNull(1), isNull);
+    });
+
     test("change max value", () {
       final cl = IndexAwareCircularBuffer<IndexedValue<int>>(2000);
       expect(cl.maxLength, 2000);
