@@ -1369,6 +1369,43 @@ void main() {
   });
 
   group('TerminalView selection gestures', () {
+    testWidgets('mouse-reporting apps own repeated clicks', (tester) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)..write('clickable');
+      terminal.write('\x1b[?1000h\x1b[?1006h');
+      final controller = TerminalController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              controller: controller,
+              autoResize: false,
+            ),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final position = state.renderTerminal.localToGlobal(
+        Offset(
+          state.renderTerminal.cellSize.width * 1.5,
+          state.renderTerminal.cellSize.height * 0.5,
+        ),
+      );
+
+      await tester.tapAt(position);
+      await tester.tapAt(position);
+      await tester.tapAt(position);
+
+      expect(output.where((value) => value.endsWith('M')), hasLength(3));
+      expect(output.where((value) => value.endsWith('m')), hasLength(3));
+      expect(controller.selection, isNull);
+
+      controller.dispose();
+    });
+
     testWidgets('dragging beyond the viewport scrolls the selection', (
       tester,
     ) async {

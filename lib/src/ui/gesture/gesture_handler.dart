@@ -86,6 +86,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         child: widget.child,
         onTapUp: widget.onTapUp,
         onSingleTapUp: onSingleTapUp,
+        onRepeatedTapUp: onSingleTapUp,
         onTapDown: onTapDown,
         onSecondaryTapDown: onSecondaryTapDown,
         onSecondaryTapUp: onSecondaryTapUp,
@@ -247,11 +248,18 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onDoubleTapDown(TapDownDetails details) {
+    if (_applicationHandlesTap) return;
     renderTerminal.selectWord(details.localPosition);
   }
 
   void onTripleTapDown(TapDownDetails details) {
+    if (_applicationHandlesTap) return;
     renderTerminal.selectLine(details.localPosition);
+  }
+
+  bool get _applicationHandlesTap {
+    if (!_shouldSendTapEvent) return false;
+    return widget.terminalView.widget.terminal.mouseMode != MouseMode.none;
   }
 
   void onLongPressStart(LongPressStartDetails details) {

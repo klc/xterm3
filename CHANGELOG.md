@@ -10,6 +10,7 @@
 * Preserve Shift+wheel scrollback while applications report mouse input.
 * Report horizontal wheel gestures and simulate them in alternate screens.
 * Keep application scrolling active when Flutter replaces its scroll position.
+* Leave double- and triple-click handling to applications using mouse tracking.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
 * Encode modified Enter keys distinctly for modern interactive CLIs.
 * Preserve distinct Ctrl+Shift letter chords with fixterms encoding.

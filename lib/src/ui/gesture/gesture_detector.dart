@@ -8,6 +8,7 @@ class TerminalGestureDetector extends StatefulWidget {
     super.key,
     this.child,
     this.onSingleTapUp,
+    this.onRepeatedTapUp,
     this.onTapUp,
     this.onTapDown,
     this.onSecondaryTapDown,
@@ -30,6 +31,8 @@ class TerminalGestureDetector extends StatefulWidget {
   final GestureTapUpCallback? onTapUp;
 
   final GestureTapUpCallback? onSingleTapUp;
+
+  final GestureTapUpCallback? onRepeatedTapUp;
 
   final GestureTapDownCallback? onTapDown;
 
@@ -105,12 +108,16 @@ class _TerminalGestureDetectorState extends State<TerminalGestureDetector> {
 
   void _handleTapUp(TapUpDetails details) {
     widget.onTapUp?.call(details);
-    if (!_isRepeatedTap) {
-      widget.onSingleTapUp?.call(details);
-      _lastTapOffset = details.globalPosition;
-      _tapCount = 1;
-      _doubleTapTimer = Timer(kDoubleTapTimeout, _doubleTapTimeout);
+    if (_isRepeatedTap) {
+      widget.onRepeatedTapUp?.call(details);
+      _isRepeatedTap = false;
+      return;
     }
+
+    widget.onSingleTapUp?.call(details);
+    _lastTapOffset = details.globalPosition;
+    _tapCount = 1;
+    _doubleTapTimer = Timer(kDoubleTapTimeout, _doubleTapTimeout);
     _isRepeatedTap = false;
   }
 
