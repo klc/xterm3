@@ -2495,6 +2495,16 @@ void main() {
     ]);
   });
 
+  test('Terminal paste preserves safe payloads without copying', () {
+    String? output;
+    final terminal = Terminal(onOutput: (value) => output = value);
+    final input = List.filled(4096, 'safe').join();
+
+    terminal.paste(input);
+
+    expect(identical(output, input), isTrue);
+  });
+
   test('Terminal paste safety detects command-injection payloads', () {
     expect(Terminal.isPasteSafe('echo hello'), isTrue);
     expect(Terminal.isPasteSafe('echo hello\nrm unsafe'), isFalse);

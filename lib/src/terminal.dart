@@ -927,6 +927,10 @@ class Terminal
       return;
     }
 
+    if (!sanitizedText.contains('\n')) {
+      onOutput?.call(sanitizedText);
+      return;
+    }
     onOutput?.call(sanitizedText.replaceAll('\n', '\r'));
   }
 
@@ -968,6 +972,8 @@ class Terminal
   }
 
   String _sanitizePasteText(String text) {
+    if (!_pasteNeedsSanitization(text)) return text;
+
     final codePoints = text.runes.toList(growable: false);
     var sanitized = StringBuffer();
     var changed = false;
@@ -991,6 +997,13 @@ class Terminal
       true => sanitized.toString(),
       false => text,
     };
+  }
+
+  bool _pasteNeedsSanitization(String text) {
+    for (final codeUnit in text.codeUnits) {
+      if (_shouldReplacePastedControl(codeUnit)) return true;
+    }
+    return false;
   }
 
   bool _shouldReplacePastedControl(int codePoint) {
