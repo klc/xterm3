@@ -2338,7 +2338,7 @@ void main() {
     terminal.write(
       '\x1b]1337;CopyToClipboard=\x1b\\'
       'hello\tworld\r\n'
-      '\x1b[31mred\x1b[0m'
+      '\x1b[31mred🙂\x1b[0m'
       '\x1b]1337;EndCopy\x1b\\',
     );
     terminal.write(
@@ -2348,7 +2348,7 @@ void main() {
     );
 
     expect(stores, [
-      ('c', 'hello\tworld\r\nred'),
+      ('c', 'hello\tworld\r\nred🙂'),
       ('s', 'selection'),
     ]);
   });

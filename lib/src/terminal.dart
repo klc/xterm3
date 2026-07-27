@@ -1180,7 +1180,7 @@ class Terminal
 
   @override
   void writeChar(int char) {
-    _captureITerm2ClipboardText(String.fromCharCode(char));
+    _captureITerm2ClipboardChar(char);
     if (unicodeV11.wcwidth(char) > 0) {
       _precedingCodepoint = char;
     }
@@ -1216,7 +1216,7 @@ class Terminal
 
   @override
   void tab() {
-    _captureITerm2ClipboardText('\t');
+    _captureITerm2ClipboardChar(Ascii.HT);
     final rightLimit = _horizontalTabRightLimit();
     if (_buffer.cursorX >= rightLimit) return;
 
@@ -1242,14 +1242,14 @@ class Terminal
 
   @override
   void lineFeed() {
-    _captureITerm2ClipboardText('\n');
+    _captureITerm2ClipboardChar(Ascii.LF);
     _buffer.lineFeed();
     _semanticPromptLineFeed();
   }
 
   @override
   void carriageReturn() {
-    _captureITerm2ClipboardText('\r');
+    _captureITerm2ClipboardChar(Ascii.CR);
     _buffer.carriageReturn();
   }
 
@@ -3847,8 +3847,20 @@ class Terminal
     onClipboardStore?.call(selector, buffer.toString());
   }
 
-  void _captureITerm2ClipboardText(String text) {
-    _captureITerm2ClipboardTextRange(text, 0, text.length);
+  void _captureITerm2ClipboardChar(int codePoint) {
+    final buffer = _clipboardCaptureBuffer;
+    if (buffer == null || _clipboardCaptureOverflowed) return;
+
+    final length = switch (codePoint > 0xffff) {
+      true => 2,
+      false => 1,
+    };
+    if (buffer.length + length > _maxClipboardCaptureLength) {
+      _clipboardCaptureBuffer = null;
+      _clipboardCaptureOverflowed = true;
+      return;
+    }
+    buffer.writeCharCode(codePoint);
   }
 
   void _captureITerm2ClipboardTextRange(String text, int start, int end) {

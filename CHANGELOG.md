@@ -15,6 +15,7 @@
 * Correct Ctrl+Alt+Backspace and DEC backarrow modifier handling.
 * Encode modified Escape keys distinctly for interactive applications.
 * Bound streaming clipboard capture memory and recover after overflow.
+* Reduce allocation overhead for non-ASCII terminal output.
 
 ## [5.2.0] - 2026-07-25
 
