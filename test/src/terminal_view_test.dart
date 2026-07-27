@@ -1442,14 +1442,26 @@ void main() {
       );
 
       await gesture.down(start);
-      await tester.pump(kPressTimeout);
       await gesture.moveTo(end);
       await tester.pump();
       await gesture.up();
       await tester.pump();
 
-      expect(output.where((value) => value.endsWith('M')), hasLength(1));
-      expect(output.where((value) => value.endsWith('m')), hasLength(1));
+      final secondaryGesture = await tester.createGesture(
+        pointer: 2,
+        kind: PointerDeviceKind.mouse,
+        buttons: kSecondaryMouseButton,
+      );
+      await secondaryGesture.down(start);
+      await secondaryGesture.moveTo(end);
+      await tester.pump();
+      await secondaryGesture.up();
+      await tester.pump();
+
+      expect(output.where((value) => value.endsWith('M')), hasLength(2));
+      expect(output.where((value) => value.endsWith('m')), hasLength(2));
+      expect(output, contains(startsWith('\x1b[<0;')));
+      expect(output, contains(startsWith('\x1b[<2;')));
       expect(controller.selection, isNull);
 
       controller.dispose();

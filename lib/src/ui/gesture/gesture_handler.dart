@@ -57,6 +57,12 @@ class TerminalGestureHandler extends StatefulWidget {
 class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   static const _selectionScrollVelocity = 30.0;
 
+  static const _mouseButtons = [
+    (kPrimaryMouseButton, TerminalMouseButton.left),
+    (kSecondaryMouseButton, TerminalMouseButton.right),
+    (kMiddleMouseButton, TerminalMouseButton.middle),
+  ];
+
   TerminalViewState get terminalView => widget.terminalView;
 
   RenderTerminal get renderTerminal => terminalView.renderTerminal;
@@ -65,7 +71,11 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   Offset? _lastDragPosition;
 
-  var _reportingPointerDrag = false;
+  var _applicationOwnsPointerDrag = false;
+
+  final Map<int, int> _pressedMouseButtons = {};
+
+  final Map<int, int> _reportedMouseButtons = {};
 
   LongPressStartDetails? _lastLongPressStartDetails;
 
@@ -82,8 +92,11 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   @override
   Widget build(BuildContext context) {
     return Listener(
+      onPointerDown: _onPointerDown,
       onPointerMove: _onPointerMotion,
       onPointerHover: _onPointerMotion,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
       child: TerminalGestureDetector(
         child: widget.child,
         onTapUp: widget.onTapUp,
@@ -111,6 +124,79 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
       !widget.readOnly &&
       !_bypassesMouseReportingWithShift &&
       widget.terminalController.shouldSendPointerInput(PointerInput.tap);
+
+  void _onPointerDown(PointerDownEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+
+    final previousButtons = _pressedMouseButtons[event.pointer] ?? 0;
+    final pressedButtons = event.buttons & ~previousButtons;
+    _pressedMouseButtons[event.pointer] = event.buttons;
+    if (!_shouldSendTapEvent) return;
+
+    var reportedButtons = _reportedMouseButtons[event.pointer] ?? 0;
+    for (final (buttonMask, terminalButton) in _mouseButtons) {
+      if (pressedButtons & buttonMask == 0) continue;
+      final handled = renderTerminal.mouseEvent(
+        terminalButton,
+        TerminalMouseButtonState.down,
+        event.localPosition,
+        modifiers: _currentModifiers(),
+      );
+      if (handled) reportedButtons |= buttonMask;
+    }
+    if (reportedButtons == 0) return;
+    _reportedMouseButtons[event.pointer] = reportedButtons;
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+
+    final previousButtons = _pressedMouseButtons[event.pointer] ?? 0;
+    final releasedButtons = previousButtons & ~event.buttons;
+    _updatePressedMouseButtons(event.pointer, event.buttons);
+    _releaseMouseButtons(event.pointer, releasedButtons, event.localPosition);
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+
+    _pressedMouseButtons.remove(event.pointer);
+    final reportedButtons = _reportedMouseButtons[event.pointer] ?? 0;
+    _releaseMouseButtons(
+      event.pointer,
+      reportedButtons,
+      event.localPosition,
+    );
+  }
+
+  void _updatePressedMouseButtons(int pointer, int buttons) {
+    if (buttons == 0) {
+      _pressedMouseButtons.remove(pointer);
+      return;
+    }
+    _pressedMouseButtons[pointer] = buttons;
+  }
+
+  void _releaseMouseButtons(int pointer, int buttons, Offset position) {
+    final reportedButtons = _reportedMouseButtons[pointer] ?? 0;
+    final buttonsToRelease = reportedButtons & buttons;
+    for (final (buttonMask, terminalButton) in _mouseButtons) {
+      if (buttonsToRelease & buttonMask == 0) continue;
+      renderTerminal.mouseEvent(
+        terminalButton,
+        TerminalMouseButtonState.up,
+        position,
+        modifiers: _currentModifiers(),
+      );
+    }
+
+    final remainingButtons = reportedButtons & ~buttonsToRelease;
+    if (remainingButtons == 0) {
+      _reportedMouseButtons.remove(pointer);
+      return;
+    }
+    _reportedMouseButtons[pointer] = remainingButtons;
+  }
 
   void _onPointerMotion(PointerEvent event) {
     final input = switch (event.buttons) {
@@ -146,8 +232,9 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     bool forceCallback = false,
   }) {
     // Check if the terminal should and can handle the tap down event.
-    var handled = false;
-    if (_shouldSendTapEvent) {
+    var handled = details.kind == PointerDeviceKind.mouse &&
+        _isMouseButtonReported(button);
+    if (details.kind != PointerDeviceKind.mouse && _shouldSendTapEvent) {
       handled = renderTerminal.mouseEvent(
         button,
         TerminalMouseButtonState.down,
@@ -168,8 +255,9 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     bool forceCallback = false,
   }) {
     // Check if the terminal should and can handle the tap up event.
-    var handled = false;
-    if (_shouldSendTapEvent) {
+    var handled =
+        details.kind == PointerDeviceKind.mouse && _applicationHandlesTap;
+    if (details.kind != PointerDeviceKind.mouse && _shouldSendTapEvent) {
       handled = renderTerminal.mouseEvent(
         button,
         TerminalMouseButtonState.up,
@@ -181,6 +269,19 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     if (!handled || forceCallback) {
       callback?.call(details);
     }
+  }
+
+  bool _isMouseButtonReported(TerminalMouseButton button) {
+    final buttonMask = switch (button) {
+      TerminalMouseButton.left => kPrimaryMouseButton,
+      TerminalMouseButton.right => kSecondaryMouseButton,
+      TerminalMouseButton.middle => kMiddleMouseButton,
+      _ => 0,
+    };
+    if (buttonMask == 0) return false;
+    return _reportedMouseButtons.values.any(
+      (reportedButtons) => reportedButtons & buttonMask != 0,
+    );
   }
 
   TerminalMouseModifiers _currentModifiers() {
@@ -272,8 +373,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     _stopSelectionAutoScroll();
     _lastDragStartDetails = details;
     _lastDragPosition = details.localPosition;
-    _reportingPointerDrag = _applicationHandlesTap;
-    if (_reportingPointerDrag) return;
+    _applicationOwnsPointerDrag = _applicationHandlesTap;
+    if (_applicationOwnsPointerDrag) return;
 
     if (details.kind != PointerDeviceKind.mouse) {
       renderTerminal.selectWord(details.localPosition);
@@ -289,33 +390,17 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   void onDragUpdate(DragUpdateDetails details) {
     _lastDragPosition = details.localPosition;
-    if (_reportingPointerDrag) return;
+    if (_applicationOwnsPointerDrag) return;
     _updateDragSelection();
     _startSelectionAutoScroll(details.localPosition);
   }
 
   void onDragEnd(DragEndDetails details) {
-    _releaseReportedDrag();
     _finishDragSelection();
   }
 
   void onDragCancel() {
-    _releaseReportedDrag();
     _finishDragSelection();
-  }
-
-  void _releaseReportedDrag() {
-    if (!_reportingPointerDrag) return;
-    _reportingPointerDrag = false;
-    final position = _lastDragPosition;
-    if (position == null) return;
-
-    renderTerminal.mouseEvent(
-      TerminalMouseButton.left,
-      TerminalMouseButtonState.up,
-      position,
-      modifiers: _currentModifiers(),
-    );
   }
 
   void _updateDragSelection() {
@@ -350,6 +435,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   void _finishDragSelection() {
     _stopSelectionAutoScroll();
+    _applicationOwnsPointerDrag = false;
     _lastDragStartDetails = null;
     _lastDragPosition = null;
   }
