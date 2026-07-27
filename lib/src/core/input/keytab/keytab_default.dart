@@ -24,7 +24,14 @@ keyboard "Default (XFree 4)"
 
 # common keys
 
-key Escape             : "\E"
+key Escape -AnyMod             : "\E"
+key Escape +Shift-Alt-Control  : "\E[27;2;27~"
+key Escape -Shift+Alt-Control  : "\E\E"
+key Escape +Shift+Alt-Control  : "\E[27;4;27~"
+key Escape -Shift-Alt+Control  : "\E[27;5;27~"
+key Escape +Shift-Alt+Control  : "\E[27;6;27~"
+key Escape -Shift+Alt+Control  : "\E[27;7;27~"
+key Escape +Shift+Alt+Control  : "\E[27;8;27~"
 
 key Tab   -Shift       : "\t"
 key Tab   +Shift+Ansi  : "\E[Z"

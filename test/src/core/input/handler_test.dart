@@ -39,6 +39,34 @@ void main() {
       ]);
     });
 
+    test('encodes modified escape keys distinctly', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.keyInput(TerminalKey.escape, shift: true);
+      terminal.keyInput(TerminalKey.escape, alt: true);
+      terminal.keyInput(TerminalKey.escape, shift: true, alt: true);
+      terminal.keyInput(TerminalKey.escape, ctrl: true);
+      terminal.keyInput(TerminalKey.escape, shift: true, ctrl: true);
+      terminal.keyInput(TerminalKey.escape, alt: true, ctrl: true);
+      terminal.keyInput(
+        TerminalKey.escape,
+        shift: true,
+        alt: true,
+        ctrl: true,
+      );
+
+      expect(output, [
+        '\x1b[27;2;27~',
+        '\x1b\x1b',
+        '\x1b[27;4;27~',
+        '\x1b[27;5;27~',
+        '\x1b[27;6;27~',
+        '\x1b[27;7;27~',
+        '\x1b[27;8;27~',
+      ]);
+    });
+
     test('supports DEC application keypad with NumLock compatibility mode', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);
