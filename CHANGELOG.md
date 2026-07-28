@@ -15,6 +15,7 @@
 * Complete application mouse drags with release events without host selection.
 * Report mouse buttons immediately without gesture-recognizer delays.
 * Report back and forward mouse buttons through extended mouse protocols.
+* Ignore unsupported highlight tracking without disrupting active mouse input.
 * Respond to legacy DECID terminal identification requests.
 * Report the current xterm2 version to terminal applications.
 * Preserve complete semicolon-rich OSC titles, paths, and cursor names.

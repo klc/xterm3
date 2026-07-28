@@ -2954,7 +2954,7 @@ class Terminal
       66 => _reportedState(_appKeypadMode),
       67 => _reportedState(_backarrowKeyMode),
       69 => _reportedState(_leftRightMarginMode),
-      1000 || 1001 => _reportedState(_mouseMode == MouseMode.upDownScroll),
+      1000 => _reportedState(_mouseMode == MouseMode.upDownScroll),
       1002 => _reportedState(_mouseMode == MouseMode.upDownScrollDrag),
       1003 => _reportedState(_mouseMode == MouseMode.upDownScrollMove),
       1004 => _reportedState(_reportFocusMode),
@@ -3016,7 +3016,7 @@ class Terminal
       66 => _appKeypadMode,
       67 => _backarrowKeyMode,
       69 => _leftRightMarginMode,
-      1000 || 1001 => _mouseMode == MouseMode.upDownScroll,
+      1000 => _mouseMode == MouseMode.upDownScroll,
       1002 => _mouseMode == MouseMode.upDownScrollDrag,
       1003 => _mouseMode == MouseMode.upDownScrollMove,
       1004 => _reportFocusMode,
@@ -3080,7 +3080,6 @@ class Terminal
       case 69:
         return setLeftRightMarginMode(enabled);
       case 1000:
-      case 1001:
         return setMouseMode(switch (enabled) {
           true => MouseMode.upDownScroll,
           false => MouseMode.none,

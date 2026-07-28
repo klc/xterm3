@@ -1283,6 +1283,22 @@ void main() {
       expect(output, ['\x1B[M ++']);
     });
 
+    test('ignores unsupported highlight tracking mode', () {
+      final terminal = Terminal();
+
+      terminal.write('\x1b[?1001h');
+
+      expect(terminal.mouseMode, MouseMode.none);
+    });
+
+    test('highlight mode reset does not disable active mouse tracking', () {
+      final terminal = Terminal();
+
+      terminal.write('\x1b[?1000h\x1b[?1001l');
+
+      expect(terminal.mouseMode, MouseMode.upDownScroll);
+    });
+
     test('reports mouse modifiers', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);
@@ -2881,6 +2897,7 @@ void main() {
       '\x1b[?1006\x24p'
       '\x1b[?1006h'
       '\x1b[?1006\x24p'
+      '\x1b[?1001\x24p'
       '\x1b[?9999\x24p',
     );
 
@@ -2889,6 +2906,7 @@ void main() {
       '\x1b[?7;1\x24y',
       '\x1b[?1006;2\x24y',
       '\x1b[?1006;1\x24y',
+      '\x1b[?1001;0\x24y',
       '\x1b[?9999;0\x24y',
     ]);
   });

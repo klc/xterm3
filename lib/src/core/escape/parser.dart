@@ -2160,10 +2160,6 @@ class EscapeParser {
         return enabled
             ? handler.setMouseMode(MouseMode.upDownScroll)
             : handler.setMouseMode(MouseMode.none);
-      case 1001:
-        return enabled
-            ? handler.setMouseMode(MouseMode.upDownScroll)
-            : handler.setMouseMode(MouseMode.none);
       case 1002:
         return enabled
             ? handler.setMouseMode(MouseMode.upDownScrollDrag)
