@@ -1858,6 +1858,38 @@ void main() {
       expect(terminalOutput, ['é']);
     });
 
+    testWidgets('preserves AltGr-composed text on desktop platforms', (
+      tester,
+    ) async {
+      final terminalOutput = <String>[];
+      final terminal = Terminal(
+        onOutput: terminalOutput.add,
+        platform: TerminalTargetPlatform.windows,
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        home: TerminalView(terminal, autofocus: true),
+      ));
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump(const Duration(seconds: 1));
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.altRight,
+        physicalKey: PhysicalKeyboardKey.altRight,
+      );
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.keyQ,
+        character: '@',
+        physicalKey: PhysicalKeyboardKey.keyQ,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyQ);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altRight);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+
+      expect(terminalOutput, ['@']);
+    });
+
     testWidgets('does not fall back to printable symbols for shortcuts', (
       tester,
     ) async {

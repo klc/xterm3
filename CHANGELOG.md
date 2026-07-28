@@ -1,4 +1,4 @@
-## [5.3.0] - 2026-07-28
+## [Unreleased]
 
 * Render bounded search matches with a distinct active result.
 * Auto-scroll scrollback while extending a selection beyond the viewport.
@@ -21,6 +21,7 @@
 * Render the British national replacement character set.
 * Render text decorations consistently across blank cells.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
+* Preserve AltGr-composed text on Windows and Linux keyboards.
 * Encode modified Enter keys distinctly for modern interactive CLIs.
 * Preserve distinct Ctrl+Shift letter chords with fixterms encoding.
 * Add standard Ctrl+Insert copy and Shift+Insert paste shortcuts.

@@ -720,11 +720,12 @@ class TerminalViewState extends State<TerminalView> {
     final terminalKey = key ?? TerminalKey.none;
     final hardwareKeyboard = HardwareKeyboard.instance;
     final lockModes = hardwareKeyboard.lockModesEnabled;
+    final altGraphActive = _isAltGraphActive(event, hardwareKeyboard);
 
     final handled = widget.terminal.keyInput(
       terminalKey,
-      ctrl: hardwareKeyboard.isControlPressed,
-      alt: hardwareKeyboard.isAltPressed,
+      ctrl: hardwareKeyboard.isControlPressed && !altGraphActive,
+      alt: hardwareKeyboard.isAltPressed && !altGraphActive,
       shift: hardwareKeyboard.isShiftPressed,
       superKey: hardwareKeyboard.isMetaPressed,
       capsLock: lockModes.contains(KeyboardLockMode.capsLock),
@@ -742,7 +743,11 @@ class TerminalViewState extends State<TerminalView> {
     }
 
     if (text case final fallbackText?
-        when _shouldInsertTextFallback(fallbackText, eventType)) {
+        when _shouldInsertTextFallback(
+          fallbackText,
+          eventType,
+          altGraphActive: altGraphActive,
+        )) {
       widget.terminal.textInput(fallbackText);
       _scrollToBottom();
       return KeyEventResult.handled;
@@ -751,14 +756,18 @@ class TerminalViewState extends State<TerminalView> {
     return KeyEventResult.ignored;
   }
 
-  bool _shouldInsertTextFallback(String text, TerminalKeyEventType eventType) {
+  bool _shouldInsertTextFallback(
+    String text,
+    TerminalKeyEventType eventType, {
+    required bool altGraphActive,
+  }) {
     if (eventType == TerminalKeyEventType.release) {
       return false;
     }
-    if (HardwareKeyboard.instance.isControlPressed) {
+    if (!altGraphActive && HardwareKeyboard.instance.isControlPressed) {
       return false;
     }
-    if (HardwareKeyboard.instance.isAltPressed) {
+    if (!altGraphActive && HardwareKeyboard.instance.isAltPressed) {
       final terminal = widget.terminal;
       final altPrefixesEscape = switch (terminal.platform) {
         TerminalTargetPlatform.macos => terminal.altSendsEscapeMode,
@@ -770,6 +779,23 @@ class TerminalViewState extends State<TerminalView> {
       return false;
     }
     return true;
+  }
+
+  bool _isAltGraphActive(
+    KeyEvent event,
+    HardwareKeyboard hardwareKeyboard,
+  ) {
+    if (widget.terminal.platform == TerminalTargetPlatform.macos) return false;
+    if (hardwareKeyboard.isLogicalKeyPressed(LogicalKeyboardKey.altGraph)) {
+      return true;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.altGraph) return true;
+    if (!hardwareKeyboard.isControlPressed) return false;
+    if (hardwareKeyboard.isPhysicalKeyPressed(PhysicalKeyboardKey.altRight)) {
+      return true;
+    }
+    return event is KeyUpEvent &&
+        event.physicalKey == PhysicalKeyboardKey.altRight;
   }
 
   String? _printableTextForKeyEvent(KeyEvent event) {
