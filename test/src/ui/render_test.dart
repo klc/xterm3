@@ -388,6 +388,65 @@ void main() {
     setup.focusNode.dispose();
   });
 
+  test('IME composition text stays on the active row at the right edge', () {
+    const padding = EdgeInsets.fromLTRB(7, 11, 13, 17);
+    final setup = _createRenderTerminal(padding: padding);
+    final render = setup.render;
+    final viewportWidth = render.cellSize.width * 10;
+
+    render.layout(
+      BoxConstraints.tight(
+        Size(
+          viewportWidth + padding.horizontal,
+          render.cellSize.height * 5 + padding.vertical,
+        ),
+      ),
+    );
+
+    final rightEdge = padding.left + viewportWidth;
+    final cursorX = rightEdge - render.cellSize.width;
+    expect(
+      render.debugComposingTextStart(
+        cursorX,
+        render.cellSize.width * 2,
+      ),
+      closeTo(rightEdge - render.cellSize.width * 2, 0.001),
+    );
+
+    setup.focusNode.dispose();
+  });
+
+  test('IME composition text preserves interior and oversized positions', () {
+    const padding = EdgeInsets.fromLTRB(7, 11, 13, 17);
+    final setup = _createRenderTerminal(padding: padding);
+    final render = setup.render;
+    final viewportWidth = render.cellSize.width * 10;
+
+    render.layout(
+      BoxConstraints.tight(
+        Size(
+          viewportWidth + padding.horizontal,
+          render.cellSize.height * 5 + padding.vertical,
+        ),
+      ),
+    );
+
+    final interiorX = padding.left + render.cellSize.width * 3;
+    expect(
+      render.debugComposingTextStart(interiorX, render.cellSize.width),
+      interiorX,
+    );
+    expect(
+      render.debugComposingTextStart(
+        interiorX,
+        viewportWidth + render.cellSize.width,
+      ),
+      padding.left,
+    );
+
+    setup.focusNode.dispose();
+  });
+
   test('OSC background override honors configured background opacity', () {
     final setup = _createRenderTerminal(backgroundOpacity: 0.5);
     final render = setup.render;

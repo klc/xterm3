@@ -24,6 +24,7 @@
 * Ignore orphaned zero-width marks instead of altering existing cells.
 * Preserve combining marks after changing grapheme-cluster mode.
 * Let wide symbol glyphs use adjacent blank cells instead of clipping.
+* Keep IME composition text on the active row near the right edge.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
 * Preserve AltGr-composed text on Windows and Linux keyboards.
 * Encode modified Enter keys distinctly for modern interactive CLIs.

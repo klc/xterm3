@@ -867,7 +867,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     if (shouldPaintCursor) {
       if (_isComposingText) {
-        _paintComposingText(canvas, offset + cursorOffset);
+        _paintComposingText(canvas, offset, cursorOffset);
       }
 
       if (!shouldPaintBlockCursor || !_focusNode.hasFocus) {
@@ -907,6 +907,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _scrollOffset + _viewportHeight,
       _painter.cellSize.height,
     );
+  }
+
+  @visibleForTesting
+  double debugComposingTextStart(double cursorX, double textWidth) {
+    return _composingTextStart(cursorX, textWidth);
   }
 
   (int, int) _visibleLineRange(
@@ -975,9 +980,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     );
   }
 
-  /// Paints the text that is currently being composed in IME to [canvas] at
-  /// [offset]. [offset] is usually the cursor position.
-  void _paintComposingText(Canvas canvas, Offset offset) {
+  double _composingTextStart(double cursorX, double textWidth) {
+    final contentLeft = _padding.left;
+    final contentRight = max(size.width - _padding.right, contentLeft);
+    final latestStart = contentRight - max(textWidth, 0);
+    return max(contentLeft, min(cursorX, latestStart));
+  }
+
+  void _paintComposingText(
+    Canvas canvas,
+    Offset paintOffset,
+    Offset cursorOffset,
+  ) {
     final composingText = _composingText;
     if (composingText == null) {
       return;
@@ -996,20 +1010,22 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     );
 
     final builder = ParagraphBuilder(style.getParagraphStyle());
-    builder.addPlaceholder(
-      offset.dx,
-      _painter.cellSize.height,
-      PlaceholderAlignment.middle,
-    );
     builder.pushStyle(
       style.getTextStyle(textScaler: _painter.textScaler),
     );
     builder.addText(composingText);
 
     final paragraph = builder.build();
-    paragraph.layout(ParagraphConstraints(width: size.width));
+    paragraph.layout(const ParagraphConstraints(width: double.infinity));
 
-    canvas.drawParagraph(paragraph, Offset(0, offset.dy));
+    final textStart = _composingTextStart(
+      cursorOffset.dx,
+      paragraph.maxIntrinsicWidth,
+    );
+    canvas.drawParagraph(
+      paragraph,
+      paintOffset + Offset(textStart, cursorOffset.dy),
+    );
     paragraph.dispose();
   }
 
@@ -1202,8 +1218,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         blinkVisible: _textBlinkVisible,
         activeHyperlinkId: _activeHyperlinkId,
         cursorColumn: switch (
-            cursorColumn != null &&
-                line == _terminal.buffer.absoluteCursorY) {
+            cursorColumn != null && line == _terminal.buffer.absoluteCursorY) {
           true => cursorColumn,
           false => null,
         },
