@@ -758,6 +758,17 @@ void main() {
     expect(terminal.buffer.cursorX, 0);
   });
 
+  test('Terminal ignores zero-width marks at the first column', () {
+    final terminal = Terminal();
+
+    terminal.write('x\r\x1b[?2027l\u0332');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x78);
+    expect(line.getCombiningCharacters(0), isNull);
+    expect(terminal.buffer.cursorX, 0);
+  });
+
   test('Terminal attaches zero-width marks to pending wrap cells', () {
     final terminal = Terminal()..resize(2, 2);
 

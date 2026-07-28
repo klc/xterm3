@@ -236,10 +236,9 @@ class Buffer {
   }
 
   void _addCombiningCharacter(int codePoint) {
-    var index = 0;
-    if (_cursorX >= 1) {
-      index = min(_cursorX - 1, viewWidth - 1);
-    }
+    if (_cursorX == 0) return;
+
+    var index = min(_cursorX - 1, viewWidth - 1);
     if (index > 0 && currentLine.getWidth(index) == 0) {
       index--;
     }
