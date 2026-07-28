@@ -1492,9 +1492,9 @@ void main() {
       onCurrentDirectoryChange: (uri) => currentDirectory = uri,
     );
 
-    terminal.write('\x1b]7;file://localhost/tmp/my%20project\x1b\\');
+    terminal.write('\x1b]7;file://localhost/tmp/my%20project;draft\x1b\\');
 
-    expect(currentDirectory, 'file://localhost/tmp/my%20project');
+    expect(currentDirectory, 'file://localhost/tmp/my%20project;draft');
   });
 
   test('Terminal reports iTerm2 OSC 1337 current directory', () {
@@ -1850,9 +1850,9 @@ void main() {
     final terminal = Terminal(onMouseShapeChange: shapes.add);
 
     terminal.write('\x1b]22;pointer\x1b\\');
-    terminal.write('\x1b]22;text\x1b\\');
+    terminal.write('\x1b]22;text;custom\x1b\\');
 
-    expect(shapes, ['pointer', 'text']);
+    expect(shapes, ['pointer', 'text;custom']);
   });
 
   test('Terminal reports OSC 9;4 progress updates', () {
@@ -2152,11 +2152,11 @@ void main() {
     );
 
     terminal.write('\x1b]2;first\x1b\\\x1b[21t');
-    terminal.write('\x1b]2;second\x1b\\\x1b[23t');
+    terminal.write('\x1b]2;second;draft\x1b\\\x1b[23t');
     terminal.write('\x1b[21t');
 
-    expect(titles, ['first', 'second']);
-    expect(output, ['\x1b]lfirst\x1b\\', '\x1b]lsecond\x1b\\']);
+    expect(titles, ['first', 'second;draft']);
+    expect(output, ['\x1b]lfirst\x1b\\', '\x1b]lsecond;draft\x1b\\']);
   });
 
   test('Terminal applies and resets OSC color overrides', () {

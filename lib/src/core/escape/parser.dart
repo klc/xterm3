@@ -2260,17 +2260,18 @@ class EscapeParser {
 
       switch (ps) {
         case '0':
-          handler.setTitle(pt);
-          handler.setIconName(pt);
+          final value = _osc.sublist(1).join(';');
+          handler.setTitle(value);
+          handler.setIconName(value);
           return true;
         case '1':
-          handler.setIconName(pt);
+          handler.setIconName(_osc.sublist(1).join(';'));
           return true;
         case '2':
-          handler.setTitle(pt);
+          handler.setTitle(_osc.sublist(1).join(';'));
           return true;
         case '7':
-          handler.setCurrentDirectory(pt);
+          handler.setCurrentDirectory(_osc.sublist(1).join(';'));
           return true;
         case '9':
           if (pt == '4' && _handleConEmuProgress()) {
@@ -2334,7 +2335,7 @@ class EscapeParser {
           _handleKittyColorProtocol();
           return true;
         case '22':
-          handler.setMouseShape(pt);
+          handler.setMouseShape(_osc.sublist(1).join(';'));
           return true;
         case '52':
           if (_osc.length < 3) return true;
