@@ -2159,6 +2159,16 @@ void main() {
     expect(output, ['\x1b]lfirst\x1b\\', '\x1b]lsecond;draft\x1b\\']);
   });
 
+  test('Terminal preserves semicolon-rich OSC text payloads', () {
+    final titles = <String>[];
+    final terminal = Terminal(onTitleChange: titles.add);
+    final title = List.generate(300, (index) => 'section-$index').join(';');
+
+    terminal.write('\x1b]2;$title\x1b\\');
+
+    expect(titles, [title]);
+  });
+
   test('Terminal applies and resets OSC color overrides', () {
     final terminal = Terminal();
 

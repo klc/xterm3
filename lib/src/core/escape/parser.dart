@@ -2849,8 +2849,10 @@ class EscapeParser {
       if (char == Ascii.semicolon) {
         if (_osc.length < _maxOscParams - 1) {
           _osc.add(param.toString());
+          param.clear();
+          continue;
         }
-        param.clear();
+        param.writeCharCode(char);
         continue;
       }
 
