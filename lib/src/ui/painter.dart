@@ -15,6 +15,30 @@ const _specialReverseColor = 3;
 const _specialItalicColor = 4;
 const _defaultParagraphCacheSize = 2048;
 
+bool _isSymbolLike(int codePoint) {
+  return switch (codePoint) {
+    >= 0x2190 && <= 0x21FF => true,
+    >= 0x2460 && <= 0x24FF => true,
+    >= 0x2600 && <= 0x27BF => true,
+    >= 0xE000 && <= 0xF8FF => true,
+    >= 0x1F100 && <= 0x1F1FF => true,
+    >= 0x1F300 && <= 0x1F6FF => true,
+    >= 0xF0000 && <= 0xFFFFD => true,
+    >= 0x100000 && <= 0x10FFFD => true,
+    _ => false,
+  };
+}
+
+bool _isGraphicsElement(int codePoint) {
+  return switch (codePoint) {
+    >= 0x2500 && <= 0x259F => true,
+    >= 0xE0B0 && <= 0xE0D7 => true,
+    >= 0x1FB00 && <= 0x1FBFF => true,
+    >= 0x1CC00 && <= 0x1CEBF => true,
+    _ => false,
+  };
+}
+
 /// Encapsulates the logic for painting various terminal elements.
 class TerminalPainter {
   TerminalPainter({
@@ -121,6 +145,24 @@ class TerminalPainter {
   Size get cellSize => _cellSize;
 
   int get paragraphCacheLength => _paragraphCache.length;
+
+  int glyphConstraintCellSpan(BufferLine line, int column) {
+    final gridWidth = line.getWidth(column);
+    if (gridWidth > 1) return gridWidth;
+
+    final codePoint = line.getCodePoint(column);
+    if (!_isSymbolLike(codePoint)) return 1;
+    if (column + 1 >= line.length) return 1;
+
+    if (column > 0) {
+      final previous = line.getCodePoint(column - 1);
+      if (_isSymbolLike(previous) && !_isGraphicsElement(previous)) return 1;
+    }
+
+    final next = line.getCodePoint(column + 1);
+    if (next == 0 || next == 0x20 || next == 0x2002) return 2;
+    return 1;
+  }
 
   Color get foregroundColor => _foregroundColorOverride ?? _theme.foreground;
 
@@ -401,6 +443,7 @@ class TerminalPainter {
           true => line.getCombiningCharacters(i),
           false => null,
         },
+        glyphCellSpan: glyphConstraintCellSpan(line, i),
         blinkVisible: blinkVisible,
         activeHyperlinkId: activeHyperlinkId,
         foregroundOverride: switch (i == cursorColumn) {
@@ -431,6 +474,7 @@ class TerminalPainter {
     Offset offset,
     CellData cellData, {
     String? combiningCharacters,
+    int? glyphCellSpan,
     bool blinkVisible = true,
     int? activeHyperlinkId,
     Color? foregroundOverride,
@@ -469,6 +513,8 @@ class TerminalPainter {
       _ => 1,
     };
     final allocatedWidth = _cellSize.width * cellSpan;
+    final glyphClipWidth =
+        _cellSize.width * max(cellSpan, glyphCellSpan ?? cellSpan);
     final decorationColor = switch (cellData.underlineColor) {
       0 => _underlineDecorationColor(cellFlags, color),
       _ => resolveForegroundColor(cellData.underlineColor),
@@ -559,7 +605,7 @@ class TerminalPainter {
       );
     }
 
-    if (paragraph.maxIntrinsicWidth <= allocatedWidth &&
+    if (paragraph.maxIntrinsicWidth <= glyphClipWidth &&
         paragraph.height <= _cellSize.height) {
       canvas.drawParagraph(paragraph, offset);
       _paintFrameDecoration(
@@ -576,7 +622,7 @@ class TerminalPainter {
       Rect.fromLTWH(
         offset.dx,
         offset.dy,
-        allocatedWidth,
+        glyphClipWidth,
         _cellSize.height,
       ),
     );

@@ -22,6 +22,7 @@
 * Render the British national replacement character set.
 * Render text decorations consistently across blank cells.
 * Ignore orphaned zero-width marks instead of altering existing cells.
+* Let wide symbol glyphs use adjacent blank cells instead of clipping.
 * Preserve Ctrl+A and Ctrl+V input with standard terminal clipboard shortcuts.
 * Preserve AltGr-composed text on Windows and Linux keyboards.
 * Encode modified Enter keys distinctly for modern interactive CLIs.

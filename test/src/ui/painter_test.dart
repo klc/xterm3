@@ -716,6 +716,84 @@ void main() {
     );
   });
 
+  test('symbol glyphs can extend into an adjacent blank cell', () {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(),
+      textScaler: TextScaler.noScaling,
+    );
+
+    final trailingBlank = Terminal()
+      ..resize(2, 1)
+      ..write('\uE000 ');
+    expect(
+      painter.glyphConstraintCellSpan(trailingBlank.buffer.lines[0], 0),
+      2,
+    );
+
+    final trailingEnSpace = Terminal()
+      ..resize(2, 1)
+      ..write('\uE000\u2002');
+    expect(
+      painter.glyphConstraintCellSpan(trailingEnSpace.buffer.lines[0], 0),
+      2,
+    );
+
+    final trailingText = Terminal()
+      ..resize(2, 1)
+      ..write('\uE000X');
+    expect(
+      painter.glyphConstraintCellSpan(trailingText.buffer.lines[0], 0),
+      1,
+    );
+
+    final finalColumn = Terminal()
+      ..resize(2, 1)
+      ..write('X\uE000');
+    expect(
+      painter.glyphConstraintCellSpan(finalColumn.buffer.lines[0], 1),
+      1,
+    );
+
+    final adjacentSymbols = Terminal()
+      ..resize(3, 1)
+      ..write('\uE000\uE001 ');
+    expect(
+      painter.glyphConstraintCellSpan(adjacentSymbols.buffer.lines[0], 0),
+      1,
+    );
+    expect(
+      painter.glyphConstraintCellSpan(adjacentSymbols.buffer.lines[0], 1),
+      1,
+    );
+
+    final afterPowerline = Terminal()
+      ..resize(3, 1)
+      ..write('\uE0B0\uE000 ');
+    expect(
+      painter.glyphConstraintCellSpan(afterPowerline.buffer.lines[0], 1),
+      2,
+    );
+
+    final ordinaryText = Terminal()
+      ..resize(2, 1)
+      ..write('A ');
+    expect(
+      painter.glyphConstraintCellSpan(ordinaryText.buffer.lines[0], 0),
+      1,
+    );
+
+    final wideGlyph = Terminal()
+      ..resize(2, 1)
+      ..write('😀');
+    expect(
+      painter.glyphConstraintCellSpan(wideGlyph.buffer.lines[0], 0),
+      2,
+    );
+
+    painter.dispose();
+  });
+
   test('TerminalStyle compares values deeply', () {
     const style = TerminalStyle(
       fontSize: 14,
