@@ -1,4 +1,4 @@
-## [Unreleased]
+## [5.3.0] - 2026-07-28
 
 * Render bounded search matches with a distinct active result.
 * Auto-scroll scrollback while extending a selection beyond the viewport.
