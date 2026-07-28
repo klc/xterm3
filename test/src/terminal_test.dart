@@ -747,6 +747,45 @@ void main() {
     expect(terminal.buffer.cursorX, 4);
   });
 
+  test('Terminal handles stored grapheme breaks when mode 2027 is enabled', () {
+    final terminal = Terminal()..resize(5, 1);
+
+    terminal.write('\x1b[?2027la\u200b\x1b[?2027h\u0301x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x61);
+    expect(line.getCombiningCharacters(0), '\u200b\u0301');
+    expect(line.getCodePoint(1), 0x78);
+    expect(terminal.buffer.cursorX, 2);
+  });
+
+  test('Terminal keeps text separate after stored grapheme breaks', () {
+    final terminal = Terminal()..resize(5, 1);
+
+    terminal.write('\x1b[?2027la\u200b\x1b[?2027hbx');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x61);
+    expect(line.getCombiningCharacters(0), '\u200b');
+    expect(line.getCodePoint(1), 0x62);
+    expect(line.getCodePoint(2), 0x78);
+    expect(terminal.buffer.cursorX, 3);
+  });
+
+  test('Terminal widens spacing marks after stored grapheme breaks', () {
+    final terminal = Terminal()..resize(5, 1);
+
+    terminal.write('\x1b[?2027la\u200b\x1b[?2027h\u0903x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x61);
+    expect(line.getCombiningCharacters(0), '\u200b\u0903');
+    expect(line.getWidth(0), 2);
+    expect(line.getWidth(1), 0);
+    expect(line.getCodePoint(2), 0x78);
+    expect(terminal.buffer.cursorX, 3);
+  });
+
   test('Terminal ignores zero-width marks without a base cell', () {
     final terminal = Terminal();
 

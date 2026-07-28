@@ -355,8 +355,14 @@ class Buffer {
     }
 
     final previous = String.fromCharCode(base) + (combining ?? '');
-    final candidate = previous + String.fromCharCode(codePoint);
-    return candidate.characters.length == 1;
+    final storedGraphemes = previous.characters;
+    final character = String.fromCharCode(codePoint);
+    final candidate = storedGraphemes.last + character;
+    if (candidate.characters.length == 1) return true;
+    if (storedGraphemes.length == 1) return false;
+
+    final extensionCandidate = 'a$character';
+    return extensionCandidate.characters.length == 1;
   }
 
   int _joinedPreviousGraphemeWidth(int codePoint, int cellWidth) {
