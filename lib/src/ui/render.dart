@@ -314,15 +314,36 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       const Duration(milliseconds: 750),
       (_) {
         _cursorBlinkVisible = !_cursorBlinkVisible;
-        markNeedsPaint();
+        if (_isCursorRowVisible) markNeedsPaint();
       },
     );
     _cursorBlinkTimeout = Timer(const Duration(seconds: 5), () {
       _cursorBlinkTimer?.cancel();
       _cursorBlinkTimer = null;
+      final wasHidden = !_cursorBlinkVisible;
       _cursorBlinkVisible = true;
-      markNeedsPaint();
+      if (wasHidden && _isCursorRowVisible) markNeedsPaint();
     });
+  }
+
+  /// Whether a change of [_cursorBlinkVisible] can affect what is on screen.
+  ///
+  /// Toggling the blink phase repaints the whole viewport, so it is only worth
+  /// doing when the phase is actually observable: the cursor must be drawn at
+  /// all, must not be pinned visible, and its row must be scrolled into view.
+  bool get _isCursorRowVisible {
+    if (!hasSize) return false;
+    if (_alwaysShowCursor || _isComposingText) return false;
+    if (!_terminal.cursorVisibleMode) return false;
+
+    final cursorRow = _terminal.buffer.absoluteCursorY;
+    final (firstLine, lastLine) = _visibleLineRange(
+      _terminal.buffer.lines.length,
+      _scrollOffset,
+      _scrollOffset + _viewportHeight,
+      _painter.cellSize.height,
+    );
+    return cursorRow >= firstLine && cursorRow <= lastLine;
   }
 
   void _stopCursorBlinking() {
@@ -902,6 +923,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _terminal.selectionForegroundColorOverride,
     );
     _painter.reverseDisplay = _terminal.reverseDisplayMode;
+  }
+
+  @visibleForTesting
+  bool debugCursorBlinkNeedsPaint() {
+    return _isCursorRowVisible;
   }
 
   @visibleForTesting
