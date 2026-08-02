@@ -1181,7 +1181,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     required Color cursorForeground,
   }) {
     final clipPath = Path();
-    var hasVisibleHighlights = false;
+    final highlightedLines = <int>{};
     for (final highlight in _controller.searchHighlights) {
       final range = _visibleSearchHighlightRange(
         highlight,
@@ -1205,14 +1205,14 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
             _painter.cellSize.height,
           ),
         );
-        hasVisibleHighlights = true;
+        highlightedLines.add(segment.line);
       }
     }
-    if (!hasVisibleHighlights) return;
+    if (highlightedLines.isEmpty) return;
 
     canvas.save();
     canvas.clipPath(clipPath);
-    for (var line = firstLine; line <= lastLine; line++) {
+    for (final line in highlightedLines) {
       _painter.paintLineForegrounds(
         canvas,
         offset.translate(
