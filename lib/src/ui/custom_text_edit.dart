@@ -61,6 +61,11 @@ class CustomTextEdit extends StatefulWidget {
 class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   TextInputConnection? _connection;
 
+  /// Text synchronously written when an IME action arrived with an active
+  /// composing range. Android may subsequently send the same text as a
+  /// collapsed editing value; it must not reach the terminal twice.
+  String? _actionCommittedText;
+
   @override
   void initState() {
     widget.focusNode.addListener(_onFocusChange);
@@ -229,27 +234,79 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     widget.onComposing(null);
 
+    final textDelta = _textDelta(_currentEditingState);
+    final actionCommittedText = _actionCommittedText;
+
+    if (actionCommittedText != null) {
+      if (textDelta == actionCommittedText) {
+        _actionCommittedText = null;
+        _resetEditingState();
+        return;
+      }
+
+      // Preserve input that arrives together with a delayed action commit.
+      // This is uncommon, but it prevents losing a character if an IME batches
+      // the next edit with its final composition commit.
+      if (textDelta.startsWith(actionCommittedText)) {
+        _actionCommittedText = null;
+        final remainingText = textDelta.substring(actionCommittedText.length);
+        if (remainingText.isNotEmpty) {
+          widget.onInsert(remainingText);
+        }
+        _resetEditingState();
+        return;
+      }
+
+      _actionCommittedText = null;
+    }
+
     if (_currentEditingState.text.length < _initEditingState.text.length) {
       widget.onDelete();
     } else {
-      final textDelta = _currentEditingState.text.substring(
-        _initEditingState.text.length,
-      );
-
       widget.onInsert(textDelta);
     }
 
     // Reset editing state if composing is done
     if (_currentEditingState.composing.isCollapsed &&
         _currentEditingState.text != _initEditingState.text) {
-      _connection!.setEditingState(_initEditingState);
+      _resetEditingState();
     }
   }
 
   @override
   void performAction(TextInputAction action) {
-    // print('performAction $action');
+    _commitComposingTextForAction();
     widget.onAction(action);
+  }
+
+  String _textDelta(TextEditingValue value) {
+    final initialTextLength = _initEditingState.text.length;
+    if (value.text.length < initialTextLength) {
+      return '';
+    }
+
+    return value.text.substring(initialTextLength);
+  }
+
+  void _commitComposingTextForAction() {
+    if (_currentEditingState.composing.isCollapsed) {
+      return;
+    }
+
+    final textDelta = _textDelta(_currentEditingState);
+    widget.onComposing(null);
+
+    if (textDelta.isNotEmpty) {
+      widget.onInsert(textDelta);
+      _actionCommittedText = textDelta;
+    }
+
+    _resetEditingState();
+  }
+
+  void _resetEditingState() {
+    _currentEditingState = _initEditingState;
+    _connection?.setEditingState(_initEditingState);
   }
 
   @override
