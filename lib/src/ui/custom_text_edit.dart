@@ -128,6 +128,12 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     _connection?.setEditingState(value);
   }
 
+  /// Drops any in-flight composition and restores the initial editing state.
+  void resetEditingState() {
+    widget.onComposing(null);
+    _resetEditingState();
+  }
+
   void setEditableRect(Rect rect, Rect caretRect) {
     if (!hasInputConnection) {
       return;
