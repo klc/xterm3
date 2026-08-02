@@ -8,6 +8,43 @@ import 'package:xterm2/src/ui/painter.dart';
 import 'package:xterm2/xterm.dart';
 
 void main() {
+  test('cell size covers a whole number of device pixels', () {
+    for (final ratio in [1.0, 1.5, 2.0, 3.0]) {
+      final painter = TerminalPainter(
+        theme: TerminalThemes.whiteOnBlack,
+        textStyle: const TerminalStyle(fontSize: 14.3),
+        textScaler: TextScaler.noScaling,
+        devicePixelRatio: ratio,
+      );
+
+      final cellSize = painter.cellSize;
+      expect(cellSize.width * ratio,
+          closeTo((cellSize.width * ratio).roundToDouble(), 1e-9),
+          reason: 'width at ratio $ratio');
+      expect(cellSize.height * ratio,
+          closeTo((cellSize.height * ratio).roundToDouble(), 1e-9),
+          reason: 'height at ratio $ratio');
+      painter.dispose();
+    }
+  });
+
+  test('changing the device pixel ratio re-snaps the cell size', () {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(fontSize: 14.3),
+      textScaler: TextScaler.noScaling,
+      devicePixelRatio: 1,
+    );
+
+    final atOne = painter.cellSize;
+    painter.devicePixelRatio = 2;
+    final atTwo = painter.cellSize;
+
+    expect(atTwo, isNot(atOne));
+    expect(atTwo.width * 2, closeTo((atTwo.width * 2).roundToDouble(), 1e-9));
+    painter.dispose();
+  });
+
   test('reverse display swaps normal cell backgrounds', () {
     final painter = TerminalPainter(
       theme: TerminalThemes.whiteOnBlack,

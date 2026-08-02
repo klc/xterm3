@@ -26,6 +26,12 @@ const _maxLigatureRunLength = 8;
 /// Tolerance, in logical pixels, when checking a shaped run against the width
 /// of the cells it covers. Shaping is exact for the fonts this path targets;
 /// the epsilon only absorbs accumulated floating point error.
+///
+/// Cell width is snapped to the device pixel grid, so it can sit up to half a
+/// device pixel away from the font's natural advance. A run is drawn as one
+/// paragraph at the font's own advances, so that difference accumulates across
+/// the run: keeping the tolerance tight means a long run whose glyphs would
+/// drift off the cell grid is rejected here and painted cell by cell instead.
 const _ligatureAdvanceEpsilon = 0.5;
 
 /// Whether [codePoint] may take part in a ligature.
@@ -36,25 +42,25 @@ const _ligatureAdvanceEpsilon = 0.5;
 bool _isLigatureCandidate(int codePoint) {
   return switch (codePoint) {
     0x21 || // !
-          0x23 || // #
-          0x26 || // &
-          0x2a || // *
-          0x2b || // +
-          0x2d || // -
-          0x2e || // .
-          0x2f || // /
-          0x3a || // :
-          0x3b || // ;
-          0x3c || // <
-          0x3d || // =
-          0x3e || // >
-          0x3f || // ?
-          0x5c || // \
-          0x5e || // ^
-          0x5f || // _
-          0x7c || // |
-          0x7e // ~
-        =>
+    0x23 || // #
+    0x26 || // &
+    0x2a || // *
+    0x2b || // +
+    0x2d || // -
+    0x2e || // .
+    0x2f || // /
+    0x3a || // :
+    0x3b || // ;
+    0x3c || // <
+    0x3d || // =
+    0x3e || // >
+    0x3f || // ?
+    0x5c || // \
+    0x5e || // ^
+    0x5f || // _
+    0x7c || // |
+    0x7e // ~
+      =>
       true,
     _ => false,
   };
@@ -90,10 +96,12 @@ class TerminalPainter {
     required TerminalTheme theme,
     required TerminalStyle textStyle,
     required TextScaler textScaler,
+    double devicePixelRatio = 1.0,
     int paragraphCacheSize = _defaultParagraphCacheSize,
   })  : _textStyle = textStyle,
         _theme = theme,
         _textScaler = textScaler,
+        _devicePixelRatio = devicePixelRatio,
         _paragraphCache = ParagraphCache(paragraphCacheSize);
 
   /// A lookup table from terminal colors to Flutter colors.
@@ -108,11 +116,17 @@ class TerminalPainter {
   final ParagraphCache _paragraphCache;
 
   /// Reused during cell painting to avoid allocating objects per visible cell.
+  ///
+  /// Cell rectangles are snapped to the device pixel grid through [_cellSize],
+  /// so antialiasing on those fills would only produce half covered pixels at
+  /// cell boundaries. Procedural glyphs are already drawn without it; keeping
+  /// backgrounds, highlights and the cursor aliased as well makes both sides of
+  /// every cell boundary land on the same pixel.
   final _foregroundPaint = Paint();
-  final _backgroundPaint = Paint();
+  final _backgroundPaint = Paint()..isAntiAlias = false;
   final _decorationPaint = Paint();
-  final _highlightPaint = Paint();
-  final _cursorPaint = Paint();
+  final _highlightPaint = Paint()..isAntiAlias = false;
+  final _cursorPaint = Paint()..isAntiAlias = false;
 
   /// Scratch cell shared by [paintLineBackgrounds] and [paintLineForegrounds].
   /// Both fully overwrite every field through [BufferLine.getCellData] before
@@ -170,6 +184,26 @@ class TerminalPainter {
     _clearParagraphCache();
   }
 
+  /// Ratio between logical pixels and physical device pixels. Used to snap
+  /// [cellSize] onto the device pixel grid so that every cell occupies the
+  /// exact same number of physical pixels.
+  double get devicePixelRatio => _devicePixelRatio;
+  double _devicePixelRatio;
+  set devicePixelRatio(double value) {
+    if (value == _devicePixelRatio) return;
+    _devicePixelRatio = value;
+    _cellSize = _measureCharSize();
+    _paragraphCache.clear();
+  }
+
+  /// Rounds [value] to a whole number of device pixels, expressed back in
+  /// logical pixels. Never returns less than a single device pixel.
+  double snapToDevicePixels(double value) {
+    final ratio = _devicePixelRatio;
+    if (!ratio.isFinite || ratio <= 0) return value;
+    return max(1.0, (value * ratio).roundToDouble()) / ratio;
+  }
+
   TerminalTheme get theme => _theme;
   TerminalTheme _theme;
   set theme(TerminalTheme value) {
@@ -215,7 +249,13 @@ class TerminalPainter {
       paragraph.dispose();
     }
 
-    return Size(width, height);
+    // Measured advances are almost never a whole number of device pixels. Left
+    // unsnapped, `column * cellWidth` lands on a different subpixel phase in
+    // every column: aliased fills (procedural block glyphs) then round each
+    // column differently and neighbouring blocks end up one device pixel apart,
+    // while glyphs get rasterized at a different phase per cell. Snapping the
+    // metrics makes every cell cover an identical pixel run.
+    return Size(snapToDevicePixels(width), snapToDevicePixels(height));
   }
 
   /// The size of each character in the terminal.

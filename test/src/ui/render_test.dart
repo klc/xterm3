@@ -623,6 +623,7 @@ void main() {
     backgroundOpacity: backgroundOpacity,
     textStyle: const TerminalStyle(fontSize: 20, height: 1),
     textScaler: TextScaler.noScaling,
+    devicePixelRatio: 1,
     theme: TerminalThemes.whiteOnBlack,
     focusNode: focusNode,
     cursorType: TerminalCursorType.block,
