@@ -65,6 +65,13 @@ class TerminalPainter {
   /// Reused during cell painting to avoid allocating objects per visible cell.
   final _foregroundPaint = Paint();
   final _backgroundPaint = Paint();
+  final _decorationPaint = Paint();
+  final _highlightPaint = Paint();
+  final _cursorPaint = Paint();
+
+  /// Scratch cell used by the line painting loops. Cell data is copied into it
+  /// once per cell and consumed immediately, so a single instance is enough.
+  final _scratchCellData = CellData.empty();
 
   final Map<int, Color> _indexedColorOverrides = {};
   final Map<int, Color> _specialColorOverrides = {};
@@ -253,9 +260,10 @@ class TerminalPainter {
     Color? color,
   }) {
     final cursorSize = Size(_cellSize.width * cellWidth, _cellSize.height);
-    final paint = Paint()
+    final paint = _cursorPaint
       ..color = color ?? cursorColor
-      ..strokeWidth = 1;
+      ..strokeWidth = 1
+      ..style = PaintingStyle.fill;
 
     if (!hasFocus) {
       paint.style = PaintingStyle.stroke;
@@ -293,9 +301,10 @@ class TerminalPainter {
     final endOffset =
         offset.translate(length * _cellSize.width, _cellSize.height);
 
-    final paint = Paint()
+    final paint = _highlightPaint
       ..color = color
-      ..strokeWidth = 1;
+      ..strokeWidth = 1
+      ..style = PaintingStyle.fill;
 
     canvas.drawRect(
       Rect.fromPoints(offset, endOffset),
@@ -327,7 +336,7 @@ class TerminalPainter {
     Offset offset,
     BufferLine line,
   ) {
-    final cellData = CellData.empty();
+    final cellData = _scratchCellData;
 
     var backgroundRunStart = 0;
     var backgroundRunEnd = 0;
@@ -415,7 +424,7 @@ class TerminalPainter {
     Color? foregroundOverride,
     bool ensureSelectionContrast = false,
   }) {
-    final cellData = CellData.empty();
+    final cellData = _scratchCellData;
     final cellWidth = _cellSize.width;
     final hasCombiningCharacters = line.hasCombiningCharacters;
     var hasBlinkingText = false;
@@ -722,7 +731,7 @@ class TerminalPainter {
   }) {
     if (cellFlags & CellAttr.frameMask == 0) return;
 
-    final paint = Paint()
+    final paint = _decorationPaint
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
@@ -783,9 +792,10 @@ class TerminalPainter {
       return;
     }
 
-    final paint = Paint()
+    final paint = _decorationPaint
       ..color = color
-      ..strokeWidth = 1;
+      ..strokeWidth = 1
+      ..style = PaintingStyle.fill;
     canvas.drawLine(
       offset.translate(0, _cellSize.height - 1),
       offset.translate(allocatedWidth, _cellSize.height - 1),
@@ -799,9 +809,10 @@ class TerminalPainter {
     Color color,
     double allocatedWidth,
   ) {
-    final paint = Paint()
+    final paint = _decorationPaint
       ..color = color
-      ..strokeWidth = 1;
+      ..strokeWidth = 1
+      ..style = PaintingStyle.fill;
     canvas.drawLine(
       offset.translate(0, _cellSize.height - 3),
       offset.translate(allocatedWidth, _cellSize.height - 3),
@@ -844,7 +855,7 @@ class TerminalPainter {
       waveUp = !waveUp;
     }
 
-    final paint = Paint()
+    final paint = _decorationPaint
       ..color = color
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
@@ -860,7 +871,7 @@ class TerminalPainter {
     final y = offset.dy + _cellSize.height - 1;
     final radius = (_cellSize.height / 18).clamp(0.75, 1.25).toDouble();
     final step = (radius * 4).clamp(3.0, 5.0).toDouble();
-    final paint = Paint()
+    final paint = _decorationPaint
       ..color = color
       ..style = PaintingStyle.fill;
 
@@ -880,9 +891,10 @@ class TerminalPainter {
     final y = offset.dy + _cellSize.height - 1;
     final dashWidth = (_cellSize.width / 3).clamp(3.0, 6.0).toDouble();
     final gapWidth = (dashWidth / 2).clamp(1.0, 3.0).toDouble();
-    final paint = Paint()
+    final paint = _decorationPaint
       ..color = color
-      ..strokeWidth = 1;
+      ..strokeWidth = 1
+      ..style = PaintingStyle.fill;
 
     var x = offset.dx;
     while (x < offset.dx + allocatedWidth) {

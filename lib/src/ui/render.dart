@@ -176,6 +176,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   final TerminalPainter _painter;
 
+  /// Reused by the per-frame fills and by [_paintUnderline], which runs once
+  /// per visible underline segment.
+  final _fillPaint = Paint();
+  final _underlinePaint = Paint();
+
   var _stickToBottom = true;
 
   Timer? _cursorBlinkTimer;
@@ -693,13 +698,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     final backgroundOverride = _painter.backgroundColorOverride;
     if (backgroundOverride != null) {
-      final paint = Paint()
+      final paint = _fillPaint
         ..color = backgroundOverride.withValues(alpha: _backgroundOpacity);
       canvas.drawRect(offset & size, paint);
     }
 
     if (_terminal.reverseDisplayMode) {
-      final paint = Paint()
+      final paint = _fillPaint
         ..color =
             _painter.foregroundColor.withValues(alpha: _backgroundOpacity);
       canvas.drawRect(offset & size, paint);
@@ -740,7 +745,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (_terminal.cursorLineHighlightMode &&
         _terminal.buffer.absoluteCursorY >= effectFirstLine &&
         _terminal.buffer.absoluteCursorY <= effectLastLine) {
-      final paint = Paint()..color = _painter.cursorLineHighlightColor;
+      final paint = _fillPaint..color = _painter.cursorLineHighlightColor;
       canvas.drawRect(
         Rect.fromLTWH(
           offset.dx + _padding.left,
@@ -1291,7 +1296,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final end = segment.end ?? _terminal.viewWidth;
     final startOffset = getSegmentOffset(segment, offset);
     final y = startOffset.dy + _painter.cellSize.height - 1;
-    final paint = Paint()
+    final paint = _underlinePaint
       ..color = color
       ..strokeWidth = 1;
     canvas.drawLine(
