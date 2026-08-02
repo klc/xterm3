@@ -7,6 +7,54 @@ import 'package:xterm2/xterm.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  test('cursor blink skips repaint while its row is scrolled out of view', () {
+    final offset = _TestViewportOffset();
+    final setup = _createRenderTerminal(offset: offset);
+    final render = setup.render;
+    final owner = PipelineOwner();
+
+    render.attach(owner);
+    render.layout(BoxConstraints.tight(Size(
+      render.cellSize.width * 10,
+      render.cellSize.height * 5,
+    )));
+
+    setup.terminal.write('a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\n');
+    render.layout(BoxConstraints.tight(Size(
+      render.cellSize.width * 10,
+      render.cellSize.height * 5,
+    )));
+
+    expect(render.debugCursorBlinkNeedsPaint(), isTrue);
+
+    offset.jumpTo(0);
+    expect(render.debugCursorBlinkNeedsPaint(), isFalse);
+
+    render.detach();
+    setup.focusNode.dispose();
+  });
+
+  test('cursor blink skips repaint while the cursor is hidden', () {
+    final offset = _TestViewportOffset();
+    final setup = _createRenderTerminal(offset: offset);
+    final render = setup.render;
+    final owner = PipelineOwner();
+
+    render.attach(owner);
+    render.layout(BoxConstraints.tight(Size(
+      render.cellSize.width * 10,
+      render.cellSize.height * 5,
+    )));
+
+    expect(render.debugCursorBlinkNeedsPaint(), isTrue);
+
+    setup.terminal.write('\x1b[?25l');
+    expect(render.debugCursorBlinkNeedsPaint(), isFalse);
+
+    render.detach();
+    setup.focusNode.dispose();
+  });
+
   test('bottom-follow scrollback growth schedules layout', () {
     final offset = _TestViewportOffset();
     final setup = _createRenderTerminal(offset: offset);
