@@ -44,6 +44,10 @@ under a new pub package name.
 - 🚀 **Fast** Renders at 60fps.
 - 😀 **Wide character support** Supports CJK and emojis.
 - ✂️ **Customizable** 
+- 🔗 **Ligatures** Opt-in via `TerminalStyle(enableLigatures: true)`, with a
+  ligature-capable font such as Fira Code, JetBrains Mono or Iosevka. Ligatures
+  are drawn only where they fill exactly the cells they cover, so the grid never
+  shifts; anything else falls back to per-cell painting.
 - ✔ **Frontend independent**: The terminal core can work without flutter frontend.
 
 **What's new in 3.0.0:**
