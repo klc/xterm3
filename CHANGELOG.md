@@ -1,3 +1,10 @@
+## Unreleased
+
+* Render font ligatures when `TerminalStyle.enableLigatures` is set, keeping
+  the cell grid intact by falling back to per-cell painting whenever a shaped
+  run would not fill exactly the cells it covers. Requires a font that ships
+  ligatures, such as Fira Code, JetBrains Mono or Iosevka.
+
 ## [5.3.0] - 2026-07-28
 
 * Render bounded search matches with a distinct active result.

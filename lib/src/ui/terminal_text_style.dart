@@ -41,6 +41,23 @@ const _kTerminalFontFeatures = [
   FontFeature.disable('liga'),
 ];
 
+/// Feature set used when [TerminalStyle.enableLigatures] is set.
+///
+/// Only the features that merge glyphs while preserving the total advance are
+/// turned on. `calt` carries most programming ligatures in fonts such as Fira
+/// Code, which route them through contextual alternates rather than `liga`.
+/// `kern` stays disabled in both modes because kerning shifts advances without
+/// merging anything, which only misaligns the cell grid. `dlig` and `hlig` are
+/// discretionary and historical ligatures, neither of which a terminal wants.
+const _kTerminalLigatureFontFeatures = [
+  FontFeature.enable('calt'),
+  FontFeature.enable('clig'),
+  FontFeature.disable('dlig'),
+  FontFeature.disable('hlig'),
+  FontFeature.disable('kern'),
+  FontFeature.enable('liga'),
+];
+
 class TerminalStyle {
   const TerminalStyle({
     this.fontSize = _kDefaultFontSize,
@@ -48,6 +65,7 @@ class TerminalStyle {
     this.fontFamily = _kDefaultFontFamily,
     this.fontFamilyFallback = _kDefaultFontFamilyFallback,
     this.drawBoldTextWithBrightColors = true,
+    this.enableLigatures = false,
   });
 
   factory TerminalStyle.fromTextStyle(TextStyle textStyle) {
@@ -60,7 +78,22 @@ class TerminalStyle {
       fontFamilyFallback:
           textStyle.fontFamilyFallback ?? _kDefaultFontFamilyFallback,
       drawBoldTextWithBrightColors: true,
+      enableLigatures: _requestsLigatures(textStyle.fontFeatures),
     );
+  }
+
+  static bool _requestsLigatures(List<FontFeature>? features) {
+    if (features == null) return false;
+    for (final feature in features) {
+      if (feature.value == 0) continue;
+      switch (feature.feature) {
+        case 'calt':
+        case 'clig':
+        case 'liga':
+          return true;
+      }
+    }
+    return false;
   }
 
   final double fontSize;
@@ -72,6 +105,15 @@ class TerminalStyle {
   final List<String> fontFamilyFallback;
 
   final bool drawBoldTextWithBrightColors;
+
+  /// Whether glyph-merging font features are enabled.
+  ///
+  /// This only permits the font to produce ligature glyphs; the painter still
+  /// decides where merging is safe. A ligature is drawn only when its advance
+  /// matches the cells it covers, so the cell grid never shifts. Enabling this
+  /// has no visible effect unless the resolved font actually ships the
+  /// features, which none of the default fallback families do.
+  final bool enableLigatures;
 
   TextStyle toTextStyle({
     Color? color,
@@ -117,7 +159,10 @@ class TerminalStyle {
       decoration: decoration,
       decorationStyle: effectiveDecorationStyle,
       decorationColor: decorationColor,
-      fontFeatures: _kTerminalFontFeatures,
+      fontFeatures: switch (enableLigatures) {
+        true => _kTerminalLigatureFontFeatures,
+        false => _kTerminalFontFeatures,
+      },
     );
   }
 
@@ -127,6 +172,7 @@ class TerminalStyle {
     String? fontFamily,
     List<String>? fontFamilyFallback,
     bool? drawBoldTextWithBrightColors,
+    bool? enableLigatures,
   }) {
     return TerminalStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -135,6 +181,7 @@ class TerminalStyle {
       fontFamilyFallback: fontFamilyFallback ?? this.fontFamilyFallback,
       drawBoldTextWithBrightColors:
           drawBoldTextWithBrightColors ?? this.drawBoldTextWithBrightColors,
+      enableLigatures: enableLigatures ?? this.enableLigatures,
     );
   }
 
@@ -146,6 +193,7 @@ class TerminalStyle {
         height != other.height ||
         fontFamily != other.fontFamily ||
         drawBoldTextWithBrightColors != other.drawBoldTextWithBrightColors ||
+        enableLigatures != other.enableLigatures ||
         fontFamilyFallback.length != other.fontFamilyFallback.length) {
       return false;
     }
@@ -163,6 +211,7 @@ class TerminalStyle {
         height,
         fontFamily,
         drawBoldTextWithBrightColors,
+        enableLigatures,
         Object.hashAll(fontFamilyFallback),
       );
 }

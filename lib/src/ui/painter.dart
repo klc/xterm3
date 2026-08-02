@@ -1,5 +1,6 @@
 import 'dart:math' show max, min;
 import 'dart:ui';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/painting.dart';
 
 import 'package:xterm2/src/ui/palette_builder.dart';
@@ -14,6 +15,50 @@ const _specialBlinkColor = 2;
 const _specialReverseColor = 3;
 const _specialItalicColor = 4;
 const _defaultParagraphCacheSize = 2048;
+
+/// Upper bound on the number of cells a single shaped ligature run may cover.
+///
+/// No programming ligature is longer than this, and the bound matters because
+/// run cache keys carry the run text: without it the key space, and therefore
+/// the paragraph cache turnover, would be unbounded.
+const _maxLigatureRunLength = 8;
+
+/// Tolerance, in logical pixels, when checking a shaped run against the width
+/// of the cells it covers. Shaping is exact for the fonts this path targets;
+/// the epsilon only absorbs accumulated floating point error.
+const _ligatureAdvanceEpsilon = 0.5;
+
+/// Whether [codePoint] may take part in a ligature.
+///
+/// Restricted to the ASCII punctuation that programming ligatures are built
+/// from. Letters and digits are excluded, so ordinary text never leaves the
+/// per-cell painting path.
+bool _isLigatureCandidate(int codePoint) {
+  return switch (codePoint) {
+    0x21 || // !
+          0x23 || // #
+          0x26 || // &
+          0x2a || // *
+          0x2b || // +
+          0x2d || // -
+          0x2e || // .
+          0x2f || // /
+          0x3a || // :
+          0x3b || // ;
+          0x3c || // <
+          0x3d || // =
+          0x3e || // >
+          0x3f || // ?
+          0x5c || // \
+          0x5e || // ^
+          0x5f || // _
+          0x7c || // |
+          0x7e // ~
+        =>
+      true,
+    _ => false,
+  };
+}
 
 bool _isSymbolLike(int codePoint) {
   return switch (codePoint) {
@@ -76,6 +121,20 @@ class TerminalPainter {
   /// another.
   final _scratchCellData = CellData.empty();
 
+  /// Scratch cell used only to look ahead while measuring a ligature run.
+  /// Kept separate from [_scratchCellData] because the lookahead happens while
+  /// the painting loop still holds the current cell there.
+  final _scratchLookaheadCellData = CellData.empty();
+
+  /// Run texts already known not to shape into a grid-aligned ligature, keyed
+  /// together with the attributes that select a font face.
+  ///
+  /// Without this a font that ships no ligatures would insert one paragraph
+  /// per rejected run into [_paragraphCache], where it would never be drawn
+  /// yet keep competing with the single-cell entries for slots. Validity
+  /// depends on the resolved font, so this is cleared wherever the cache is.
+  final _rejectedLigatureRuns = <(String, int)>{};
+
   final Map<int, Color> _indexedColorOverrides = {};
   final Map<int, Color> _specialColorOverrides = {};
 
@@ -99,7 +158,7 @@ class TerminalPainter {
     if (value == _textStyle) return;
     _textStyle = value;
     _cellSize = _measureCharSize();
-    _paragraphCache.clear();
+    _clearParagraphCache();
   }
 
   TextScaler get textScaler => _textScaler;
@@ -108,7 +167,7 @@ class TerminalPainter {
     if (value == _textScaler) return;
     _textScaler = value;
     _cellSize = _measureCharSize();
-    _paragraphCache.clear();
+    _clearParagraphCache();
   }
 
   TerminalTheme get theme => _theme;
@@ -117,7 +176,7 @@ class TerminalPainter {
     if (value == _theme) return;
     _theme = value;
     _colorPalette = PaletteBuilder(value).build();
-    _paragraphCache.clear();
+    _clearParagraphCache();
   }
 
   bool get reverseDisplay => _reverseDisplay;
@@ -125,7 +184,15 @@ class TerminalPainter {
   set reverseDisplay(bool value) {
     if (value == _reverseDisplay) return;
     _reverseDisplay = value;
+    _clearParagraphCache();
+  }
+
+  /// Drops everything derived from the current font and colors. The rejected
+  /// run set is invalidated together with the paragraph cache: a run rejected
+  /// under one font may well ligate under the next.
+  void _clearParagraphCache() {
     _paragraphCache.clear();
+    _rejectedLigatureRuns.clear();
   }
 
   Size _measureCharSize() {
@@ -239,17 +306,18 @@ class TerminalPainter {
       final value? => Color(0xff000000 | value),
       null => null,
     };
-    _paragraphCache.clear();
+    _clearParagraphCache();
   }
 
   /// When the set of font available to the system changes, call this method to
   /// clear cached state related to font rendering.
   void clearFontCache() {
     _cellSize = _measureCharSize();
-    _paragraphCache.clear();
+    _clearParagraphCache();
   }
 
   void dispose() {
+    _clearParagraphCache();
     _paragraphCache.dispose();
   }
 
@@ -447,6 +515,31 @@ class TerminalPainter {
         hasBlinkingText = true;
       }
 
+      if (_textStyle.enableLigatures) {
+        final runLength = _ligatureRunLength(
+          line,
+          i,
+          cellData,
+          cursorColumn: cursorColumn,
+          hasCombiningCharacters: hasCombiningCharacters,
+        );
+        if (runLength > 1 &&
+            _paintLigatureRun(
+              canvas,
+              cellOffset,
+              line,
+              i,
+              runLength,
+              cellData,
+              activeHyperlinkId: activeHyperlinkId,
+              foregroundOverride: foregroundOverride,
+              ensureSelectionContrast: ensureSelectionContrast,
+            )) {
+          i += runLength - 1;
+          continue;
+        }
+      }
+
       paintCellForeground(
         canvas,
         cellOffset,
@@ -470,6 +563,205 @@ class TerminalPainter {
       }
     }
     return hasBlinkingText;
+  }
+
+  /// Number of consecutive cells starting at [column] that may be shaped as a
+  /// single ligature run. Exposed for tests; the painting loop uses the private
+  /// form directly so it can reuse the cell it already read.
+  @visibleForTesting
+  int ligatureRunCellSpan(BufferLine line, int column, {int? cursorColumn}) {
+    final cellData = CellData.empty();
+    line.getCellData(column, cellData);
+    return _ligatureRunLength(
+      line,
+      column,
+      cellData,
+      cursorColumn: cursorColumn,
+      hasCombiningCharacters: line.hasCombiningCharacters,
+    );
+  }
+
+  /// Number of consecutive cells starting at [start] that may be shaped as one
+  /// run. Returns 1 when the run would be a single cell, which is the signal to
+  /// take the regular per-cell path.
+  ///
+  /// A run may only cover cells that paint identically under the per-cell path,
+  /// because the whole run is drawn with one color in one call. Attributes,
+  /// colors and the hyperlink id (carried in the flags) must therefore match
+  /// across the run, and the cursor cell — which the caller repaints in an
+  /// inverted color — always terminates it.
+  int _ligatureRunLength(
+    BufferLine line,
+    int start,
+    CellData first, {
+    required int? cursorColumn,
+    required bool hasCombiningCharacters,
+  }) {
+    if (start == cursorColumn) return 1;
+
+    final flags = first.flags;
+    // Blinking and invisible cells are skipped rather than painted, and framed
+    // cells draw one box per cell. None of those survive being merged.
+    if (flags & (CellFlags.invisible | CellFlags.blink) != 0) return 1;
+    if (flags & CellAttr.frameMask != 0) return 1;
+
+    if (first.content >> CellContent.widthShift != 1) return 1;
+    if (!_isLigatureCandidate(first.content & CellContent.codepointMask)) {
+      return 1;
+    }
+    if (hasCombiningCharacters && line.getCombiningCharacters(start) != null) {
+      return 1;
+    }
+
+    final limit = min(line.length, start + _maxLigatureRunLength);
+    final probe = _scratchLookaheadCellData;
+    var end = start + 1;
+    while (end < limit) {
+      if (end == cursorColumn) break;
+
+      line.getCellData(end, probe);
+      if (probe.flags != flags) break;
+      if (probe.foreground != first.foreground) break;
+      if (probe.background != first.background) break;
+      if (probe.underlineColor != first.underlineColor) break;
+      if (probe.content >> CellContent.widthShift != 1) break;
+      if (!_isLigatureCandidate(probe.content & CellContent.codepointMask)) {
+        break;
+      }
+      if (hasCombiningCharacters && line.getCombiningCharacters(end) != null) {
+        break;
+      }
+      end++;
+    }
+    return end - start;
+  }
+
+  /// Shapes [length] cells starting at [start] as a single run and paints it at
+  /// [offset].
+  ///
+  /// Returns false without painting when the shaped run does not fill exactly
+  /// the cells it covers, which happens whenever the font produces no ligature
+  /// or produces one that would break the cell grid. The caller then falls back
+  /// to painting the cells individually.
+  bool _paintLigatureRun(
+    Canvas canvas,
+    Offset offset,
+    BufferLine line,
+    int start,
+    int length,
+    CellData cellData, {
+    int? activeHyperlinkId,
+    Color? foregroundOverride,
+    bool ensureSelectionContrast = false,
+  }) {
+    final cellFlags = cellData.flags;
+    final isActiveHyperlink =
+        cellData.hyperlinkId != 0 && cellData.hyperlinkId == activeHyperlinkId;
+    final color = switch (ensureSelectionContrast) {
+      true => resolveSelectionForegroundColor(
+          cellData,
+          foregroundOverride: foregroundOverride,
+        ),
+      false => resolveCellForegroundColor(
+          cellData,
+          foregroundOverride: foregroundOverride,
+        ),
+    };
+    final decorationColor = switch (cellData.underlineColor) {
+      0 => _underlineDecorationColor(cellFlags, color),
+      _ => resolveForegroundColor(cellData.underlineColor),
+    };
+
+    final text = _ligatureRunText(line, start, length);
+    // Only bold and italic select a different font face, so they alone decide
+    // whether an earlier rejection of this run text still applies.
+    final faceFlags = cellFlags & (CellFlags.bold | CellFlags.italic);
+    final rejectionKey = (text, faceFlags);
+    if (_rejectedLigatureRuns.contains(rejectionKey)) return false;
+
+    final hyperlinkFlag = switch (isActiveHyperlink) {
+      true => CellAttr.hyperlinkMarker,
+      false => 0,
+    };
+    // Shaped runs share the paragraph cache with single cells. Their key holds
+    // the run text instead of a packed cell content, so the two key shapes are
+    // distinct values and cannot collide.
+    final cacheKey = (
+      color.toARGB32(),
+      decorationColor.toARGB32(),
+      cellFlags & CellAttr.visualMask | hyperlinkFlag,
+      text,
+      _textScaler,
+    );
+    final runWidth = _cellSize.width * length;
+    var paragraph = _paragraphCache.getLayoutFromCache(cacheKey);
+
+    if (paragraph == null) {
+      final style = _textStyle.toTextStyle(
+        color: color,
+        decorationColor: decorationColor,
+        bold: cellFlags & CellFlags.bold != 0,
+        italic: cellFlags & CellFlags.italic != 0,
+        underline: _hasUnderline(cellFlags) || isActiveHyperlink,
+        doubleUnderline: _hasDoubleUnderline(cellFlags, isActiveHyperlink),
+        decorationStyle: _decorationStyle(cellFlags),
+        strikethrough: cellFlags & CellAttr.strikethrough != 0,
+        overline: cellFlags & CellAttr.overline != 0,
+      );
+
+      // Shape once outside the cache so a run that turns out not to fit never
+      // occupies a slot. Rejections are remembered instead, which costs one
+      // layout per run text and face rather than one per frame.
+      final candidate = _layoutRun(text, style);
+      if (!_runFillsCells(candidate, runWidth)) {
+        candidate.dispose();
+        _rejectedLigatureRuns.add(rejectionKey);
+        return false;
+      }
+      candidate.dispose();
+
+      paragraph = _paragraphCache.performAndCacheLayout(
+        text,
+        style,
+        _textScaler,
+        cacheKey,
+      );
+    }
+
+    if (!_runFillsCells(paragraph, runWidth)) return false;
+
+    canvas.drawParagraph(paragraph, offset);
+    return true;
+  }
+
+  Paragraph _layoutRun(String text, TextStyle style) {
+    final builder = ParagraphBuilder(style.getParagraphStyle())
+      ..pushStyle(style.getTextStyle(textScaler: _textScaler))
+      ..addText(text);
+    final paragraph = builder.build();
+    paragraph.layout(ParagraphConstraints(width: double.infinity));
+    return paragraph;
+  }
+
+  /// Whether a shaped run fills exactly the cells it covers.
+  ///
+  /// The grid is only preserved when the shaped advance matches those cells.
+  /// Both the cell size and the run advance come from the same font at the same
+  /// size, so a ligature font hits this exactly; anything else is rejected here
+  /// rather than allowed to shift the row.
+  @pragma('vm:prefer-inline')
+  bool _runFillsCells(Paragraph paragraph, double runWidth) {
+    return (paragraph.maxIntrinsicWidth - runWidth).abs() <=
+            _ligatureAdvanceEpsilon &&
+        paragraph.height <= _cellSize.height;
+  }
+
+  String _ligatureRunText(BufferLine line, int start, int length) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < length; i++) {
+      buffer.writeCharCode(line.getCodePoint(start + i));
+    }
+    return buffer.toString();
   }
 
   @pragma('vm:prefer-inline')
