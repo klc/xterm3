@@ -568,9 +568,14 @@ class TerminalPainter {
       true => CellAttr.hyperlinkMarker,
       false => 0,
     };
+    // Colors are keyed by their packed ARGB value rather than by the [Color]
+    // instance: hashing an integer is markedly cheaper than hashing the four
+    // floating point components of a [Color], and this key is built once per
+    // visible cell per frame. Every color reaching this point comes from the
+    // sRGB palette, so the packed value identifies it uniquely.
     final cacheKey = (
-      color,
-      decorationColor,
+      color.toARGB32(),
+      decorationColor.toARGB32(),
       visualFlags | hyperlinkFlag,
       cellData.content,
       _textScaler,
