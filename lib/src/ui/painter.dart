@@ -69,8 +69,11 @@ class TerminalPainter {
   final _highlightPaint = Paint();
   final _cursorPaint = Paint();
 
-  /// Scratch cell used by the line painting loops. Cell data is copied into it
-  /// once per cell and consumed immediately, so a single instance is enough.
+  /// Scratch cell shared by [paintLineBackgrounds] and [paintLineForegrounds].
+  /// Both fully overwrite every field through [BufferLine.getCellData] before
+  /// reading it and consume the result before advancing, so one instance is
+  /// enough. Those two methods must therefore never be nested inside one
+  /// another.
   final _scratchCellData = CellData.empty();
 
   final Map<int, Color> _indexedColorOverrides = {};
