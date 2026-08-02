@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'dart:ui' as ui;
 import 'package:flutter/widgets.dart'
-    show TextDecoration, TextDecorationStyle, TextScaler;
+    show TextDecoration, TextDecorationStyle, TextScaler, TextStyle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm2/src/ui/painter.dart';
 import 'package:xterm2/xterm.dart';
@@ -714,6 +714,186 @@ void main() {
       features.map((feature) => feature.feature).toSet(),
       containsAll(['calt', 'clig', 'dlig', 'hlig', 'kern', 'liga']),
     );
+    expect(features.every((feature) => feature.value == 0), isTrue);
+  });
+
+  test('TerminalStyle enables merging features when ligatures are on', () {
+    final style = const TerminalStyle(enableLigatures: true).toTextStyle();
+    final features = style.fontFeatures;
+    if (features == null) {
+      fail('Expected terminal font features');
+    }
+
+    final values = {
+      for (final feature in features) feature.feature: feature.value,
+    };
+    expect(values['calt'], 1);
+    expect(values['clig'], 1);
+    expect(values['liga'], 1);
+    // Kerning shifts advances without merging glyphs, and discretionary and
+    // historical ligatures are not what a terminal asks for.
+    expect(values['kern'], 0);
+    expect(values['dlig'], 0);
+    expect(values['hlig'], 0);
+  });
+
+  test('TerminalStyle.fromTextStyle carries a ligature request over', () {
+    expect(
+      TerminalStyle.fromTextStyle(const TextStyle()).enableLigatures,
+      isFalse,
+    );
+    expect(
+      TerminalStyle.fromTextStyle(
+        const TextStyle(fontFeatures: [ui.FontFeature.disable('liga')]),
+      ).enableLigatures,
+      isFalse,
+    );
+    expect(
+      TerminalStyle.fromTextStyle(
+        const TextStyle(fontFeatures: [ui.FontFeature.enable('calt')]),
+      ).enableLigatures,
+      isTrue,
+    );
+  });
+
+  test('TerminalStyle equality accounts for ligatures', () {
+    const plain = TerminalStyle();
+    final ligated = plain.copyWith(enableLigatures: true);
+
+    expect(ligated.enableLigatures, isTrue);
+    expect(ligated == plain, isFalse);
+    expect(ligated.hashCode == plain.hashCode, isFalse);
+    expect(ligated.copyWith(), equals(ligated));
+  });
+
+  test('ligature runs cover only mergeable neighbouring cells', () {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(enableLigatures: true),
+      textScaler: TextScaler.noScaling,
+    );
+
+    final terminal = Terminal()
+      ..resize(20, 1)
+      ..write('a<=>b ===');
+    final line = terminal.buffer.lines[0];
+
+    // Letters never take part in a run, punctuation runs stop at them.
+    expect(painter.ligatureRunCellSpan(line, 0), 1);
+    expect(painter.ligatureRunCellSpan(line, 1), 3);
+    expect(painter.ligatureRunCellSpan(line, 4), 1);
+    expect(painter.ligatureRunCellSpan(line, 6), 3);
+
+    // The cursor cell is repainted in an inverted color, so it always splits.
+    expect(painter.ligatureRunCellSpan(line, 1, cursorColumn: 1), 1);
+    expect(painter.ligatureRunCellSpan(line, 1, cursorColumn: 2), 1);
+    expect(painter.ligatureRunCellSpan(line, 1, cursorColumn: 3), 2);
+
+    painter.dispose();
+  });
+
+  test('ligature runs stop where cell attributes change', () {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(enableLigatures: true),
+      textScaler: TextScaler.noScaling,
+    );
+
+    final recolored = Terminal()
+      ..resize(20, 1)
+      ..write('=\x1b[31m==');
+    expect(painter.ligatureRunCellSpan(recolored.buffer.lines[0], 0), 1);
+    expect(painter.ligatureRunCellSpan(recolored.buffer.lines[0], 1), 2);
+
+    final bolded = Terminal()
+      ..resize(20, 1)
+      ..write('=\x1b[1m==');
+    expect(painter.ligatureRunCellSpan(bolded.buffer.lines[0], 0), 1);
+
+    // Blinking cells are skipped during the off phase rather than painted.
+    final blinking = Terminal()
+      ..resize(20, 1)
+      ..write('\x1b[5m===');
+    expect(painter.ligatureRunCellSpan(blinking.buffer.lines[0], 0), 1);
+
+    painter.dispose();
+  });
+
+  test('ligature runs are bounded in length', () {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(enableLigatures: true),
+      textScaler: TextScaler.noScaling,
+    );
+
+    final terminal = Terminal()
+      ..resize(40, 1)
+      ..write('=' * 30);
+    expect(painter.ligatureRunCellSpan(terminal.buffer.lines[0], 0), 8);
+
+    painter.dispose();
+  });
+
+  test('ligature runs keep the cell grid when the font has no ligatures',
+      () async {
+    final terminal = Terminal()
+      ..resize(12, 1)
+      ..write('a => b != c');
+
+    final plainPainter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(fontSize: 20, height: 1),
+      textScaler: TextScaler.noScaling,
+    );
+    final ligaturePainter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(
+        fontSize: 20,
+        height: 1,
+        enableLigatures: true,
+      ),
+      textScaler: TextScaler.noScaling,
+    );
+
+    final plainImage = await _paintLine(
+      plainPainter,
+      terminal.buffer.lines[0],
+    );
+    final ligatureImage = await _paintLine(
+      ligaturePainter,
+      terminal.buffer.lines[0],
+    );
+
+    final plainBytes = await plainImage.toByteData(
+      format: ui.ImageByteFormat.rawRgba,
+    );
+    final ligatureBytes = await ligatureImage.toByteData(
+      format: ui.ImageByteFormat.rawRgba,
+    );
+    plainImage.dispose();
+    ligatureImage.dispose();
+    if (plainBytes == null || ligatureBytes == null) {
+      fail('Expected rendered bytes');
+    }
+
+    // The test font ships no ligatures, so shaping a run must land every glyph
+    // exactly where the per-cell path puts it, pixel for pixel. A run that does
+    // not fill its cells is rejected before it can be drawn, so either way the
+    // grid is identical.
+    expect(
+      ligatureBytes.buffer.asUint8List(),
+      equals(plainBytes.buffer.asUint8List()),
+    );
+
+    // Runs must never cost more paragraph cache slots than the cells they
+    // replace, whether they are drawn or rejected.
+    expect(
+      ligaturePainter.paragraphCacheLength,
+      lessThanOrEqualTo(plainPainter.paragraphCacheLength),
+    );
+
+    plainPainter.dispose();
+    ligaturePainter.dispose();
   });
 
   test('symbol glyphs can extend into an adjacent blank cell', () {
