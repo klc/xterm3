@@ -566,6 +566,13 @@ class TerminalViewState extends State<TerminalView> {
     _customTextEditKey.currentState?.closeKeyboard();
   }
 
+  /// Clears a pending IME composition and resets the platform editing state.
+  /// Call after input is sent to the terminal from outside the keyboard, such
+  /// as a mobile extra-keys bar.
+  void resetEditingState() {
+    _customTextEditKey.currentState?.resetEditingState();
+  }
+
   Rect get cursorRect {
     return renderTerminal.cursorOffset & renderTerminal.cursorSize;
   }
