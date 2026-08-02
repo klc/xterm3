@@ -13,10 +13,7 @@ import 'package:xterm2/src/ui/selection_mode.dart';
 class TerminalController with ChangeNotifier {
   TerminalController({
     SelectionMode selectionMode = SelectionMode.line,
-    PointerInputs pointerInputs = const PointerInputs({
-      PointerInput.tap,
-      PointerInput.scroll,
-    }),
+    PointerInputs pointerInputs = const PointerInputs.all(),
     bool suspendPointerInput = false,
   })  : _selectionMode = selectionMode,
         _pointerInputs = pointerInputs,
