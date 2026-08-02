@@ -230,6 +230,39 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void updateEditingValue(TextEditingValue value) {
     _currentEditingState = value;
 
+    // In deleteDetection mode (mobile IME), process text deltas immediately
+    // to prevent Android keyboards (Gboard, Samsung, SwiftKey) from trapping
+    // keypresses inside composing range and causing double insertions.
+    if (widget.deleteDetection) {
+      widget.onComposing(null);
+
+      final text = value.text;
+      final initLength = _initEditingState.text.length;
+
+      if (text.length < initLength) {
+        final deleteCount = initLength - text.length;
+        for (var i = 0; i < deleteCount; i++) {
+          widget.onDelete();
+        }
+        _resetEditingState();
+        return;
+      }
+
+      if (text.length > initLength) {
+        final textDelta = text.substring(initLength);
+        if (textDelta.isNotEmpty) {
+          widget.onInsert(textDelta);
+        }
+        _resetEditingState();
+        return;
+      }
+
+      if (text != _initEditingState.text) {
+        _resetEditingState();
+      }
+      return;
+    }
+
     // Get input after composing is done
     if (!_currentEditingState.composing.isCollapsed) {
       final text = _currentEditingState.text;

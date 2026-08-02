@@ -34,6 +34,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     required double backgroundOpacity,
     required TerminalStyle textStyle,
     required TextScaler textScaler,
+    required double devicePixelRatio,
     required TerminalTheme theme,
     required FocusNode focusNode,
     required TerminalCursorType cursorType,
@@ -57,6 +58,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
           theme: theme,
           textStyle: textStyle,
           textScaler: textScaler,
+          devicePixelRatio: devicePixelRatio,
         );
 
   Terminal _terminal;
@@ -118,6 +120,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set textScaler(TextScaler value) {
     if (value == _painter.textScaler) return;
     _painter.textScaler = value;
+    markNeedsLayout();
+  }
+
+  set devicePixelRatio(double value) {
+    if (value == _painter.devicePixelRatio) return;
+    _painter.devicePixelRatio = value;
     markNeedsLayout();
   }
 
@@ -684,10 +692,10 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   /// The offset of the cursor from the top left corner of this render object.
   Offset get cursorOffset {
-    final cursorColumn = _cursorRenderColumn();
-    return Offset(
-      _padding.left + cursorColumn * _painter.cellSize.width,
-      _terminal.buffer.absoluteCursorY * _painter.cellSize.height + _lineOffset,
+    return _lineOrigin(
+      Offset.zero,
+      _terminal.buffer.absoluteCursorY,
+      column: _cursorRenderColumn(),
     );
   }
 
@@ -700,6 +708,32 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     return Size(
       _painter.cellSize.width * cursorWidth,
       _painter.cellSize.height,
+    );
+  }
+
+  /// Rounds a logical pixel position onto the device pixel grid. Cell metrics
+  /// are already a whole number of device pixels, so snapping the origin of the
+  /// grid keeps every row and column aligned with physical pixels instead of
+  /// drifting through subpixel phases.
+  double _snapToDevicePixels(double value) {
+    final ratio = _painter.devicePixelRatio;
+    if (!ratio.isFinite || ratio <= 0) return value;
+    return (value * ratio).roundToDouble() / ratio;
+  }
+
+  /// Origin of [line] (optionally offset by [column] cells) in absolute paint
+  /// coordinates, snapped onto the device pixel grid. Cell metrics are already
+  /// a whole number of device pixels, so snapping the origin keeps every row
+  /// and column aligned with physical pixels instead of drifting through
+  /// subpixel phases.
+  Offset _lineOrigin(Offset paintOffset, int line, {int column = 0}) {
+    return Offset(
+      _snapToDevicePixels(
+        paintOffset.dx + _padding.left + column * _painter.cellSize.width,
+      ),
+      _snapToDevicePixels(
+        paintOffset.dy + line * _painter.cellSize.height + _lineOffset,
+      ),
     );
   }
 
@@ -755,10 +789,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
       _painter.paintLineBackgrounds(
         canvas,
-        offset.translate(
-          _padding.left,
-          (i * charHeight + _lineOffset).truncateToDouble(),
-        ),
+        _lineOrigin(offset, i),
         lines[i],
       );
     }
@@ -769,10 +800,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       final paint = _fillPaint..color = _painter.cursorLineHighlightColor;
       canvas.drawRect(
         Rect.fromLTWH(
-          offset.dx + _padding.left,
-          offset.dy +
-              (_terminal.buffer.absoluteCursorY * charHeight + _lineOffset)
-                  .truncateToDouble(),
+          _snapToDevicePixels(offset.dx + _padding.left),
+          _lineOrigin(offset, _terminal.buffer.absoluteCursorY).dy,
           max(size.width - _padding.horizontal, 0),
           charHeight,
         ),
@@ -825,7 +854,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (shouldPaintBlockCursor && _focusNode.hasFocus) {
       _painter.paintCursor(
         canvas,
-        offset + _cursorRenderOffset(cursorRenderColumn),
+        _cursorRenderOffset(offset, cursorRenderColumn),
         cursorType: cursorType,
         cellWidth: cursorRenderWidth,
         color: cursorColors.background,
@@ -836,10 +865,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
       hasBlinkingText = _painter.paintLineForegrounds(
             canvas,
-            offset.translate(
-              _padding.left,
-              (i * charHeight + _lineOffset).truncateToDouble(),
-            ),
+            _lineOrigin(offset, i),
             lines[i],
             blinkVisible: _textBlinkVisible,
             activeHyperlinkId: _activeHyperlinkId,
@@ -899,7 +925,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       if (!shouldPaintBlockCursor || !_focusNode.hasFocus) {
         _painter.paintCursor(
           canvas,
-          offset + _cursorRenderOffset(cursorRenderColumn),
+          _cursorRenderOffset(offset, cursorRenderColumn),
           cursorType: cursorType,
           hasFocus: _focusNode.hasFocus,
           cellWidth: cursorRenderWidth,
@@ -1004,10 +1030,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     return _painter.resolveCursorColors(cellData);
   }
 
-  Offset _cursorRenderOffset(int cursorColumn) {
-    return Offset(
-      _padding.left + cursorColumn * _painter.cellSize.width,
-      _terminal.buffer.absoluteCursorY * _painter.cellSize.height + _lineOffset,
+  Offset _cursorRenderOffset(Offset paintOffset, int cursorColumn) {
+    return _lineOrigin(
+      paintOffset,
+      _terminal.buffer.absoluteCursorY,
+      column: cursorColumn,
     );
   }
 
@@ -1121,10 +1148,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       );
       _painter.paintLineForegrounds(
         canvas,
-        offset.translate(
-          _padding.left,
-          segment.line * _painter.cellSize.height + _lineOffset,
-        ),
+        _lineOrigin(offset, segment.line),
         _terminal.buffer.lines[segment.line],
         blinkVisible: _textBlinkVisible,
         activeHyperlinkId: _activeHyperlinkId,
@@ -1241,10 +1265,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     for (final line in highlightedLines) {
       _painter.paintLineForegrounds(
         canvas,
-        offset.translate(
-          _padding.left,
-          line * _painter.cellSize.height + _lineOffset,
-        ),
+        _lineOrigin(offset, line),
         _terminal.buffer.lines[line],
         blinkVisible: _textBlinkVisible,
         activeHyperlinkId: _activeHyperlinkId,
@@ -1349,10 +1370,6 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   Offset getSegmentOffset(BufferSegment segment, Offset paintOffset) {
     final start = segment.start ?? 0;
-    return paintOffset +
-        Offset(
-          _padding.left + start * _painter.cellSize.width,
-          segment.line * _painter.cellSize.height + _lineOffset,
-        );
+    return _lineOrigin(paintOffset, segment.line, column: start);
   }
 }
