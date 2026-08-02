@@ -64,4 +64,33 @@ void main() {
 
     expect(output.join(), 'cd /var/log\r');
   });
+
+  testWidgets('resetEditingState drops a pending composition', (tester) async {
+    final output = <String>[];
+    final terminal = Terminal(onOutput: output.add);
+    final viewKey = GlobalKey<TerminalViewState>();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TerminalView(terminal, key: viewKey, autofocus: true),
+        ),
+      ),
+    );
+    await tester.tap(find.byType(TerminalView));
+    await tester.pump();
+
+    await compose(tester, 'ls', collapsed: false);
+    expect(output, isEmpty);
+
+    viewKey.currentState!.resetEditingState();
+    await tester.pump();
+
+    // deleteDetection is off by default, so the initial state is empty text.
+    expect(tester.testTextInput.editingState?['text'], '');
+    expect(output, isEmpty);
+
+    await compose(tester, 'pwd', collapsed: true);
+    expect(output.join(), 'pwd');
+  });
 }
