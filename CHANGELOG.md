@@ -1,5 +1,22 @@
 ## Unreleased
 
+* Fix wide characters corrupting the cell grid. `BufferLine.setCell` now repairs the
+  width-2 lead / width-0 placeholder pairing itself, so no caller can leave half a
+  wide character behind — a filler cell written when a wide character does not fit
+  before the right margin used to overwrite an existing placeholder in place, and
+  growing a previously shrunk line could resurrect a stale lead whose placeholder was
+  cut off. Found by the new parser fuzz harness.
+* Defer soft-keyboard input while an IME composition is open, in both `deleteDetection`
+  modes, so Turkish and CJK text reaches the terminal only once the keyboard commits it.
+  Previously an uncorrected preview (`gg` before `ğıİşçöü`, `ni` before `nihao`) was
+  written to the terminal as literal text. Composition is now tracked by composing-range
+  identity rather than length, which keeps single keypresses that Android keyboards wrap
+  in a never-collapsing composing range landing exactly once.
+* Recognise a backspace at offset 0 as a delete when `deleteDetection` is off. It
+  previously produced an empty insert and no delete ever reached the terminal.
+* Add an opt-in `Terminal.onUnknownSequence` diagnostic callback, reporting ESC, CSI, OSC
+  and DCS sequences the parser does not recognise. It costs nothing when unset, and
+  deliberately stays silent for sequences that are handled internally.
 * **Behavior change:** `Observable.listeners` is now an `Iterable<void Function()>`
   view instead of a `Set<void Function()>`. Iterating, `length` and `contains`
   keep working; code that mutated the set directly must call `addListener` and
