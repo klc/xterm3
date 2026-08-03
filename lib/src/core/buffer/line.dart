@@ -545,6 +545,8 @@ class BufferLine with IndexedItem {
       return;
     }
 
+    final oldLength = _length;
+
     if (length > _length) {
       final newBufferSize = _calcCapacity(length) * _cellSize;
 
@@ -556,6 +558,26 @@ class BufferLine with IndexedItem {
     }
 
     _length = length;
+
+    if (length > oldLength) {
+      // Growing intentionally preserves cell data past the old length (so
+      // it can reappear if the line was previously shrunk and is now being
+      // grown back - see the tests for this behaviour). But the raw bytes
+      // newly exposed by this grow may hold a wide-char lead/placeholder
+      // pair that was frozen mid-pair by some earlier resize whose own
+      // boundary happened to land between the two halves (e.g. a shrink to
+      // a width that kept the lead but cut off its placeholder, or a
+      // subsequent write at a since-shrunk width that landed on the
+      // placeholder half without the lead in scope to clear alongside it).
+      // Scan the whole newly exposed range - not just its last column - for
+      // a dangling lead and clear it so the width-2/placeholder invariant
+      // holds for every cell we just made visible again.
+      for (var i = oldLength; i < length; i++) {
+        if (getWidth(i) == 2 && (i + 1 >= length || getWidth(i + 1) != 0)) {
+          resetCell(i);
+        }
+      }
+    }
 
     for (var i = 0; i < _anchors.length; i++) {
       final anchor = _anchors[i];

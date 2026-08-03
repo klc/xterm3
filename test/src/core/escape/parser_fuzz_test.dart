@@ -318,27 +318,36 @@ void main() {
     );
 
     test(
-      'BUG: a wide cell\'s placeholder is overwritten with non-zero '
-      'content by a lone ESC probe (seed 0xc0ffee, round 3225)',
+      'a wide cell\'s placeholder is no longer overwritten with non-zero '
+      'content by BufferLine.resize exposing a stale mid-range lead while '
+      'growing (seed 0xc0ffee, round 3225)',
       () {
-        // Expected behaviour: as with the two regressions above, a width-2
-        // cell must always be immediately followed by a width-0 placeholder
-        // cell with code point 0. Observed: this is a DIFFERENT root cause
-        // from the two regressions above - it reproduces on a fresh, never
-        // resized 80x24 terminal (found via
-        // XTERM2_FUZZ_ROUNDS=5000; the default 400-round CI run is too
-        // short to reach it). After round 3225 of this seed's stream
-        // (triggered by a lone "ESC ESC" token), line 108 col 65 - the
-        // placeholder for a wide cell at col 64 - has non-zero width/code
-        // point. Not investigated further; tracked for follow-up.
+        // Expected behaviour: a width-2 cell must always be immediately
+        // followed by a width-0 placeholder cell with code point 0.
+        //
+        // Root cause (found via XTERM2_FUZZ_ROUNDS=5000; the default
+        // 400-round CI run is too short to reach it): unrelated to the ESC
+        // ESC token that happens to be the last token processed before this
+        // round's invariant check runs. The actual corruption is introduced
+        // earlier, by a `terminal.resize` at round 3223 that grows a line
+        // back up after it had previously been shrunk repeatedly at
+        // different widths. `BufferLine.resize` intentionally preserves
+        // cell data past the old length when growing (so it can reappear
+        // if the line is grown back after a shrink), but each individual
+        // shrink/grow only ever checked the single cell sitting exactly at
+        // *that* call's own boundary for a dangling wide-char lead - a
+        // lead+placeholder pair frozen mid-pair by an *earlier* resize with
+        // a different boundary, now somewhere in the *middle* of a later,
+        // larger newly-exposed range, was never re-validated. Once such a
+        // pair drifts out of sync (e.g. only the placeholder half gets
+        // overwritten by a subsequent write while shrunk to a width that no
+        // longer exposes the lead), regrowing past it resurrects the
+        // mismatch verbatim. Fixed in BufferLine.resize by scanning the
+        // *entire* newly exposed range on every grow - not just its last
+        // column - and clearing any wide-char lead left without a valid
+        // placeholder.
         expect(() => _runFuzzSeed(0xc0ffee, 3226), returnsNormally);
       },
-      skip: 'Known bug found by the fuzzer with XTERM2_FUZZ_ROUNDS=5000: a '
-          "wide cell's placeholder cell is overwritten with non-zero "
-          'content at line 108 col 65 after a lone ESC ESC token at round '
-          '3225. Unrelated to Buffer.resize/reflow (no resize involved in '
-          'this repro) - a different root cause from the two regressions '
-          'above. Do not fix lib/ here - tracked for follow-up.',
     );
   });
 }
