@@ -655,6 +655,8 @@ class Terminal
 
   bool _isDisposed = false;
 
+  var _writing = false;
+
   /* State getters */
 
   /// Number of cells in a terminal row.
@@ -783,7 +785,13 @@ class Terminal
   /// [onTitleChange] when the escape sequences in [data] request it.
   void write(String data) {
     if (_isDisposed) return;
-    _parser.write(data);
+    assert(!_writing, 'Terminal.write() is not reentrant');
+    _writing = true;
+    try {
+      _parser.write(data);
+    } finally {
+      _writing = false;
+    }
     if (_synchronizedUpdateMode) return;
     notifyListeners();
   }
