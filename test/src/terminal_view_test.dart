@@ -529,6 +529,52 @@ void main() {
       expect(output.last, startsWith('\x1b[<35;'));
     });
 
+    testWidgets('reports pointer motion with the default controller', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)
+        ..write('\x1b[?1003h\x1b[?1006h');
+      final controller = TerminalController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TerminalView(terminal, controller: controller),
+        ),
+      );
+
+      final pointer = TestPointer(1, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(pointer.hover(const Offset(4, 4)));
+      await tester.pump();
+
+      expect(output, isNotEmpty);
+      expect(output.last, startsWith('\x1b[<35;'));
+
+      controller.dispose();
+    });
+
+    testWidgets('does not report pointer motion without a mouse mode', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final controller = TerminalController();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TerminalView(terminal, controller: controller),
+        ),
+      );
+
+      final pointer = TestPointer(1, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(pointer.hover(const Offset(4, 4)));
+      await tester.pump();
+
+      expect(output, isEmpty);
+
+      controller.dispose();
+    });
+
     testWidgets('works', (tester) async {
       final output = <String>[];
 

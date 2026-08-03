@@ -1,5 +1,13 @@
 ## Unreleased
 
+* **Behavior change:** `TerminalController` now defaults to `PointerInputs.all()`,
+  so pointer motion and drag events reach the terminal. Applications that enable
+  DEC private modes 1002 (button-event tracking) and 1003 (any-event tracking)
+  now receive mouse reports out of the box, matching xterm, iTerm2 and Kitty.
+  Reports are still gated on the mouse mode the application requests, so a
+  terminal with mouse reporting disabled emits nothing. To restore the previous
+  default, pass
+  `TerminalController(pointerInputs: PointerInputs({PointerInput.tap, PointerInput.scroll}))`.
 * Render font ligatures when `TerminalStyle.enableLigatures` is set, keeping
   the cell grid intact by falling back to per-cell painting whenever a shaped
   run would not fill exactly the cells it covers. Requires a font that ships
