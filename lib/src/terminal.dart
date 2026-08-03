@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' show max, min;
 
+import 'package:meta/meta.dart';
 import 'package:xterm2/src/base/observable.dart';
 import 'package:xterm2/src/core/buffer/buffer.dart';
 import 'package:xterm2/src/core/buffer/cell_offset.dart';
@@ -500,6 +501,7 @@ class Terminal
     maxLines: maxLines,
     isAltBuffer: false,
     wordSeparators: wordSeparators,
+    onLineEvicted: _onScrollbackLineEvicted,
   );
 
   late final _altBuffer = Buffer(
@@ -507,6 +509,7 @@ class Terminal
     maxLines: maxLines,
     isAltBuffer: true,
     wordSeparators: wordSeparators,
+    onLineEvicted: _onScrollbackLineEvicted,
   );
 
   final _tabStops = TabStops();
@@ -3642,6 +3645,69 @@ class Terminal
     }
     return null;
   }
+
+  /// Called whenever a line falls out of scrollback. Checks whether any
+  /// hyperlink ids that were only referenced by [line] are now unused
+  /// anywhere else, and if so removes them from the registry. This keeps the
+  /// registry roughly bounded by the number of *live* hyperlinks instead of
+  /// letting it grow until [_maxHyperlinks] triggers a full bulk prune.
+  void _onScrollbackLineEvicted(BufferLine line) {
+    if (_hyperlinks.isEmpty) return;
+
+    Set<int>? evictedIds;
+    for (var column = 0; column < line.length; column++) {
+      final hyperlinkId = line.getHyperlinkId(column);
+      if (hyperlinkId != 0) {
+        (evictedIds ??= <int>{}).add(hyperlinkId);
+      }
+    }
+    if (evictedIds == null) return;
+
+    _pruneHyperlinkIdsIfUnused(evictedIds);
+  }
+
+  /// Removes any of [candidateIds] from the hyperlink registry if none of
+  /// them are referenced by the cursor's current style or by any cell in
+  /// either buffer. Only [candidateIds] are checked (not the whole registry),
+  /// so this stays cheap in the common case of a line without hyperlinks.
+  void _pruneHyperlinkIdsIfUnused(Set<int> candidateIds) {
+    final remaining = Set<int>.of(candidateIds);
+
+    if (_cursorStyle.hyperlinkId != 0) {
+      remaining.remove(_cursorStyle.hyperlinkId);
+    }
+
+    void scanBuffer(Buffer buffer) {
+      if (remaining.isEmpty) return;
+      buffer.lines.forEach((line) {
+        if (remaining.isEmpty) return;
+        for (var column = 0; column < line.length; column++) {
+          final hyperlinkId = line.getHyperlinkId(column);
+          if (hyperlinkId != 0) remaining.remove(hyperlinkId);
+        }
+      });
+    }
+
+    scanBuffer(_mainBuffer);
+    scanBuffer(_altBuffer);
+
+    if (remaining.isEmpty) return;
+
+    for (final hyperlinkId in remaining) {
+      _hyperlinks.remove(hyperlinkId);
+    }
+    for (final entry in _explicitHyperlinkIds.entries.toList()) {
+      if (!_hyperlinks.containsKey(entry.value)) {
+        _explicitHyperlinkIds.remove(entry.key);
+      }
+    }
+  }
+
+  /// The number of hyperlinks currently held in the registry. Exposed only
+  /// for tests that verify the registry stays bounded as scrollback lines
+  /// are evicted; not part of the public API surface.
+  @visibleForTesting
+  int get debugHyperlinkCount => _hyperlinks.length;
 
   void _pruneUnusedHyperlinks() {
     final usedIds = <int>{};

@@ -4859,6 +4859,22 @@ void main() {
     );
   });
 
+  test('Terminal prunes hyperlinks as scrollback lines are evicted', () {
+    final terminal = Terminal(maxLines: 20)..resize(10, 1);
+
+    // Each hyperlink lives on its own line. Once scrollback (20 lines) starts
+    // evicting old lines, the hyperlinks that lived only on those lines
+    // should be pruned immediately instead of lingering in the registry
+    // until it grows all the way to the 4096 entry ceiling.
+    for (var index = 0; index < 500; index++) {
+      terminal.write(
+        '\x1b]8;;https://example.com/$index\x1b\\x\x1b]8;;\x1b\\\n',
+      );
+    }
+
+    expect(terminal.debugHyperlinkCount, lessThan(50));
+  });
+
   test('Terminal insert blank chars shifts hyperlinks without linking blanks',
       () {
     final terminal = Terminal()..resize(10, 2);
