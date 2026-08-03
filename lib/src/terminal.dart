@@ -1497,9 +1497,13 @@ class Terminal
   }
 
   @override
-  void unkownEscape(int char) {
+  void unknownEscape(int char) {
     // no-op
   }
+
+  @Deprecated('Use unknownEscape instead. Will be removed in the next major.')
+  @override
+  void unkownEscape(int char) => unknownEscape(char);
 
   /* CSI */
 

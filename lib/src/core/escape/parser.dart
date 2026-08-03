@@ -269,7 +269,7 @@ class EscapeParser {
     final escapeHandler = _escHandlers[char];
     if (escapeHandler == null) {
       _pendingEscape = false;
-      handler.unkownEscape(char);
+      handler.unknownEscape(char);
       return true;
     }
 
@@ -410,7 +410,7 @@ class EscapeParser {
       handler.screenAlignmentTest();
       return true;
     }
-    handler.unkownEscape(command);
+    handler.unknownEscape(command);
     return true;
   }
 
