@@ -181,6 +181,8 @@ class BufferLine with IndexedItem {
   }
 
   void setCell(int index, int char, int witdh, CursorStyle style) {
+    _repairWideCellPairing(index, witdh, style);
+
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
     _data[offset + _cellBackground] = style.background;
@@ -190,6 +192,37 @@ class BufferLine with IndexedItem {
     _data[offset + _cellContent] = char | (witdh << CellContent.widthShift);
     _setUnderlineColor(index, style.underlineColor);
     _combiningCharacters?.remove(index);
+  }
+
+  /// Keeps the width-2 lead / width-0 placeholder pairing invariant intact
+  /// across a raw [setCell] write, regardless of what the caller remembers
+  /// (or forgets) to clean up beforehand.
+  ///
+  /// This primitive used to know nothing about the pairing convention, which
+  /// meant every call site had to repeat the same "clear the neighbouring
+  /// half first" dance - and the fuzzer kept finding call sites that forgot
+  /// it (see the regression tests in parser_fuzz_test.dart). Two cases can
+  /// break the pairing:
+  ///  - [index] is currently the width-0 placeholder half of a pair, and this
+  ///    write gives it a non-zero width - its former lead at `index - 1` is
+  ///    left dangling with no placeholder, so erase that lead too.
+  ///  - This write is itself a new width-2 lead, and `index + 1` currently
+  ///    holds an unrelated stale wide lead - it would become an invalid
+  ///    "placeholder" for the new pair, so erase it (and its own
+  ///    placeholder) first.
+  void _repairWideCellPairing(int index, int witdh, CursorStyle style) {
+    if (witdh != 0 &&
+        index > 0 &&
+        getWidth(index) == 0 &&
+        getWidth(index - 1) == 2) {
+      eraseCell(index - 1, style);
+    }
+    if (witdh == 2 && index + 1 < _length && getWidth(index + 1) == 2) {
+      eraseCell(index + 1, style);
+      if (index + 2 < _length) {
+        eraseCell(index + 2, style);
+      }
+    }
   }
 
   void setAsciiCells(
