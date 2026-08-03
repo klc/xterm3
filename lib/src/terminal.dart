@@ -28,6 +28,7 @@ import 'package:xterm2/src/utils/ascii.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
 import 'package:xterm2/src/utils/escape_format.dart';
 
+part 'terminal_colors.dart';
 part 'terminal_modes.dart';
 
 enum _ProtectionMode { off, iso, dec }
@@ -451,21 +452,7 @@ class Terminal
   /// only.
   int _hyperlinkEvictionScanCellsForTesting = 0;
 
-  final Map<int, int> _indexedColorOverrides = {};
-  final Map<int, int> _specialColorOverrides = {};
-  final Map<int, int> _auxiliaryDynamicColorOverrides = {};
-
-  int? _foregroundColorOverride;
-
-  int? _backgroundColorOverride;
-
-  int? _cursorColorOverride;
-
-  int? _selectionColorOverride;
-
-  int? _selectionForegroundColorOverride;
-
-  int _colorRevision = 0;
+  final _colors = _ColorRegistry();
 
   String? _clipboardCaptureSelector;
   StringBuffer? _clipboardCaptureBuffer;
@@ -480,7 +467,7 @@ class Terminal
 
   int _nextHyperlinkId = 1;
 
-  int get colorRevision => _colorRevision;
+  int get colorRevision => _colors._colorRevision;
 
   TerminalSemanticPromptState get semanticPromptState => _semanticPromptState;
 
@@ -518,23 +505,23 @@ class Terminal
   }
 
   Iterable<MapEntry<int, int>> get indexedColorOverrides {
-    return _indexedColorOverrides.entries;
+    return _colors._indexedColorOverrides.entries;
   }
 
   Iterable<MapEntry<int, int>> get specialColorOverrides {
-    return _specialColorOverrides.entries;
+    return _colors._specialColorOverrides.entries;
   }
 
-  int? get foregroundColorOverride => _foregroundColorOverride;
+  int? get foregroundColorOverride => _colors._foregroundColorOverride;
 
-  int? get backgroundColorOverride => _backgroundColorOverride;
+  int? get backgroundColorOverride => _colors._backgroundColorOverride;
 
-  int? get cursorColorOverride => _cursorColorOverride;
+  int? get cursorColorOverride => _colors._cursorColorOverride;
 
-  int? get selectionColorOverride => _selectionColorOverride;
+  int? get selectionColorOverride => _colors._selectionColorOverride;
 
   int? get selectionForegroundColorOverride =>
-      _selectionForegroundColorOverride;
+      _colors._selectionForegroundColorOverride;
 
   late var _buffer = _mainBuffer;
 
@@ -3704,9 +3691,9 @@ class Terminal
     }
     if (index < 0 || index > 255) return;
     final color = _parseOscColor(value);
-    if (color == null || _indexedColorOverrides[index] == color) return;
-    _indexedColorOverrides[index] = color;
-    _colorRevision++;
+    if (color == null || _colors._indexedColorOverrides[index] == color) return;
+    _colors._indexedColorOverrides[index] = color;
+    _colors._colorRevision++;
   }
 
   @override
@@ -3717,7 +3704,7 @@ class Terminal
       return;
     }
     if (index < 0 || index > 255) return;
-    final color = _indexedColorOverrides[index] ?? onColorQuery?.call(4, index);
+    final color = _colors._indexedColorOverrides[index] ?? onColorQuery?.call(4, index);
     if (color == null) return;
     onOutput?.call('\x1b]4;$index;${_formatOscColor(color)}\x1b\\');
   }
@@ -3725,9 +3712,9 @@ class Terminal
   @override
   void resetIndexedColors(List<int> indices) {
     if (indices.isEmpty) {
-      if (_indexedColorOverrides.isEmpty) return;
-      _indexedColorOverrides.clear();
-      _colorRevision++;
+      if (_colors._indexedColorOverrides.isEmpty) return;
+      _colors._indexedColorOverrides.clear();
+      _colors._colorRevision++;
       return;
     }
 
@@ -3736,21 +3723,21 @@ class Terminal
       final specialIndex = _specialColorIndexFromPaletteIndex(index);
       if (specialIndex != null) {
         changed =
-            _specialColorOverrides.remove(specialIndex) != null || changed;
+            _colors._specialColorOverrides.remove(specialIndex) != null || changed;
         continue;
       }
-      changed = _indexedColorOverrides.remove(index) != null || changed;
+      changed = _colors._indexedColorOverrides.remove(index) != null || changed;
     }
-    if (changed) _colorRevision++;
+    if (changed) _colors._colorRevision++;
   }
 
   @override
   void setSpecialColor(int index, String value) {
     if (!_isSpecialColorIndex(index)) return;
     final color = _parseOscColor(value);
-    if (color == null || _specialColorOverrides[index] == color) return;
-    _specialColorOverrides[index] = color;
-    _colorRevision++;
+    if (color == null || _colors._specialColorOverrides[index] == color) return;
+    _colors._specialColorOverrides[index] = color;
+    _colors._colorRevision++;
   }
 
   @override
@@ -3760,7 +3747,7 @@ class Terminal
 
   void _querySpecialColor(int reportIndex, int storageIndex, int code) {
     if (!_isSpecialColorIndex(storageIndex)) return;
-    final color = _specialColorOverrides[storageIndex] ??
+    final color = _colors._specialColorOverrides[storageIndex] ??
         onColorQuery?.call(5, storageIndex);
     if (color == null) return;
     onOutput?.call('\x1b]$code;$reportIndex;${_formatOscColor(color)}\x1b\\');
@@ -3769,18 +3756,18 @@ class Terminal
   @override
   void resetSpecialColors(List<int> indices) {
     if (indices.isEmpty) {
-      if (_specialColorOverrides.isEmpty) return;
-      _specialColorOverrides.clear();
-      _colorRevision++;
+      if (_colors._specialColorOverrides.isEmpty) return;
+      _colors._specialColorOverrides.clear();
+      _colors._colorRevision++;
       return;
     }
 
     var changed = false;
     for (final index in indices) {
       if (!_isSpecialColorIndex(index)) continue;
-      changed = _specialColorOverrides.remove(index) != null || changed;
+      changed = _colors._specialColorOverrides.remove(index) != null || changed;
     }
-    if (changed) _colorRevision++;
+    if (changed) _colors._colorRevision++;
   }
 
   int? _specialColorIndexFromPaletteIndex(int index) {
@@ -3800,48 +3787,48 @@ class Terminal
 
     switch (code) {
       case 10:
-        if (_foregroundColorOverride == color) return;
-        _foregroundColorOverride = color;
+        if (_colors._foregroundColorOverride == color) return;
+        _colors._foregroundColorOverride = color;
         break;
       case 11:
-        if (_backgroundColorOverride == color) return;
-        _backgroundColorOverride = color;
+        if (_colors._backgroundColorOverride == color) return;
+        _colors._backgroundColorOverride = color;
         break;
       case 12:
-        if (_cursorColorOverride == color) return;
-        _cursorColorOverride = color;
+        if (_colors._cursorColorOverride == color) return;
+        _colors._cursorColorOverride = color;
         break;
       case 13:
       case 14:
       case 15:
       case 16:
       case 18:
-        if (_auxiliaryDynamicColorOverrides[code] == color) return;
-        _auxiliaryDynamicColorOverrides[code] = color;
+        if (_colors._auxiliaryDynamicColorOverrides[code] == color) return;
+        _colors._auxiliaryDynamicColorOverrides[code] = color;
         break;
       case 17:
-        if (_selectionColorOverride == color) return;
-        _selectionColorOverride = color;
+        if (_colors._selectionColorOverride == color) return;
+        _colors._selectionColorOverride = color;
         break;
       case 19:
-        if (_selectionForegroundColorOverride == color) return;
-        _selectionForegroundColorOverride = color;
+        if (_colors._selectionForegroundColorOverride == color) return;
+        _colors._selectionForegroundColorOverride = color;
         break;
       default:
         return;
     }
-    _colorRevision++;
+    _colors._colorRevision++;
   }
 
   @override
   void queryDynamicColor(int code) {
     final override = switch (code) {
-      10 => _foregroundColorOverride,
-      11 => _backgroundColorOverride,
-      12 => _cursorColorOverride,
-      17 => _selectionColorOverride,
-      19 => _selectionForegroundColorOverride,
-      _ => _auxiliaryDynamicColorOverrides[code],
+      10 => _colors._foregroundColorOverride,
+      11 => _colors._backgroundColorOverride,
+      12 => _colors._cursorColorOverride,
+      17 => _colors._selectionColorOverride,
+      19 => _colors._selectionForegroundColorOverride,
+      _ => _colors._auxiliaryDynamicColorOverrides[code],
     };
     final color = override ?? onColorQuery?.call(code, null);
     if (color == null) return;
@@ -3852,36 +3839,36 @@ class Terminal
   void resetDynamicColor(int code) {
     switch (code) {
       case 10:
-        if (_foregroundColorOverride == null) return;
-        _foregroundColorOverride = null;
+        if (_colors._foregroundColorOverride == null) return;
+        _colors._foregroundColorOverride = null;
         break;
       case 11:
-        if (_backgroundColorOverride == null) return;
-        _backgroundColorOverride = null;
+        if (_colors._backgroundColorOverride == null) return;
+        _colors._backgroundColorOverride = null;
         break;
       case 12:
-        if (_cursorColorOverride == null) return;
-        _cursorColorOverride = null;
+        if (_colors._cursorColorOverride == null) return;
+        _colors._cursorColorOverride = null;
         break;
       case 13:
       case 14:
       case 15:
       case 16:
       case 18:
-        if (_auxiliaryDynamicColorOverrides.remove(code) == null) return;
+        if (_colors._auxiliaryDynamicColorOverrides.remove(code) == null) return;
         break;
       case 17:
-        if (_selectionColorOverride == null) return;
-        _selectionColorOverride = null;
+        if (_colors._selectionColorOverride == null) return;
+        _colors._selectionColorOverride = null;
         break;
       case 19:
-        if (_selectionForegroundColorOverride == null) return;
-        _selectionForegroundColorOverride = null;
+        if (_colors._selectionForegroundColorOverride == null) return;
+        _colors._selectionForegroundColorOverride = null;
         break;
       default:
         return;
     }
-    _colorRevision++;
+    _colors._colorRevision++;
   }
 
   @override
