@@ -105,7 +105,6 @@ void main() {
     // a chance to be handled.
     testWidgets(
       'deleteDetection: true — should commit exactly once, in order',
-      skip: true,
       (tester) async {
         final (output, _) = await pumpTerminal(tester, deleteDetection: true);
 
@@ -156,7 +155,6 @@ void main() {
     // never just "$candidate" as a single, correctly-timed commit.
     testWidgets(
       'deleteDetection: true — should commit exactly once, in order',
-      skip: true,
       (tester) async {
         final (output, _) = await pumpTerminal(tester, deleteDetection: true);
 
@@ -219,7 +217,6 @@ void main() {
     // not `[0x7f]`: no real backspace signal ever reaches the terminal.
     testWidgets(
       'deleteDetection: false — backspace at offset 0 should still delete',
-      skip: true,
       (tester) async {
         final (output, _) = await pumpTerminal(tester, deleteDetection: false);
 
