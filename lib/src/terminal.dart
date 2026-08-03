@@ -26,6 +26,7 @@ import 'package:xterm2/src/core/state.dart';
 import 'package:xterm2/src/core/tabs.dart';
 import 'package:xterm2/src/utils/ascii.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
+import 'package:xterm2/src/utils/escape_format.dart';
 
 enum _ProtectionMode { off, iso, dec }
 
@@ -357,6 +358,23 @@ class Terminal
   /// escape sequence.
   void Function(String code, List<String> args)? onPrivateOSC;
 
+  /// Diagnostic hook for escape sequences the parser does not recognise.
+  ///
+  /// This fires for sequences the terminal deliberately ignores — an
+  /// unknown `ESC` dispatch, an unrecognised CSI final byte, an
+  /// unrecognised OSC `Ps`, or a DCS payload that matches no known
+  /// request. Ignoring unrecognised input is correct terminal behaviour and
+  /// this callback does not change that; it only lets you observe it.
+  /// [raw] contains the sequence as received, including the leading `ESC`,
+  /// formatted for readability (control bytes rendered as `^0x..`, `ESC`
+  /// spelled out, etc.) rather than as literal control characters.
+  ///
+  /// This is a diagnostic tool meant for answering "why isn't my escape
+  /// sequence working?" during development. It is not intended to be left
+  /// enabled in production: building the diagnostic text has a real cost,
+  /// paid only when this callback is set.
+  void Function(String raw)? onUnknownSequence;
+
   /// Flag to toggle os specific behaviors.
   final TerminalTargetPlatform platform;
 
@@ -397,6 +415,7 @@ class Terminal
     this.inputHandler = defaultInputHandler,
     this.mouseHandler = defaultMouseHandler,
     this.onPrivateOSC,
+    this.onUnknownSequence,
     this.reflowEnabled = true,
     this.wordSeparators,
   });
@@ -1526,7 +1545,19 @@ class Terminal
 
   @override
   void unknownEscape(int char) {
-    // no-op
+    if (onUnknownSequence == null) return;
+    _reportUnknownSequence();
+  }
+
+  /// Builds the diagnostic text for the escape sequence currently being
+  /// dispatched and forwards it to [onUnknownSequence].
+  ///
+  /// Callers must guard on `onUnknownSequence == null` themselves before
+  /// calling this, so that no work happens when the callback is unset.
+  void _reportUnknownSequence() {
+    onUnknownSequence!(
+      formatEscapeSequenceForDiagnostics(_parser.capturedToken()),
+    );
   }
 
   @Deprecated('Use unknownEscape instead. Will be removed in the next major.')
@@ -1816,6 +1847,12 @@ class Terminal
     final value = _terminfoCapability(key);
     if (value == null) return;
     onOutput?.call(_emitter.terminfoCapability(key, value));
+  }
+
+  @override
+  void unknownDCS(String payload) {
+    if (onUnknownSequence == null) return;
+    _reportUnknownSequence();
   }
 
   String? _hexDecode(String value) {
@@ -2697,7 +2734,8 @@ class Terminal
 
   @override
   void unknownCSI(int finalByte) {
-    // no-op
+    if (onUnknownSequence == null) return;
+    _reportUnknownSequence();
   }
 
   @override
@@ -4077,6 +4115,13 @@ class Terminal
     _handleVsCodeShellIntegrationOsc(ps, pt);
     _handleContextSignalOsc(ps, pt);
     onPrivateOSC?.call(ps, pt);
+
+    if (onUnknownSequence == null) return;
+    // These OSC families are recognised and acted on above; they only
+    // reach this fallback dispatch because they share it with genuinely
+    // unknown OSCs. Reporting them here would be a false positive.
+    if (ps == '133' || ps == '633' || ps == '3008') return;
+    _reportUnknownSequence();
   }
 
   void _handleContextSignalOsc(String ps, List<String> pt) {

@@ -115,6 +115,41 @@ class ByteConsumer {
     return offset - _currentOffset;
   }
 
+  /// Returns the most recently consumed [length] characters, as far as they
+  /// are still retained (i.e. have not been discarded by a call to
+  /// [unrefConsumedBlocks] since they were consumed). If part of the
+  /// requested range was already discarded, the returned string is
+  /// truncated to whatever is still available.
+  ///
+  /// This is intended for diagnostics only (unknown-sequence callbacks) and
+  /// is never called on the hot path when no diagnostic callback is
+  /// registered.
+  String recentConsumed(int length) {
+    if (length <= 0) return '';
+
+    final parts = <String>[];
+    var remaining = length;
+
+    if (_queue.isNotEmpty && _currentOffset > 0) {
+      final data = _queue.first.data;
+      final take = remaining < _currentOffset ? remaining : _currentOffset;
+      parts.add(data.substring(_currentOffset - take, _currentOffset));
+      remaining -= take;
+    }
+
+    if (remaining > 0) {
+      for (final block in _consumed.toList(growable: false).reversed) {
+        if (remaining <= 0) break;
+        final data = block.data;
+        final take = remaining < data.length ? remaining : data.length;
+        parts.add(data.substring(data.length - take));
+        remaining -= take;
+      }
+    }
+
+    return parts.reversed.join();
+  }
+
   void consumeAsciiCodeUnits(int count) {
     _advancePastConsumedBlocks();
     final available = _queue.first.data.length - _currentOffset;

@@ -132,6 +132,11 @@ abstract class EscapeHandler {
 
   void sendTerminfoCapability(String query);
 
+  /// Called for a DCS payload that does not match any recognised DCS
+  /// request. [payload] is the raw text between the DCS introducer and the
+  /// string terminator.
+  void unknownDCS(String payload);
+
   void setMargins(int i, [int? bottom]);
 
   void setLeftRightMargins(int left, [int? right]);
