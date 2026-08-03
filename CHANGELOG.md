@@ -1,5 +1,35 @@
 ## Unreleased
 
+* **Behavior change:** `Observable.listeners` is now an `Iterable<void Function()>`
+  view instead of a `Set<void Function()>`. Iterating, `length` and `contains`
+  keep working; code that mutated the set directly must call `addListener` and
+  `removeListener` instead. The backing storage is now an append-only list with
+  tombstoned removals, so `notifyListeners` no longer allocates a defensive copy
+  on every notification — it ran once per `Terminal.write`.
+* Cache rasterised procedural glyphs (box drawing, block elements, Powerline,
+  Braille) as `ui.Picture` keyed on code point, cell size and colour. They were
+  re-tesselated as vector paths on every repaint, including on a static screen.
+* Replace the paragraph cache's O(n log n) eviction with a lazily repaired
+  binary min-heap. Eviction previously copied and sorted every entry once per
+  batch; the cache-hit path stays allocation-free and untouched.
+* Prune OSC 8 hyperlink URIs when scrollback lines are evicted, instead of only
+  when the registry hits its ceiling. Eviction scans are batched so hyperlink
+  heavy output does not pay a full buffer scan per evicted line.
+* Assert that `Terminal.write` is not re-entered. Re-entering it from a listener
+  or an `onOutput`/`onBell`/`onTitleChange` callback corrupts parser state.
+* **Deprecated:** `EscapeHandler.unkownEscape` is superseded by the correctly
+  spelled `unknownEscape`. The old name still works and forwards to the new one;
+  it will be removed in the next major.
+* **Deprecated:** `CellData.getHash` is unused inside the package and will be
+  removed in the next major.
+* `BufferLine.data` is deprecated and marked `@visibleForTesting`; it exposed raw
+  cell storage for mutation. `BufferLine.anchors` now returns an unmodifiable
+  live view.
+* Add a seeded parser fuzz harness and assert real invariants in the stress test,
+  which previously only checked that nothing threw. Two pre-existing bugs the
+  harness uncovered — a `RangeError` in resize reflow and a wide character left
+  in a line's last column without room for its placeholder — are recorded as
+  skipped regression tests pending a fix.
 * **Behavior change:** `TerminalController` now defaults to `PointerInputs.all()`,
   so pointer motion and drag events reach the terminal. Applications that enable
   DEC private modes 1002 (button-event tracking) and 1003 (any-event tracking)
