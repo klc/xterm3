@@ -1552,6 +1552,106 @@ void main() {
     });
   });
 
+  group('Terminal.onUnknownSequence', () {
+    test('fires for an unrecognised ESC dispatch', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      // 'Q' is not a mapped ESC dispatch.
+      terminal.write('\x1bQ');
+
+      expect(reported, ['ESCQ']);
+    });
+
+    test('fires for an unrecognised CSI final byte', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      // 'i' has no entry in the CSI dispatch table.
+      terminal.write('\x1b[i');
+
+      expect(reported, ['ESC[i']);
+    });
+
+    test('fires for an unrecognised OSC Ps', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1b]999;hello\x07');
+
+      expect(reported, ['ESC]999;hello^0x7']);
+    });
+
+    test('fires for an unrecognised DCS payload', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1bPfoo\x1b\\');
+
+      expect(reported, [r'ESCPfooESC\']);
+    });
+
+    test('does not fire for a recognised ESC dispatch', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1bc'); // RIS full reset.
+
+      expect(reported, isEmpty);
+    });
+
+    test('does not fire for a recognised CSI sequence', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1b[5C'); // Cursor forward.
+
+      expect(reported, isEmpty);
+    });
+
+    test('does not fire for a recognised OSC sequence', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1b]0;hello\x07'); // Set title/icon name.
+
+      expect(reported, isEmpty);
+    });
+
+    test('does not fire for a recognised DCS sequence', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1bP\$qm\x1b\\'); // Request status string.
+
+      expect(reported, isEmpty);
+    });
+
+    test(
+      'does not fire for OSC 133/633/3008, which are handled internally '
+      'despite reaching the same fallback dispatch as unknown OSCs',
+      () {
+        final reported = <String>[];
+        final terminal = Terminal(onUnknownSequence: reported.add);
+
+        terminal.write('\x1b]133;A\x07');
+        terminal.write('\x1b]633;A\x07');
+        terminal.write('\x1b]3008;start=id\x07');
+
+        expect(reported, isEmpty);
+      },
+    );
+
+    test('does nothing when unset', () {
+      // Regression guard: writing unknown sequences without the callback
+      // set must not throw or otherwise misbehave.
+      final terminal = Terminal();
+
+      expect(() => terminal.write('\x1bQ\x1b[i\x1b]999;x\x07\x1bPfoo\x1b\\'),
+          returnsNormally);
+    });
+  });
+
   test('Terminal reports OSC 7 current directory URIs', () {
     String? currentDirectory;
     final terminal = Terminal(

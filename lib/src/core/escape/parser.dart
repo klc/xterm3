@@ -53,6 +53,16 @@ class EscapeParser {
   /// End of sequence or character being processed. Useful for debugging.
   int get tokenEnd => _queue.totalConsumed;
 
+  /// Returns the raw text of the token currently being dispatched (from
+  /// [tokenBegin] to [tokenEnd]), if it is still retained in memory. The
+  /// result may be truncated when the token was split across multiple
+  /// calls to [write].
+  ///
+  /// Intended for diagnostics only (e.g. unknown-sequence callbacks); only
+  /// call this when a diagnostic callback is actually registered, since it
+  /// does work proportional to the token length.
+  String capturedToken() => _queue.recentConsumed(tokenEnd - tokenBegin);
+
   void write(String chunk) {
     _queue.unrefConsumedBlocks();
     var data = chunk;
@@ -3012,7 +3022,10 @@ class EscapeParser {
       return;
     }
     if (_handleAssignUserPreferredSupplementalSet(payload)) return;
-    if (!payload.startsWith('+q')) return;
+    if (!payload.startsWith('+q')) {
+      handler.unknownDCS(payload);
+      return;
+    }
     for (final query in payload.substring(2).split(';')) {
       if (query.isEmpty) continue;
       handler.sendTerminfoCapability(query);

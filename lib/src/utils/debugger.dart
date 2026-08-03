@@ -2,6 +2,7 @@ import 'package:xterm2/src/core/escape/handler.dart';
 import 'package:xterm2/src/core/escape/parser.dart';
 import 'package:xterm2/src/core/mouse/mode.dart';
 import 'package:xterm2/src/base/observable.dart';
+import 'package:xterm2/src/utils/escape_format.dart';
 
 class TerminalCommand {
   TerminalCommand(
@@ -62,21 +63,8 @@ class TerminalDebugger with Observable {
     return String.fromCharCodes(charCodes);
   }
 
-  static String _escape(String chars) {
-    final escaped = StringBuffer();
-    for (final char in chars.runes) {
-      if (char == 0x1b) {
-        escaped.write('ESC');
-      } else if (char < 32) {
-        escaped.write('^0x${char.toRadixString(16)}');
-      } else if (char == 127) {
-        escaped.write('^?');
-      } else {
-        escaped.writeCharCode(char);
-      }
-    }
-    return escaped.toString();
-  }
+  static String _escape(String chars) =>
+      formatEscapeSequenceForDiagnostics(chars);
 }
 
 class _TerminalDebuggerHandler implements EscapeHandler {
@@ -359,6 +347,11 @@ class _TerminalDebuggerHandler implements EscapeHandler {
   @override
   void sendTerminfoCapability(String query) {
     onCommand('sendTerminfoCapability($query)');
+  }
+
+  @override
+  void unknownDCS(String payload) {
+    onCommand('unknownDCS($payload)', error: true);
   }
 
   @override
