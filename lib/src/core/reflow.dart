@@ -228,7 +228,22 @@ List<BufferLine> reflow(
   }
 
   for (var line in result) {
+    // Lines that took the "fits without reflow" fast path above are resized
+    // here for the first time. `BufferLine.resize` is a raw primitive that
+    // intentionally preserves any cell data beyond the new length so it can
+    // reappear if the line is grown back later (see BufferLine.resize
+    // tests) - it does not know about the width-2/placeholder pairing
+    // invariant. If this line was previously shrunk smaller than oldWidth
+    // and is now being grown, the newly exposed cell at the new last column
+    // may be a stale wide-char lead left over from before that earlier
+    // shrink, with no room left for its placeholder. Every other caller that
+    // resizes a line down to a hard boundary (see _LineReflow.add above)
+    // clears that cell if it turns out to be a dangling wide lead; do the
+    // same here.
     line.resize(newWidth);
+    if (newWidth > 0 && line.getWidth(newWidth - 1) == 2) {
+      line.resetCell(newWidth - 1);
+    }
   }
 
   return result;
