@@ -381,7 +381,6 @@ void main() {
         // lead is now dangling with a corrupted "placeholder".
         expect(() => _runFuzzSeed(0x1337, 6201), returnsNormally);
       },
-      skip: 'fix not yet landed for this bug - see BufferLine.setCell',
     );
 
     test(
@@ -399,7 +398,6 @@ void main() {
         // isn't specific to one token stream.
         expect(() => _runFuzzSeed(0xdeadbeef, 6326), returnsNormally);
       },
-      skip: 'fix not yet landed for this bug - see BufferLine.setCell',
     );
   });
 }
