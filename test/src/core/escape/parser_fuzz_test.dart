@@ -349,5 +349,57 @@ void main() {
         expect(() => _runFuzzSeed(0xc0ffee, 3226), returnsNormally);
       },
     );
+
+    test(
+      'a wide cell\'s placeholder is overwritten with a non-zero-width '
+      'filler cell when a wide char doesn\'t fit before the right margin '
+      '(seed 0x1337, round 6200)',
+      () {
+        // Expected behaviour: a width-2 cell must always be immediately
+        // followed by a width-0 placeholder cell with code point 0.
+        //
+        // Observed (found via XTERM2_FUZZ_ROUNDS=20000; 400 and 5000 rounds
+        // are both too short to reach this): the periodic invariant sampler
+        // in checkTerminalInvariants only inspects one random line every 25
+        // rounds, so it doesn't report this until round 6200, well after the
+        // corruption actually happens. Root cause confirmed directly (by
+        // instrumenting the write path and re-running this exact seed):
+        // Buffer.writeChar has a branch for when a width-2 character doesn't
+        // fit in the last column before the right margin (buffer.dart,
+        // around `cellWidth == 2 && _cursorX == rightLimit - 1`). That
+        // branch writes a width-1/code-point-0 filler cell at `_cursorX`
+        // *before* wrapping to the next line, so cursor movement past the
+        // margin is later recognisable. Unlike the ordinary write path a
+        // few lines below it - which always calls
+        // `line.clearWideCellAt(_cursorX, ...)` first - this branch never
+        // clears `_cursorX` first. When cursor positioning (e.g. CUP) has
+        // left `_cursorX` sitting on the placeholder half of an existing
+        // wide pair (i.e. `_cursorX - 1` holds a width-2 lead), the filler
+        // write silently destroys that placeholder in place - replacing its
+        // width-0/code-point-0 content with width-1/code-point-0 - while
+        // leaving the neighbouring lead cell still marked width 2. That
+        // lead is now dangling with a corrupted "placeholder".
+        expect(() => _runFuzzSeed(0x1337, 6201), returnsNormally);
+      },
+      skip: 'fix not yet landed for this bug - see BufferLine.setCell',
+    );
+
+    test(
+      'same wide-char/placeholder corruption as the 0x1337 regression above, '
+      'reached via a different token stream (seed 0xdeadbeef, round 6325)',
+      () {
+        // Same root cause as the 0x1337 regression immediately above:
+        // confirmed via the same instrumentation that this seed also hits
+        // Buffer.writeChar's un-clamped filler-cell write at
+        // `cellWidth == 2 && _cursorX == rightLimit - 1`, corrupting an
+        // existing wide pair's placeholder in place (much earlier, around
+        // round 5551, than the round-6325 invariant sample that reports
+        // it). Kept as a separate test because it was found independently
+        // by the fuzzer at a different seed/round and confirms the bug
+        // isn't specific to one token stream.
+        expect(() => _runFuzzSeed(0xdeadbeef, 6326), returnsNormally);
+      },
+      skip: 'fix not yet landed for this bug - see BufferLine.setCell',
+    );
   });
 }
