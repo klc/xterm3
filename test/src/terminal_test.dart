@@ -4953,6 +4953,25 @@ void main() {
     );
     expect(terminal.hyperlinkAt(const CellOffset(1, 0)), isNull);
   });
+
+  test('Terminal line feed scrolls a partial region without shifting rows '
+      'below the bottom margin', () {
+    final terminal = Terminal()..resize(10, 8);
+
+    // Region covers rows 1..4, with a status line pinned at row 5, the way
+    // apt draws its progress bar.
+    terminal.write('\x1b[1;4r');
+    for (var i = 1; i <= 6; i++) {
+      terminal.write('\x1b7\x1b[5;1Hbar $i\x1b8line $i\r\n');
+    }
+
+    expect(terminal.buffer.lines[0].getText().trimRight(), 'line 4');
+    expect(terminal.buffer.lines[1].getText().trimRight(), 'line 5');
+    expect(terminal.buffer.lines[2].getText().trimRight(), 'line 6');
+    expect(terminal.buffer.lines[3].getText().trimRight(), '');
+    expect(terminal.buffer.lines[4].getText().trimRight(), 'bar 6');
+    expect(terminal.buffer.height, 8);
+  });
 }
 
 class _TrackingTerminal extends Terminal {

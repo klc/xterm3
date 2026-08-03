@@ -956,11 +956,11 @@ class Buffer {
     if (isInVerticalMargin) {
       if (!isInHorizontalMarginOrPendingWrap) return;
       if (_cursorY == _marginBottom) {
-        if (marginTop == 0 && !isAltBuffer) {
-          lines.insert(absoluteMarginBottom + 1, _newEmptyLine());
-        } else {
-          scrollUp(1);
-        }
+        // scrollUp() already pushes new lines onto the scrollback when the
+        // margins cover the whole viewport; inserting a line here instead
+        // would leave a partial scroll region unscrolled and shift every row
+        // below the bottom margin down.
+        scrollUp(1);
       } else {
         moveCursorY(1);
       }
