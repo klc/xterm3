@@ -32,6 +32,7 @@ part 'terminal_clipboard.dart';
 part 'terminal_colors.dart';
 part 'terminal_modes.dart';
 part 'terminal_semantic_prompt.dart';
+part 'terminal_sgr.dart';
 
 enum _ProtectionMode { off, iso, dec }
 
@@ -179,7 +180,7 @@ final class TerminalContextSignal {
 /// translating user input into escape sequences that the application can
 /// understand.
 class Terminal
-    with Observable
+    with Observable, _SgrHandlers
     implements TerminalState, EscapeHandler, EscapeTextHandler {
   static const _maxHyperlinks = 4096;
   static const _maxHyperlinkId =
@@ -497,6 +498,7 @@ class Terminal
 
   int _cellPixelHeight = 0;
 
+  @override
   final _cursorStyle = CursorStyle();
 
   final _modes = _TerminalModes();
@@ -533,6 +535,7 @@ class Terminal
 
   int _lineTransmitTerminationCharacter = 0;
 
+  @override
   final _assignedColors = <int, ({int foreground, int background})>{};
 
   final _alternateTextColors = <int, ({int foreground, int background})>{};
@@ -2400,6 +2403,7 @@ class Terminal
     return current == _namedColor(assigned);
   }
 
+  @override
   int _namedColor(int color) {
     return color | CellColor.named;
   }
@@ -3055,216 +3059,6 @@ class Terminal
     if (enabled) return;
 
     _buffer.resetHorizontalMargins();
-  }
-
-  /* Select Graphic Rendition (SGR) */
-
-  @override
-  void resetCursorStyle() {
-    _cursorStyle.reset();
-    _resetAssignedTextColors();
-  }
-
-  void _resetAssignedTextColors() {
-    final normalTextColor = _assignedColors[1];
-    if (normalTextColor == null) return;
-    _cursorStyle.foreground = _namedColor(normalTextColor.foreground);
-    _cursorStyle.background = _namedColor(normalTextColor.background);
-  }
-
-  @override
-  void setCursorBold() {
-    _cursorStyle.setBold();
-  }
-
-  @override
-  void setCursorFaint() {
-    _cursorStyle.setFaint();
-  }
-
-  @override
-  void setCursorItalic() {
-    _cursorStyle.setItalic();
-  }
-
-  @override
-  void setCursorUnderline() {
-    _cursorStyle.setUnderline();
-  }
-
-  @override
-  void setCursorDoubleUnderline() {
-    _cursorStyle.setDoubleUnderline();
-  }
-
-  @override
-  void setCursorUndercurl() {
-    _cursorStyle.setUndercurl();
-  }
-
-  @override
-  void setCursorDottedUnderline() {
-    _cursorStyle.setDottedUnderline();
-  }
-
-  @override
-  void setCursorDashedUnderline() {
-    _cursorStyle.setDashedUnderline();
-  }
-
-  @override
-  void setCursorBlink() {
-    _cursorStyle.setBlink();
-  }
-
-  @override
-  void setCursorInverse() {
-    _cursorStyle.setInverse();
-  }
-
-  @override
-  void setCursorInvisible() {
-    _cursorStyle.setInvisible();
-  }
-
-  @override
-  void setCursorStrikethrough() {
-    _cursorStyle.setStrikethrough();
-  }
-
-  @override
-  void setCursorOverline() {
-    _cursorStyle.setOverline();
-  }
-
-  @override
-  void setCursorFramed() {
-    _cursorStyle.setFramed();
-  }
-
-  @override
-  void setCursorEncircled() {
-    _cursorStyle.setEncircled();
-  }
-
-  @override
-  void unsetCursorBold() {
-    _cursorStyle.unsetBold();
-  }
-
-  @override
-  void unsetCursorFaint() {
-    _cursorStyle.unsetFaint();
-  }
-
-  @override
-  void unsetCursorItalic() {
-    _cursorStyle.unsetItalic();
-  }
-
-  @override
-  void unsetCursorUnderline() {
-    _cursorStyle.unsetUnderline();
-  }
-
-  @override
-  void unsetCursorBlink() {
-    _cursorStyle.unsetBlink();
-  }
-
-  @override
-  void unsetCursorInverse() {
-    _cursorStyle.unsetInverse();
-  }
-
-  @override
-  void unsetCursorInvisible() {
-    _cursorStyle.unsetInvisible();
-  }
-
-  @override
-  void unsetCursorStrikethrough() {
-    _cursorStyle.unsetStrikethrough();
-  }
-
-  @override
-  void unsetCursorOverline() {
-    _cursorStyle.unsetOverline();
-  }
-
-  @override
-  void unsetCursorFrame() {
-    _cursorStyle.unsetFrame();
-  }
-
-  @override
-  void setForegroundColor16(int color) {
-    _cursorStyle.setForegroundColor16(color);
-  }
-
-  @override
-  void setForegroundColor256(int index) {
-    _cursorStyle.setForegroundColor256(index);
-  }
-
-  @override
-  void setForegroundColorRgb(int r, int g, int b) {
-    _cursorStyle.setForegroundColorRgb(r, g, b);
-  }
-
-  @override
-  void resetForeground() {
-    final normalTextColor = _assignedColors[1];
-    if (normalTextColor == null) {
-      _cursorStyle.resetForegroundColor();
-      return;
-    }
-    _cursorStyle.foreground = _namedColor(normalTextColor.foreground);
-  }
-
-  @override
-  void setBackgroundColor16(int color) {
-    _cursorStyle.setBackgroundColor16(color);
-  }
-
-  @override
-  void setBackgroundColor256(int index) {
-    _cursorStyle.setBackgroundColor256(index);
-  }
-
-  @override
-  void setBackgroundColorRgb(int r, int g, int b) {
-    _cursorStyle.setBackgroundColorRgb(r, g, b);
-  }
-
-  @override
-  void resetBackground() {
-    final normalTextColor = _assignedColors[1];
-    if (normalTextColor == null) {
-      _cursorStyle.resetBackgroundColor();
-      return;
-    }
-    _cursorStyle.background = _namedColor(normalTextColor.background);
-  }
-
-  @override
-  void setUnderlineColor256(int index) {
-    _cursorStyle.setUnderlineColor256(index);
-  }
-
-  @override
-  void setUnderlineColorRgb(int r, int g, int b) {
-    _cursorStyle.setUnderlineColorRgb(r, g, b);
-  }
-
-  @override
-  void resetUnderlineColor() {
-    _cursorStyle.resetUnderlineColor();
-  }
-
-  @override
-  void unsupportedStyle(int param) {
-    // no-op
   }
 
   /* OSC */
