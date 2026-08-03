@@ -66,11 +66,17 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// collapsed editing value; it must not reach the terminal twice.
   String? _actionCommittedText;
 
-  /// The content of an open composing range in [deleteDetection] mode, once
-  /// it has been recognised as a genuine multi-character preview (as opposed
-  /// to a single trapped keystroke - see [_updateEditingValueWithDeleteDetection]).
-  /// Non-null exactly while such a preview is open and not yet committed.
+  /// The content of an open, not-yet-resolved composing range in
+  /// [deleteDetection] mode - see [_updateEditingValueWithDeleteDetection].
+  /// Non-null exactly while such a range is open and its fate (genuine
+  /// preview vs. trapped keystroke) has not yet been decided.
   String? _pendingComposingText;
+
+  /// The `composing.start` of [_pendingComposingText], used to tell a
+  /// composing range that is being extended in place (same base, growing
+  /// text - a real preview) from one that has been replaced by an unrelated
+  /// fresh range at the same base (a trapped keystroke, see f6568e1).
+  int? _pendingComposingBase;
 
   @override
   void initState() {
@@ -309,38 +315,87 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// still-open multi-character preview, emission is deferred and only the
   /// text the IME actually commits is emitted once composing closes.
   ///
-  /// The exception is the pattern some Android keyboards (Gboard, Samsung,
-  /// SwiftKey) produce for a single already-resolved keypress: they wrap it
-  /// in a composing range that never collapses on its own (fixed by
-  /// f6568e1). Such a range always opens fresh (no composition already
-  /// tracked) with exactly one character in it, unlike a real preview, which
-  /// opens with the word/syllable being built. That one-character-fresh-open
-  /// shape is committed immediately instead of waiting for a collapse that
-  /// will never arrive, which is what keeps every trapped keystroke landing
-  /// exactly once.
+  /// The complication is the pattern some Android keyboards (Gboard,
+  /// Samsung, SwiftKey) produce for a single already-resolved keypress: they
+  /// wrap it in a composing range that never collapses on its own (fixed by
+  /// f6568e1). Such a range opens fresh with exactly one character in it -
+  /// but so does a genuine preview, on its very first keystroke. A bare
+  /// length check can't tell those apart, so instead this tracks whether an
+  /// open composing range is being *extended in place*:
+  ///
+  ///   - a range whose base stays put and whose text keeps growing is a
+  ///     real, still-open preview - keep deferring.
+  ///   - a range that collapses is a resolved commit - emit it once.
+  ///   - a *different* range appearing at the same base without the
+  ///     previous one ever growing or collapsing is the f6568e1 shape: the
+  ///     previous keystroke was already resolved and is never coming back,
+  ///     so it is flushed now instead of waiting for a collapse that will
+  ///     never arrive.
   void _updateEditingValueWithDeleteDetection(TextEditingValue value) {
     final text = value.text;
     final initLength = _initEditingState.text.length;
 
     if (value.composing.isValid) {
       final composingText = value.composing.textInside(text);
+      final base = value.composing.start;
+      final pending = _pendingComposingText;
 
-      if (_pendingComposingText == null && composingText.length <= 1) {
-        widget.onComposing(null);
+      final isExtendingPending = pending != null &&
+          base == _pendingComposingBase &&
+          composingText.length > pending.length;
+
+      if (isExtendingPending) {
+        _pendingComposingText = composingText;
+        widget.onComposing(composingText);
+        return;
+      }
+
+      if (pending != null && pending.length > 1) {
+        // The pending range already held more than one character, so it was
+        // never an ambiguous fresh single-keystroke open - it was already a
+        // confirmed, substantial preview (e.g. a pinyin buffer). Replacing
+        // it wholesale, even with something shorter, is an ordinary step in
+        // the same composition (e.g. picking a hanzi candidate), not the
+        // f6568e1 trapped-keystroke shape, which only ever involves single
+        // characters. Keep deferring.
+        _pendingComposingText = composingText;
+        _pendingComposingBase = base;
+        widget.onComposing(composingText);
+        return;
+      }
+
+      if (pending != null) {
+        // The pending range was a single, unconfirmed character and has now
+        // been replaced by another fresh range without ever growing or
+        // collapsing - the previous keystroke is done and will never
+        // collapse on its own (f6568e1), so flush it now. The replacement
+        // is exactly as resolved as the one it replaced (nothing else has
+        // arrived to prove otherwise), so it is flushed immediately too
+        // rather than reopened as a new pending range.
+        if (pending.isNotEmpty) {
+          widget.onInsert(pending);
+        }
         if (composingText.isNotEmpty) {
           widget.onInsert(composingText);
         }
+        widget.onComposing(null);
         _resetEditingState();
         return;
       }
 
+      // Freshly opened range, nothing pending yet. This might be the start
+      // of a genuine preview or a trapped keystroke - hold it pending and
+      // let the next update (extension, collapse, or replacement above)
+      // decide, instead of assuming either way.
       _pendingComposingText = composingText;
+      _pendingComposingBase = base;
       widget.onComposing(composingText);
       return;
     }
 
     widget.onComposing(null);
     _pendingComposingText = null;
+    _pendingComposingBase = null;
 
     if (text.length < initLength) {
       final deleteCount = initLength - text.length;
@@ -399,6 +454,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void _resetEditingState() {
     _currentEditingState = _initEditingState;
     _pendingComposingText = null;
+    _pendingComposingBase = null;
     _connection?.setEditingState(_initEditingState);
   }
 
