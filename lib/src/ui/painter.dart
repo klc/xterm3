@@ -5,6 +5,7 @@ import 'package:flutter/painting.dart';
 
 import 'package:xterm2/src/ui/palette_builder.dart';
 import 'package:xterm2/src/ui/paragraph_cache.dart';
+import 'package:xterm2/src/ui/procedural_glyph_cache.dart';
 import 'package:xterm2/src/ui/procedural_glyphs.dart';
 import 'package:xterm2/xterm.dart';
 
@@ -15,6 +16,7 @@ const _specialBlinkColor = 2;
 const _specialReverseColor = 3;
 const _specialItalicColor = 4;
 const _defaultParagraphCacheSize = 2048;
+const _defaultProceduralGlyphCacheSize = 512;
 
 /// Upper bound on the number of cells a single shaped ligature run may cover.
 ///
@@ -98,11 +100,13 @@ class TerminalPainter {
     required TextScaler textScaler,
     double devicePixelRatio = 1.0,
     int paragraphCacheSize = _defaultParagraphCacheSize,
+    int proceduralGlyphCacheSize = _defaultProceduralGlyphCacheSize,
   })  : _textStyle = textStyle,
         _theme = theme,
         _textScaler = textScaler,
         _devicePixelRatio = devicePixelRatio,
-        _paragraphCache = ParagraphCache(paragraphCacheSize);
+        _paragraphCache = ParagraphCache(paragraphCacheSize),
+        _proceduralGlyphCache = ProceduralGlyphCache(proceduralGlyphCacheSize);
 
   /// A lookup table from terminal colors to Flutter colors.
   late var _colorPalette = PaletteBuilder(_theme).build();
@@ -114,6 +118,12 @@ class TerminalPainter {
   /// cell no longer produces the same visual output. For example, when
   /// [_textStyle] is changed, or when the system font changes.
   final ParagraphCache _paragraphCache;
+
+  /// Cache of rasterised procedural glyphs (box-drawing, Powerline, Braille).
+  /// Should be invalidated at the same points as [_paragraphCache]: anything
+  /// that changes the cell size or the resolved fill color changes what a
+  /// given (codepoint, cell size, color) key should rasterise to.
+  final ProceduralGlyphCache _proceduralGlyphCache;
 
   /// Reused during cell painting to avoid allocating objects per visible cell.
   ///
@@ -194,6 +204,7 @@ class TerminalPainter {
     _devicePixelRatio = value;
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    _proceduralGlyphCache.clear();
   }
 
   /// Rounds [value] to a whole number of device pixels, expressed back in
@@ -226,6 +237,7 @@ class TerminalPainter {
   /// under one font may well ligate under the next.
   void _clearParagraphCache() {
     _paragraphCache.clear();
+    _proceduralGlyphCache.clear();
     _rejectedLigatureRuns.clear();
   }
 
@@ -262,6 +274,8 @@ class TerminalPainter {
   Size get cellSize => _cellSize;
 
   int get paragraphCacheLength => _paragraphCache.length;
+
+  int get proceduralGlyphCacheLength => _proceduralGlyphCache.length;
 
   int glyphConstraintCellSpan(BufferLine line, int column) {
     final gridWidth = line.getWidth(column);
@@ -359,6 +373,7 @@ class TerminalPainter {
   void dispose() {
     _clearParagraphCache();
     _paragraphCache.dispose();
+    _proceduralGlyphCache.dispose();
   }
 
   /// Paints the cursor based on the current cursor type.
@@ -885,6 +900,7 @@ class TerminalPainter {
           _cellSize,
           charCode,
           _foregroundPaint,
+          cache: _proceduralGlyphCache,
         )) {
       _paintManualDecorations(
         canvas,
