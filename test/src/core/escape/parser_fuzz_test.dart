@@ -275,10 +275,6 @@ void main() {
             reason: 'a wide cell at the last column of the line has no '
                 'room for its placeholder cell');
       },
-      skip: 'Known bug found by the fuzzer: a wide character can be placed '
-          'in the very last column of a line with no placeholder cell '
-          'after it, violating the width-2/placeholder pairing invariant. '
-          'Do not fix lib/ here - tracked for follow-up.',
     );
 
     test(
@@ -319,10 +315,30 @@ void main() {
         // a self-contained repro independent of the loop's own resize call).
         expect(() => terminal.resize(40, 20), returnsNormally);
       },
-      skip: 'Known bug found by the fuzzer: Buffer.resize/reflow throws a '
-          'RangeError for buffer content that reached an invalid '
-          'wide-cell/placeholder state (see the regression above). Do not '
-          'fix lib/ here - tracked for follow-up.',
+    );
+
+    test(
+      'BUG: a wide cell\'s placeholder is overwritten with non-zero '
+      'content by a lone ESC probe (seed 0xc0ffee, round 3225)',
+      () {
+        // Expected behaviour: as with the two regressions above, a width-2
+        // cell must always be immediately followed by a width-0 placeholder
+        // cell with code point 0. Observed: this is a DIFFERENT root cause
+        // from the two regressions above - it reproduces on a fresh, never
+        // resized 80x24 terminal (found via
+        // XTERM2_FUZZ_ROUNDS=5000; the default 400-round CI run is too
+        // short to reach it). After round 3225 of this seed's stream
+        // (triggered by a lone "ESC ESC" token), line 108 col 65 - the
+        // placeholder for a wide cell at col 64 - has non-zero width/code
+        // point. Not investigated further; tracked for follow-up.
+        expect(() => _runFuzzSeed(0xc0ffee, 3226), returnsNormally);
+      },
+      skip: 'Known bug found by the fuzzer with XTERM2_FUZZ_ROUNDS=5000: a '
+          "wide cell's placeholder cell is overwritten with non-zero "
+          'content at line 108 col 65 after a lone ESC ESC token at round '
+          '3225. Unrelated to Buffer.resize/reflow (no resize involved in '
+          'this repro) - a different root cause from the two regressions '
+          'above. Do not fix lib/ here - tracked for follow-up.',
     );
   });
 }

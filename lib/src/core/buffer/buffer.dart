@@ -1645,7 +1645,20 @@ class Buffer {
         cursorAnchor.dispose();
         savedCursorAnchor.dispose();
       } else {
-        lines.forEach((item) => item.resize(newWidth));
+        lines.forEach((item) {
+          // BufferLine.resize intentionally preserves cell data beyond the
+          // new length so it can reappear if the line is grown back later
+          // (see the "preserves hidden cells" resize tests) - it does not
+          // enforce the width-2/placeholder pairing invariant. If this line
+          // was shrunk smaller than newWidth in the past and is now being
+          // grown, the newly exposed last cell may be a stale wide-char
+          // lead with no room left for its placeholder, so clear it (same
+          // guard applied by reflow() for the reflow-enabled path).
+          item.resize(newWidth);
+          if (newWidth > 0 && item.getWidth(newWidth - 1) == 2) {
+            item.resetCell(newWidth - 1);
+          }
+        });
         _cursorX = _cursorX.clamp(0, newWidth - 1);
         _savedCursorX = _savedCursorX.clamp(0, newWidth - 1);
         _savedPendingWrap = false;
