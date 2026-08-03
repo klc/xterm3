@@ -1,11 +1,17 @@
 import 'dart:ui';
 
-import 'package:flutter/widgets.dart';
-
-/// A cache of laid out [Paragraph]s. This is used to avoid laying out the same
-/// text multiple times, which is expensive.
-class ParagraphCache {
-  ParagraphCache(this.maximumSize) {
+/// A cache of rasterised procedural glyphs (box-drawing, Powerline, Braille,
+/// etc). These are drawn as vector paths rather than shaped from a font, so
+/// without this cache the same vector path would be rebuilt and rasterised on
+/// every repaint of every cell that uses one, even on an otherwise static
+/// screen.
+///
+/// Follows the same LRU-with-lazy-eviction pattern as [ParagraphCache]: a
+/// min-heap of recency snapshots is used to find eviction candidates in
+/// O(log n) instead of resorting the whole cache, and a cache hit only bumps
+/// a counter, never mutating the cache or the heap.
+class ProceduralGlyphCache {
+  ProceduralGlyphCache(this.maximumSize) {
     if (maximumSize <= 0) {
       throw ArgumentError.value(maximumSize, 'maximumSize');
     }
@@ -13,15 +19,11 @@ class ParagraphCache {
 
   final int maximumSize;
 
-  final _cache = <Object, _CachedParagraph>{};
+  final _cache = <Object, _CachedPicture>{};
 
-  /// Min-heap of recency snapshots, ordered by [_HeapEntry.lastUsed], used to
-  /// find eviction candidates in O(log n) instead of resorting the whole
-  /// cache on every eviction. A heap entry can go stale - see
-  /// [_evictLeastRecentlyUsed] - because a cache hit bumps an entry's
-  /// [_CachedParagraph.lastUsed] without touching the heap (see
-  /// [getLayoutFromCache]); staleness is detected and repaired lazily, only
-  /// when it is encountered while evicting.
+  /// Min-heap of recency snapshots, ordered by [_HeapEntry.lastUsed]. See
+  /// [ParagraphCache._recencyHeap] for the full rationale - the same
+  /// lazy-repair scheme is used here.
   final _recencyHeap = <_HeapEntry>[];
 
   /// Monotonic counter used to order entries by recency of use. Reading an
@@ -36,39 +38,26 @@ class ParagraphCache {
     return batchSize < 1 ? 1 : batchSize;
   }
 
-  /// Returns a [Paragraph] for the given [key]. [key] is the same as the
-  /// key argument to [performAndCacheLayout].
-  Paragraph? getLayoutFromCache(Object key) {
+  /// Returns the cached [Picture] for [key], if any, bumping its recency.
+  Picture? getFromCache(Object key) {
     final entry = _cache[key];
     if (entry == null) return null;
     entry.lastUsed = ++_clock;
-    return entry.paragraph;
+    return entry.picture;
   }
 
-  /// Applies [style] and [textScaler] to [text] and lays it out to create
-  /// a [Paragraph]. The [Paragraph] is cached and can be retrieved with the
-  /// same [key] by calling [getLayoutFromCache].
-  Paragraph performAndCacheLayout(
-    String text,
-    TextStyle style,
-    TextScaler textScaler,
-    Object key,
-  ) {
-    final builder = ParagraphBuilder(style.getParagraphStyle());
-    builder.pushStyle(style.getTextStyle(textScaler: textScaler));
-    builder.addText(text);
-
-    final paragraph = builder.build();
-    paragraph.layout(ParagraphConstraints(width: double.infinity));
-
-    _cache.remove(key)?.paragraph.dispose();
+  /// Inserts [picture] into the cache under [key], evicting the least
+  /// recently used entries first if the cache is full.
+  ///
+  /// [key] must not already be present in the cache - callers should check
+  /// [getFromCache] first.
+  void insert(Object key, Picture picture) {
     if (_cache.length >= maximumSize) {
       _evictLeastRecentlyUsed();
     }
     final lastUsed = ++_clock;
-    _cache[key] = _CachedParagraph(paragraph, lastUsed);
+    _cache[key] = _CachedPicture(picture, lastUsed);
     _heapPush(_HeapEntry(key, lastUsed));
-    return paragraph;
   }
 
   void _evictLeastRecentlyUsed() {
@@ -81,31 +70,24 @@ class ParagraphCache {
       final candidate = _heapPop();
       final entry = _cache[candidate.key];
       if (entry == null) {
-        // This heap node refers to an entry that was already evicted or
-        // replaced (performAndCacheLayout removes+disposes on key reuse).
-        // Just drop it.
         continue;
       }
       if (entry.lastUsed != candidate.lastUsed) {
-        // The entry was read (or replaced) again after this heap node was
-        // created, so its recorded priority is out of date. Re-insert it
-        // with the up-to-date priority - lazily "repairing" it instead of
-        // resorting anything - and keep looking for the true LRU entry.
         _heapPush(_HeapEntry(candidate.key, entry.lastUsed));
         continue;
       }
       _cache.remove(candidate.key);
-      entry.paragraph.dispose();
+      entry.picture.dispose();
       evicted++;
     }
   }
 
-  /// Clears the cache. This should be called when the same text and style
-  /// pair no longer produces the same layout. For example, when a font is
-  /// loaded.
+  /// Clears the cache. This should be called whenever the same key could
+  /// stop producing the same rasterised output, for example when the cell
+  /// size or a relevant color changes.
   void clear() {
     for (final entry in _cache.values) {
-      entry.paragraph.dispose();
+      entry.picture.dispose();
     }
     _cache.clear();
     _recencyHeap.clear();
@@ -115,10 +97,8 @@ class ParagraphCache {
     clear();
   }
 
-  /// Returns the number of [Paragraph]s in the cache.
-  int get length {
-    return _cache.length;
-  }
+  /// Returns the number of [Picture]s in the cache.
+  int get length => _cache.length;
 
   void _heapPush(_HeapEntry entry) {
     _recencyHeap.add(entry);
@@ -163,16 +143,16 @@ class ParagraphCache {
   }
 }
 
-class _CachedParagraph {
-  _CachedParagraph(this.paragraph, this.lastUsed);
+class _CachedPicture {
+  _CachedPicture(this.picture, this.lastUsed);
 
-  final Paragraph paragraph;
+  final Picture picture;
 
   int lastUsed;
 }
 
 /// A snapshot of a cache entry's recency at the time it was pushed onto
-/// [ParagraphCache._recencyHeap].
+/// [ProceduralGlyphCache._recencyHeap].
 class _HeapEntry {
   _HeapEntry(this.key, this.lastUsed);
 

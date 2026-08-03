@@ -1552,6 +1552,106 @@ void main() {
     });
   });
 
+  group('Terminal.onUnknownSequence', () {
+    test('fires for an unrecognised ESC dispatch', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      // 'Q' is not a mapped ESC dispatch.
+      terminal.write('\x1bQ');
+
+      expect(reported, ['ESCQ']);
+    });
+
+    test('fires for an unrecognised CSI final byte', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      // 'i' has no entry in the CSI dispatch table.
+      terminal.write('\x1b[i');
+
+      expect(reported, ['ESC[i']);
+    });
+
+    test('fires for an unrecognised OSC Ps', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1b]999;hello\x07');
+
+      expect(reported, ['ESC]999;hello^0x7']);
+    });
+
+    test('fires for an unrecognised DCS payload', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1bPfoo\x1b\\');
+
+      expect(reported, [r'ESCPfooESC\']);
+    });
+
+    test('does not fire for a recognised ESC dispatch', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1bc'); // RIS full reset.
+
+      expect(reported, isEmpty);
+    });
+
+    test('does not fire for a recognised CSI sequence', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1b[5C'); // Cursor forward.
+
+      expect(reported, isEmpty);
+    });
+
+    test('does not fire for a recognised OSC sequence', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1b]0;hello\x07'); // Set title/icon name.
+
+      expect(reported, isEmpty);
+    });
+
+    test('does not fire for a recognised DCS sequence', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      terminal.write('\x1bP\$qm\x1b\\'); // Request status string.
+
+      expect(reported, isEmpty);
+    });
+
+    test(
+      'does not fire for OSC 133/633/3008, which are handled internally '
+      'despite reaching the same fallback dispatch as unknown OSCs',
+      () {
+        final reported = <String>[];
+        final terminal = Terminal(onUnknownSequence: reported.add);
+
+        terminal.write('\x1b]133;A\x07');
+        terminal.write('\x1b]633;A\x07');
+        terminal.write('\x1b]3008;start=id\x07');
+
+        expect(reported, isEmpty);
+      },
+    );
+
+    test('does nothing when unset', () {
+      // Regression guard: writing unknown sequences without the callback
+      // set must not throw or otherwise misbehave.
+      final terminal = Terminal();
+
+      expect(() => terminal.write('\x1bQ\x1b[i\x1b]999;x\x07\x1bPfoo\x1b\\'),
+          returnsNormally);
+    });
+  });
+
   test('Terminal reports OSC 7 current directory URIs', () {
     String? currentDirectory;
     final terminal = Terminal(
@@ -4857,6 +4957,59 @@ void main() {
       terminal.hyperlinkAt(const CellOffset(0, 0)),
       'https://example.com/after-prune',
     );
+  });
+
+  test('Terminal prunes hyperlinks as scrollback lines are evicted', () {
+    final terminal = Terminal(maxLines: 20)..resize(10, 1);
+
+    // Each hyperlink lives on its own line. Once scrollback (20 lines) starts
+    // evicting old lines, the hyperlinks that lived only on those lines
+    // should eventually be pruned from the registry instead of lingering
+    // all the way to the 4096 entry ceiling. Evictions are resolved in
+    // batches rather than immediately, so a small multiple of the batch
+    // size is expected to remain resident at any given moment - the bound
+    // below is generous but still far below the 4096 ceiling.
+    for (var index = 0; index < 500; index++) {
+      terminal.write(
+        '\x1b]8;;https://example.com/$index\x1b\\x\x1b]8;;\x1b\\\n',
+      );
+    }
+
+    expect(terminal.debugHyperlinkCount, lessThan(300));
+  });
+
+  test(
+      'Terminal amortizes hyperlink eviction scans instead of scanning per '
+      'eviction', () {
+    final terminal = Terminal(maxLines: 50)..resize(20, 1);
+
+    // Each hyperlink is distinct and lives on its own line, so once a line
+    // is evicted its hyperlink is never referenced anywhere else - the
+    // worst case for eviction pruning (this is what tools like
+    // `ls --hyperlink=auto` or build logs produce). If eviction resolution
+    // scans both buffers on every single eviction (instead of batching many
+    // evictions into one scan), the total number of cell inspections grows
+    // roughly with evictions * scrollback size, i.e. quadratically in the
+    // number of lines written. With batching it grows roughly linearly:
+    // number of scans is evictions / batchSize, each costing O(buffer
+    // size), so total cost is O(evictions * buffer size / batchSize).
+    const lineCount = 4000;
+    for (var index = 0; index < lineCount; index++) {
+      terminal.write(
+        '\x1b]8;;https://example.com/$index\x1b\\x\x1b]8;;\x1b\\\n',
+      );
+    }
+
+    // Unbatched (scan-per-eviction) would cost roughly
+    // evictions * (maxLines + altBufferLines) * columns
+    // = ~3950 * 51 * 20 ≈ 4,000,000 cell inspections.
+    // Batched (128-per-scan) costs roughly
+    // (evictions / 128) * (maxLines + altBufferLines) * columns
+    // ≈ 31 * 51 * 20 ≈ 31,000 cell inspections.
+    // The bound below sits comfortably above the batched estimate and
+    // nowhere near the unbatched one, so it fails against a scan-per-
+    // eviction implementation and passes against a batched one.
+    expect(terminal.debugHyperlinkEvictionScanCells, lessThan(200000));
   });
 
   test('Terminal insert blank chars shifts hyperlinks without linking blanks',

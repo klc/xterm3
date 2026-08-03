@@ -3,9 +3,13 @@ import 'dart:math';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm2/xterm.dart';
 
+import '../_support/terminal_invariants.dart';
+
 void main() {
   test('Terminal survives deterministic output and resize stress', () {
-    final random = Random(0x5eeda11);
+    const seed = 0x5eeda11;
+    const checkEveryN = 50;
+    final random = Random(seed);
     final terminal = Terminal(maxLines: 500)..resize(80, 24);
 
     for (var iteration = 0; iteration < 20000; iteration++) {
@@ -21,11 +25,14 @@ void main() {
         terminal.resize(random.nextInt(159) + 1, random.nextInt(79) + 1);
       }
 
-      final lineCount = terminal.buffer.lines.length;
-      if (lineCount != 0) {
-        final row = random.nextInt(lineCount);
-        final column = random.nextInt(terminal.viewWidth);
-        terminal.hyperlinkIdAt(CellOffset(column, row));
+      final shouldCheck =
+          iteration % checkEveryN == 0 || iteration == 20000 - 1;
+      if (shouldCheck) {
+        checkTerminalInvariants(
+          terminal,
+          random,
+          context: 'seed 0x${seed.toRadixString(16)}, iteration $iteration',
+        );
       }
     }
   });

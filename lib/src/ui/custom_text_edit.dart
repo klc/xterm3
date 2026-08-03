@@ -66,6 +66,18 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// collapsed editing value; it must not reach the terminal twice.
   String? _actionCommittedText;
 
+  /// The content of an open, not-yet-resolved composing range in
+  /// [deleteDetection] mode - see [_updateEditingValueWithDeleteDetection].
+  /// Non-null exactly while such a range is open and its fate (genuine
+  /// preview vs. trapped keystroke) has not yet been decided.
+  String? _pendingComposingText;
+
+  /// The `composing.start` of [_pendingComposingText], used to tell a
+  /// composing range that is being extended in place (same base, growing
+  /// text - a real preview) from one that has been replaced by an unrelated
+  /// fresh range at the same base (a trapped keystroke, see f6568e1).
+  int? _pendingComposingBase;
+
   @override
   void initState() {
     widget.focusNode.addListener(_onFocusChange);
@@ -230,36 +242,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void updateEditingValue(TextEditingValue value) {
     _currentEditingState = value;
 
-    // In deleteDetection mode (mobile IME), process text deltas immediately
-    // to prevent Android keyboards (Gboard, Samsung, SwiftKey) from trapping
-    // keypresses inside composing range and causing double insertions.
     if (widget.deleteDetection) {
-      widget.onComposing(null);
-
-      final text = value.text;
-      final initLength = _initEditingState.text.length;
-
-      if (text.length < initLength) {
-        final deleteCount = initLength - text.length;
-        for (var i = 0; i < deleteCount; i++) {
-          widget.onDelete();
-        }
-        _resetEditingState();
-        return;
-      }
-
-      if (text.length > initLength) {
-        final textDelta = text.substring(initLength);
-        if (textDelta.isNotEmpty) {
-          widget.onInsert(textDelta);
-        }
-        _resetEditingState();
-        return;
-      }
-
-      if (text != _initEditingState.text) {
-        _resetEditingState();
-      }
+      _updateEditingValueWithDeleteDetection(value);
       return;
     }
 
@@ -301,6 +285,14 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     if (_currentEditingState.text.length < _initEditingState.text.length) {
       widget.onDelete();
+    } else if (textDelta.isEmpty &&
+        _currentEditingState.text == _initEditingState.text) {
+      // The local buffer is already at its floor (empty, cursor at 0), so
+      // there is nothing left for a backspace to shorten. Some soft
+      // keyboards still emit this exact no-op editing value for that
+      // keypress instead of staying silent - treat it as the delete it
+      // represents rather than as an empty insert.
+      widget.onDelete();
     } else {
       widget.onInsert(textDelta);
     }
@@ -308,6 +300,122 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     // Reset editing state if composing is done
     if (_currentEditingState.composing.isCollapsed &&
         _currentEditingState.text != _initEditingState.text) {
+      _resetEditingState();
+    }
+  }
+
+  /// Handles [updateEditingValue] for [CustomTextEdit.deleteDetection] mode.
+  ///
+  /// This mode pads the editing state with a sentinel (see
+  /// [_initEditingState]) so a backspace at offset 0 always has something to
+  /// remove, letting the deletion be derived from how much of the sentinel
+  /// is left rather than from a raw text-length diff against empty.
+  ///
+  /// Composition must still work here. While `value.composing` is a genuine,
+  /// still-open multi-character preview, emission is deferred and only the
+  /// text the IME actually commits is emitted once composing closes.
+  ///
+  /// The complication is the pattern some Android keyboards (Gboard,
+  /// Samsung, SwiftKey) produce for a single already-resolved keypress: they
+  /// wrap it in a composing range that never collapses on its own (fixed by
+  /// f6568e1). Such a range opens fresh with exactly one character in it -
+  /// but so does a genuine preview, on its very first keystroke. A bare
+  /// length check can't tell those apart, so instead this tracks whether an
+  /// open composing range is being *extended in place*:
+  ///
+  ///   - a range whose base stays put and whose text keeps growing is a
+  ///     real, still-open preview - keep deferring.
+  ///   - a range that collapses is a resolved commit - emit it once.
+  ///   - a *different* range appearing at the same base without the
+  ///     previous one ever growing or collapsing is the f6568e1 shape: the
+  ///     previous keystroke was already resolved and is never coming back,
+  ///     so it is flushed now instead of waiting for a collapse that will
+  ///     never arrive.
+  void _updateEditingValueWithDeleteDetection(TextEditingValue value) {
+    final text = value.text;
+    final initLength = _initEditingState.text.length;
+
+    if (value.composing.isValid) {
+      final composingText = value.composing.textInside(text);
+      final base = value.composing.start;
+      final pending = _pendingComposingText;
+
+      final isExtendingPending = pending != null &&
+          base == _pendingComposingBase &&
+          composingText.length > pending.length;
+
+      if (isExtendingPending) {
+        _pendingComposingText = composingText;
+        widget.onComposing(composingText);
+        return;
+      }
+
+      if (pending != null && pending.length > 1) {
+        // The pending range already held more than one character, so it was
+        // never an ambiguous fresh single-keystroke open - it was already a
+        // confirmed, substantial preview (e.g. a pinyin buffer). Replacing
+        // it wholesale, even with something shorter, is an ordinary step in
+        // the same composition (e.g. picking a hanzi candidate), not the
+        // f6568e1 trapped-keystroke shape, which only ever involves single
+        // characters. Keep deferring.
+        _pendingComposingText = composingText;
+        _pendingComposingBase = base;
+        widget.onComposing(composingText);
+        return;
+      }
+
+      if (pending != null) {
+        // The pending range was a single, unconfirmed character and has now
+        // been replaced by another fresh range without ever growing or
+        // collapsing - the previous keystroke is done and will never
+        // collapse on its own (f6568e1), so flush it now. The replacement
+        // is exactly as resolved as the one it replaced (nothing else has
+        // arrived to prove otherwise), so it is flushed immediately too
+        // rather than reopened as a new pending range.
+        if (pending.isNotEmpty) {
+          widget.onInsert(pending);
+        }
+        if (composingText.isNotEmpty) {
+          widget.onInsert(composingText);
+        }
+        widget.onComposing(null);
+        _resetEditingState();
+        return;
+      }
+
+      // Freshly opened range, nothing pending yet. This might be the start
+      // of a genuine preview or a trapped keystroke - hold it pending and
+      // let the next update (extension, collapse, or replacement above)
+      // decide, instead of assuming either way.
+      _pendingComposingText = composingText;
+      _pendingComposingBase = base;
+      widget.onComposing(composingText);
+      return;
+    }
+
+    widget.onComposing(null);
+    _pendingComposingText = null;
+    _pendingComposingBase = null;
+
+    if (text.length < initLength) {
+      final deleteCount = initLength - text.length;
+      for (var i = 0; i < deleteCount; i++) {
+        widget.onDelete();
+      }
+      _resetEditingState();
+      return;
+    }
+
+    if (text.length > initLength) {
+      final textDelta = text.substring(initLength);
+      if (textDelta.isNotEmpty) {
+        widget.onInsert(textDelta);
+      }
+      _resetEditingState();
+      return;
+    }
+
+    if (text != _initEditingState.text) {
       _resetEditingState();
     }
   }
@@ -345,6 +453,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   void _resetEditingState() {
     _currentEditingState = _initEditingState;
+    _pendingComposingText = null;
+    _pendingComposingBase = null;
     _connection?.setEditingState(_initEditingState);
   }
 

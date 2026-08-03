@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' show max, min;
 
+import 'package:meta/meta.dart';
 import 'package:xterm2/src/base/observable.dart';
 import 'package:xterm2/src/core/buffer/buffer.dart';
 import 'package:xterm2/src/core/buffer/cell_offset.dart';
@@ -25,6 +26,11 @@ import 'package:xterm2/src/core/state.dart';
 import 'package:xterm2/src/core/tabs.dart';
 import 'package:xterm2/src/utils/ascii.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
+import 'package:xterm2/src/utils/escape_format.dart';
+
+part 'terminal_clipboard.dart';
+part 'terminal_colors.dart';
+part 'terminal_modes.dart';
 
 enum _ProtectionMode { off, iso, dec }
 
@@ -234,7 +240,6 @@ class Terminal
       CellAttr.hyperlinkMask >> CellAttr.hyperlinkShift;
   static const _maxKittyKeyboardModeStackDepth = 4096;
   static const _maxTitleStackDepth = 4096;
-  static const _maxClipboardCaptureLength = 10 * 1024 * 1024;
   static const _kittyKeyboardModeMask = 0x1f;
   static const _specialColorBaseIndex = 256;
   static const _specialColorCount = 5;
@@ -356,6 +361,23 @@ class Terminal
   /// escape sequence.
   void Function(String code, List<String> args)? onPrivateOSC;
 
+  /// Diagnostic hook for escape sequences the parser does not recognise.
+  ///
+  /// This fires for sequences the terminal deliberately ignores — an
+  /// unknown `ESC` dispatch, an unrecognised CSI final byte, an
+  /// unrecognised OSC `Ps`, or a DCS payload that matches no known
+  /// request. Ignoring unrecognised input is correct terminal behaviour and
+  /// this callback does not change that; it only lets you observe it.
+  /// [raw] contains the sequence as received, including the leading `ESC`,
+  /// formatted for readability (control bytes rendered as `^0x..`, `ESC`
+  /// spelled out, etc.) rather than as literal control characters.
+  ///
+  /// This is a diagnostic tool meant for answering "why isn't my escape
+  /// sequence working?" during development. It is not intended to be left
+  /// enabled in production: building the diagnostic text has a real cost,
+  /// paid only when this callback is set.
+  void Function(String raw)? onUnknownSequence;
+
   /// Flag to toggle os specific behaviors.
   final TerminalTargetPlatform platform;
 
@@ -396,6 +418,7 @@ class Terminal
     this.inputHandler = defaultInputHandler,
     this.mouseHandler = defaultMouseHandler,
     this.onPrivateOSC,
+    this.onUnknownSequence,
     this.reflowEnabled = true,
     this.wordSeparators,
   });
@@ -408,25 +431,30 @@ class Terminal
 
   final Map<String, int> _explicitHyperlinkIds = {};
 
-  final Map<int, int> _indexedColorOverrides = {};
-  final Map<int, int> _specialColorOverrides = {};
-  final Map<int, int> _auxiliaryDynamicColorOverrides = {};
+  /// Reverse lookup of [_explicitHyperlinkIds], so a hyperlink id can be
+  /// resolved to its explicit-id key (if any) in O(1) instead of scanning
+  /// the whole map. Kept in sync wherever [_explicitHyperlinkIds] is
+  /// written to or cleared.
+  final Map<int, String> _explicitHyperlinkKeyByHyperlinkId = {};
 
-  int? _foregroundColorOverride;
+  /// Hyperlink ids collected from evicted scrollback lines that have not yet
+  /// been checked against the live buffers. See
+  /// [_onScrollbackLineEvicted] for why this is batched instead of resolved
+  /// immediately.
+  final Set<int> _pendingEvictedHyperlinkIds = {};
 
-  int? _backgroundColorOverride;
+  /// Number of distinct evicted hyperlink ids to accumulate before spending
+  /// a full buffer scan to resolve them. See [_onScrollbackLineEvicted].
+  static const _hyperlinkEvictionBatchSize = 128;
 
-  int? _cursorColorOverride;
+  /// Count of `getHyperlinkId` cell inspections spent resolving evicted
+  /// hyperlinks. Exposed via [debugHyperlinkEvictionScanCells] for tests
+  /// only.
+  int _hyperlinkEvictionScanCellsForTesting = 0;
 
-  int? _selectionColorOverride;
+  final _colors = _ColorRegistry();
 
-  int? _selectionForegroundColorOverride;
-
-  int _colorRevision = 0;
-
-  String? _clipboardCaptureSelector;
-  StringBuffer? _clipboardCaptureBuffer;
-  bool _clipboardCaptureOverflowed = false;
+  final _clipboardCapture = _ClipboardCapture();
 
   TerminalSemanticPromptState _semanticPromptState =
       const TerminalSemanticPromptState(
@@ -437,7 +465,7 @@ class Terminal
 
   int _nextHyperlinkId = 1;
 
-  int get colorRevision => _colorRevision;
+  int get colorRevision => _colors._colorRevision;
 
   TerminalSemanticPromptState get semanticPromptState => _semanticPromptState;
 
@@ -475,23 +503,23 @@ class Terminal
   }
 
   Iterable<MapEntry<int, int>> get indexedColorOverrides {
-    return _indexedColorOverrides.entries;
+    return _colors._indexedColorOverrides.entries;
   }
 
   Iterable<MapEntry<int, int>> get specialColorOverrides {
-    return _specialColorOverrides.entries;
+    return _colors._specialColorOverrides.entries;
   }
 
-  int? get foregroundColorOverride => _foregroundColorOverride;
+  int? get foregroundColorOverride => _colors._foregroundColorOverride;
 
-  int? get backgroundColorOverride => _backgroundColorOverride;
+  int? get backgroundColorOverride => _colors._backgroundColorOverride;
 
-  int? get cursorColorOverride => _cursorColorOverride;
+  int? get cursorColorOverride => _colors._cursorColorOverride;
 
-  int? get selectionColorOverride => _selectionColorOverride;
+  int? get selectionColorOverride => _colors._selectionColorOverride;
 
   int? get selectionForegroundColorOverride =>
-      _selectionForegroundColorOverride;
+      _colors._selectionForegroundColorOverride;
 
   late var _buffer = _mainBuffer;
 
@@ -500,6 +528,7 @@ class Terminal
     maxLines: maxLines,
     isAltBuffer: false,
     wordSeparators: wordSeparators,
+    onLineEvicted: _onScrollbackLineEvicted,
   );
 
   late final _altBuffer = Buffer(
@@ -507,6 +536,7 @@ class Terminal
     maxLines: maxLines,
     isAltBuffer: true,
     wordSeparators: wordSeparators,
+    onLineEvicted: _onScrollbackLineEvicted,
   );
 
   final _tabStops = TabStops();
@@ -527,77 +557,13 @@ class Terminal
 
   final _cursorStyle = CursorStyle();
 
-  _ProtectionMode _protectionMode = _ProtectionMode.off;
+  final _modes = _TerminalModes();
 
-  bool _insertMode = false;
-
-  bool _sendReceiveMode = true;
-
-  bool _keyboardActionMode = false;
-
-  bool _lineFeedMode = false;
-
-  bool _cursorKeysMode = false;
-
-  bool _reverseDisplayMode = false;
-
-  bool _originMode = false;
-
-  bool _enableColumnMode = false;
-
-  bool _slowScrollMode = false;
-
-  bool _autoWrapMode = true;
-
-  bool _autoRepeatMode = false;
-
-  bool _reverseWrapMode = false;
-
-  bool _reverseWrapExtendedMode = false;
-
-  MouseMode _mouseMode = MouseMode.none;
-
-  MouseReportMode _mouseReportMode = MouseReportMode.normal;
-
-  bool _cursorBlinkMode = false;
-
-  bool _cursorVisibleMode = true;
-
-  TerminalCursorType? _applicationCursorType;
-
-  TerminalCursorType? get applicationCursorType => _applicationCursorType;
-
-  bool _appKeypadMode = false;
-
-  bool _ignoreKeypadWithNumLockMode = true;
-
-  bool _backarrowKeyMode = false;
-
-  bool _reportFocusMode = false;
+  TerminalCursorType? get applicationCursorType => _modes._applicationCursorType;
 
   bool _focused = true;
 
-  bool _mouseShiftCaptureMode = false;
-
-  bool _altBufferMouseScrollMode = false;
-
-  bool _altEscPrefixMode = true;
-
-  bool _altSendsEscapeMode = false;
-
-  bool _bracketedPasteMode = false;
-
-  bool _inBandSizeReportMode = false;
-
-  bool _reportColorSchemeMode = false;
-
-  bool _graphemeClusterMode = true;
-
-  bool _leftRightMarginMode = false;
-
-  bool _cursorLineHighlightMode = false;
-
-  bool get cursorLineHighlightMode => _cursorLineHighlightMode;
+  bool get cursorLineHighlightMode => _modes._cursorLineHighlightMode;
 
   bool _attributeChangeExtentRectangular = false;
 
@@ -635,17 +601,9 @@ class Terminal
 
   final _titleModes = <int>{};
 
-  bool _synchronizedUpdateMode = false;
-
   Timer? _synchronizedUpdateTimer;
 
   final _savedDecModes = <int, bool>{};
-
-  int _kittyKeyboardMode = 0;
-
-  int _modifyOtherKeysMode = 0;
-
-  final _kittyKeyboardModeStack = <int>[];
 
   String? _title;
 
@@ -654,6 +612,8 @@ class Terminal
   final _titleStack = <String?>[];
 
   bool _isDisposed = false;
+
+  var _writing = false;
 
   /* State getters */
 
@@ -669,82 +629,82 @@ class Terminal
   CursorStyle get cursor => _cursorStyle;
 
   @override
-  bool get insertMode => _insertMode;
+  bool get insertMode => _modes._insertMode;
 
   @override
-  bool get lineFeedMode => _lineFeedMode;
+  bool get lineFeedMode => _modes._lineFeedMode;
 
   @override
-  bool get cursorKeysMode => _cursorKeysMode;
+  bool get cursorKeysMode => _modes._cursorKeysMode;
 
   @override
-  bool get reverseDisplayMode => _reverseDisplayMode;
+  bool get reverseDisplayMode => _modes._reverseDisplayMode;
 
   @override
-  bool get originMode => _originMode;
+  bool get originMode => _modes._originMode;
 
   @override
-  bool get autoWrapMode => _autoWrapMode;
+  bool get autoWrapMode => _modes._autoWrapMode;
 
   @override
-  bool get reverseWrapMode => _reverseWrapMode;
+  bool get reverseWrapMode => _modes._reverseWrapMode;
 
   @override
-  bool get reverseWrapExtendedMode => _reverseWrapExtendedMode;
+  bool get reverseWrapExtendedMode => _modes._reverseWrapExtendedMode;
 
   @override
-  MouseMode get mouseMode => _mouseMode;
+  MouseMode get mouseMode => _modes._mouseMode;
 
   @override
-  MouseReportMode get mouseReportMode => _mouseReportMode;
+  MouseReportMode get mouseReportMode => _modes._mouseReportMode;
 
   @override
-  bool get cursorBlinkMode => _cursorBlinkMode;
+  bool get cursorBlinkMode => _modes._cursorBlinkMode;
 
   @override
-  bool get cursorVisibleMode => _cursorVisibleMode;
+  bool get cursorVisibleMode => _modes._cursorVisibleMode;
 
   @override
-  bool get appKeypadMode => _appKeypadMode;
+  bool get appKeypadMode => _modes._appKeypadMode;
 
   @override
-  bool get ignoreKeypadWithNumLockMode => _ignoreKeypadWithNumLockMode;
+  bool get ignoreKeypadWithNumLockMode => _modes._ignoreKeypadWithNumLockMode;
 
   @override
-  bool get backarrowKeyMode => _backarrowKeyMode;
+  bool get backarrowKeyMode => _modes._backarrowKeyMode;
 
   @override
-  bool get reportFocusMode => _reportFocusMode;
+  bool get reportFocusMode => _modes._reportFocusMode;
 
   @override
-  bool get mouseShiftCaptureMode => _mouseShiftCaptureMode;
+  bool get mouseShiftCaptureMode => _modes._mouseShiftCaptureMode;
 
   @override
-  bool get altBufferMouseScrollMode => _altBufferMouseScrollMode;
+  bool get altBufferMouseScrollMode => _modes._altBufferMouseScrollMode;
 
   @override
-  bool get altEscPrefixMode => _altEscPrefixMode;
+  bool get altEscPrefixMode => _modes._altEscPrefixMode;
 
   @override
-  bool get altSendsEscapeMode => _altSendsEscapeMode;
+  bool get altSendsEscapeMode => _modes._altSendsEscapeMode;
 
   @override
-  bool get bracketedPasteMode => _bracketedPasteMode;
+  bool get bracketedPasteMode => _modes._bracketedPasteMode;
 
   @override
-  bool get inBandSizeReportMode => _inBandSizeReportMode;
+  bool get inBandSizeReportMode => _modes._inBandSizeReportMode;
 
   @override
-  bool get reportColorSchemeMode => _reportColorSchemeMode;
+  bool get reportColorSchemeMode => _modes._reportColorSchemeMode;
 
   @override
-  bool get graphemeClusterMode => _graphemeClusterMode;
+  bool get graphemeClusterMode => _modes._graphemeClusterMode;
 
   @override
-  int get kittyKeyboardMode => _kittyKeyboardMode;
+  int get kittyKeyboardMode => _modes._kittyKeyboardMode;
 
   @override
-  int get modifyOtherKeysMode => _modifyOtherKeysMode;
+  int get modifyOtherKeysMode => _modes._modifyOtherKeysMode;
 
   /// Current active buffer of the terminal. This is initially [mainBuffer] and
   /// can be switched back and forth from [altBuffer] to [mainBuffer] when
@@ -783,8 +743,14 @@ class Terminal
   /// [onTitleChange] when the escape sequences in [data] request it.
   void write(String data) {
     if (_isDisposed) return;
-    _parser.write(data);
-    if (_synchronizedUpdateMode) return;
+    assert(!_writing, 'Terminal.write() is not reentrant');
+    _writing = true;
+    try {
+      _parser.write(data);
+    } finally {
+      _writing = false;
+    }
+    if (_modes._synchronizedUpdateMode) return;
     notifyListeners();
   }
 
@@ -794,7 +760,7 @@ class Terminal
     final activePrompt = _activeSemanticPromptOffset();
     _buffer.clear();
     _restoreActiveSemanticPrompt(activePrompt);
-    if (_synchronizedUpdateMode) return;
+    if (_modes._synchronizedUpdateMode) return;
     notifyListeners();
   }
 
@@ -803,14 +769,14 @@ class Terminal
     _isDisposed = true;
     _synchronizedUpdateTimer?.cancel();
     _synchronizedUpdateTimer = null;
-    _synchronizedUpdateMode = false;
+    _modes._synchronizedUpdateMode = false;
     clearListeners();
-    _clipboardCaptureSelector = null;
-    _clipboardCaptureBuffer = null;
-    _clipboardCaptureOverflowed = false;
+    _clipboardCapture.reset();
     _clearSemanticPromptAnchors();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
+    _explicitHyperlinkKeyByHyperlinkId.clear();
+    _pendingEvictedHyperlinkIds.clear();
   }
 
   /// Sends a key event to the underlying program.
@@ -831,7 +797,7 @@ class Terminal
     String? text,
   }) {
     if (_isDisposed) return false;
-    if (_keyboardActionMode) return false;
+    if (_modes._keyboardActionMode) return false;
     final output = inputHandler?.call(
       TerminalKeyboardEvent(
         key: key,
@@ -870,7 +836,7 @@ class Terminal
     bool ctrl = false,
   }) {
     if (_isDisposed) return false;
-    if (_keyboardActionMode) return false;
+    if (_modes._keyboardActionMode) return false;
     if (ctrl) {
       // a(97) ~ z(122)
       if (charCode >= Ascii.a && charCode <= Ascii.z) {
@@ -907,7 +873,7 @@ class Terminal
   /// - [paste]
   void textInput(String text) {
     if (_isDisposed) return;
-    if (_keyboardActionMode) return;
+    if (_modes._keyboardActionMode) return;
     onOutput?.call(text);
   }
 
@@ -920,9 +886,9 @@ class Terminal
   /// - [textInput]
   void paste(String text) {
     if (_isDisposed) return;
-    if (_keyboardActionMode) return;
+    if (_modes._keyboardActionMode) return;
     final sanitizedText = _sanitizePasteText(text);
-    if (_bracketedPasteMode) {
+    if (_modes._bracketedPasteMode) {
       onOutput?.call(_emitter.bracketedPaste(sanitizedText));
       return;
     }
@@ -1078,7 +1044,7 @@ class Terminal
   void focusInput(bool focused) {
     _focused = focused;
     if (_isDisposed) return;
-    if (!_reportFocusMode) return;
+    if (!_modes._reportFocusMode) return;
     onOutput?.call(switch (focused) {
       true => _emitter.focusIn(),
       false => _emitter.focusOut(),
@@ -1127,11 +1093,11 @@ class Terminal
 
     final nextCellPixelWidth = pixelWidth ?? _cellPixelWidth;
     final nextCellPixelHeight = pixelHeight ?? _cellPixelHeight;
-    final wasSynchronizedUpdateMode = _synchronizedUpdateMode;
+    final wasSynchronizedUpdateMode = _modes._synchronizedUpdateMode;
     if (wasSynchronizedUpdateMode) {
       _synchronizedUpdateTimer?.cancel();
       _synchronizedUpdateTimer = null;
-      _synchronizedUpdateMode = false;
+      _modes._synchronizedUpdateMode = false;
     }
 
     if (newWidth == _viewWidth &&
@@ -1139,7 +1105,7 @@ class Terminal
         nextCellPixelWidth == _cellPixelWidth &&
         nextCellPixelHeight == _cellPixelHeight) {
       if (wasSynchronizedUpdateMode) notifyListeners();
-      if (_inBandSizeReportMode && pixelWidth != null && pixelHeight != null) {
+      if (_modes._inBandSizeReportMode && pixelWidth != null && pixelHeight != null) {
         _sendInBandSizeReport();
       }
       return;
@@ -1174,7 +1140,7 @@ class Terminal
     _mainBuffer.resetVerticalMargins();
 
     if (wasSynchronizedUpdateMode) notifyListeners();
-    if (_inBandSizeReportMode) _sendInBandSizeReport();
+    if (_modes._inBandSizeReportMode) _sendInBandSizeReport();
   }
 
   @override
@@ -1297,12 +1263,12 @@ class Terminal
 
   @override
   void saveCursor() {
-    _buffer.saveCursor(originMode: _originMode);
+    _buffer.saveCursor(originMode: _modes._originMode);
   }
 
   @override
   void saveCursorOrSetLeftRightMargins() {
-    if (_leftRightMarginMode) {
+    if (_modes._leftRightMarginMode) {
       return setLeftRightMargins(0);
     }
     saveCursor();
@@ -1310,7 +1276,7 @@ class Terminal
 
   @override
   void restoreCursor() {
-    _originMode = _buffer.restoreCursor();
+    _modes._originMode = _buffer.restoreCursor();
   }
 
   @override
@@ -1333,7 +1299,6 @@ class Terminal
   void reset() {
     _synchronizedUpdateTimer?.cancel();
     _synchronizedUpdateTimer = null;
-    _synchronizedUpdateMode = false;
     _buffer = _mainBuffer;
     _precedingCodepoint = 0;
     _semanticInputTerminatesAtLineFeed = false;
@@ -1344,50 +1309,15 @@ class Terminal
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
     _cursorStyle.semanticAttrs = 0;
-    _protectionMode = _ProtectionMode.off;
-    _insertMode = false;
-    _sendReceiveMode = true;
-    _keyboardActionMode = false;
-    _lineFeedMode = false;
-    _cursorKeysMode = false;
-    _reverseDisplayMode = false;
-    _originMode = false;
-    _enableColumnMode = false;
-    _slowScrollMode = false;
-    _autoWrapMode = true;
-    _autoRepeatMode = false;
-    _reverseWrapMode = false;
-    _reverseWrapExtendedMode = false;
-    _mouseMode = MouseMode.none;
-    _mouseReportMode = MouseReportMode.normal;
-    _cursorBlinkMode = false;
-    _cursorVisibleMode = true;
-    _applicationCursorType = null;
-    _appKeypadMode = false;
-    _ignoreKeypadWithNumLockMode = true;
-    _backarrowKeyMode = false;
-    _reportFocusMode = false;
-    _mouseShiftCaptureMode = false;
-    _altBufferMouseScrollMode = false;
-    _altEscPrefixMode = true;
-    _altSendsEscapeMode = false;
-    _bracketedPasteMode = false;
-    _inBandSizeReportMode = false;
-    _reportColorSchemeMode = false;
-    _graphemeClusterMode = true;
-    _leftRightMarginMode = false;
-    _cursorLineHighlightMode = false;
-    _kittyKeyboardMode = 0;
-    _modifyOtherKeysMode = 0;
-    _kittyKeyboardModeStack.clear();
+    _modes.reset();
     _title = null;
     _iconTitle = null;
-    _clipboardCaptureSelector = null;
-    _clipboardCaptureBuffer = null;
-    _clipboardCaptureOverflowed = false;
+    _clipboardCapture.reset();
     _titleStack.clear();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
+    _explicitHyperlinkKeyByHyperlinkId.clear();
+    _pendingEvictedHyperlinkIds.clear();
     _nextHyperlinkId = 1;
     _tabStops.reset();
     _mainBuffer.reset();
@@ -1398,7 +1328,6 @@ class Terminal
   void softReset() {
     _synchronizedUpdateTimer?.cancel();
     _synchronizedUpdateTimer = null;
-    _synchronizedUpdateMode = false;
     _precedingCodepoint = 0;
     _semanticInputTerminatesAtLineFeed = false;
     _semanticPromptState = const TerminalSemanticPromptState(
@@ -1407,41 +1336,7 @@ class Terminal
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
     _cursorStyle.semanticAttrs = 0;
-    _protectionMode = _ProtectionMode.off;
-    _insertMode = false;
-    _sendReceiveMode = true;
-    _keyboardActionMode = false;
-    _lineFeedMode = false;
-    _cursorKeysMode = false;
-    _reverseDisplayMode = false;
-    _originMode = false;
-    _enableColumnMode = false;
-    _slowScrollMode = false;
-    _autoWrapMode = true;
-    _autoRepeatMode = false;
-    _reverseWrapMode = false;
-    _reverseWrapExtendedMode = false;
-    _mouseMode = MouseMode.none;
-    _mouseReportMode = MouseReportMode.normal;
-    _cursorBlinkMode = false;
-    _cursorVisibleMode = true;
-    _applicationCursorType = null;
-    _appKeypadMode = false;
-    _ignoreKeypadWithNumLockMode = true;
-    _backarrowKeyMode = false;
-    _reportFocusMode = false;
-    _mouseShiftCaptureMode = false;
-    _altBufferMouseScrollMode = false;
-    _altEscPrefixMode = true;
-    _altSendsEscapeMode = false;
-    _bracketedPasteMode = false;
-    _inBandSizeReportMode = false;
-    _reportColorSchemeMode = false;
-    _graphemeClusterMode = true;
-    _leftRightMarginMode = false;
-    _kittyKeyboardMode = 0;
-    _modifyOtherKeysMode = 0;
-    _kittyKeyboardModeStack.clear();
+    _modes.softReset();
     _tabStops.reset();
     _buffer.charset.reset();
     _buffer.resetVerticalMargins();
@@ -1454,7 +1349,7 @@ class Terminal
       foreground: _cursorStyle.foreground,
       background: _cursorStyle.background,
     );
-    _originMode = false;
+    _modes._originMode = false;
     _buffer.screenAlignmentTest(style);
   }
 
@@ -1489,9 +1384,25 @@ class Terminal
   }
 
   @override
-  void unkownEscape(int char) {
-    // no-op
+  void unknownEscape(int char) {
+    if (onUnknownSequence == null) return;
+    _reportUnknownSequence();
   }
+
+  /// Builds the diagnostic text for the escape sequence currently being
+  /// dispatched and forwards it to [onUnknownSequence].
+  ///
+  /// Callers must guard on `onUnknownSequence == null` themselves before
+  /// calling this, so that no work happens when the callback is unset.
+  void _reportUnknownSequence() {
+    onUnknownSequence!(
+      formatEscapeSequenceForDiagnostics(_parser.capturedToken()),
+    );
+  }
+
+  @Deprecated('Use unknownEscape instead. Will be removed in the next major.')
+  @override
+  void unkownEscape(int char) => unknownEscape(char);
 
   /* CSI */
 
@@ -1591,7 +1502,7 @@ class Terminal
   }
 
   int _horizontalTabLeftLimit() {
-    return switch (_originMode) {
+    return switch (_modes._originMode) {
       true => _buffer.marginLeft,
       false => 0,
     };
@@ -1619,11 +1530,11 @@ class Terminal
 
   @override
   void sendCursorPosition() {
-    final x = switch (_originMode) {
+    final x = switch (_modes._originMode) {
       true => max(0, _buffer.cursorX - _buffer.marginLeft),
       false => _buffer.cursorX,
     };
-    final y = switch (_originMode) {
+    final y = switch (_modes._originMode) {
       true => max(0, _buffer.cursorY - _buffer.marginTop),
       false => _buffer.cursorY,
     };
@@ -1755,7 +1666,7 @@ class Terminal
   }
 
   void reportColorSchemeChange() {
-    if (!_reportColorSchemeMode) return;
+    if (!_modes._reportColorSchemeMode) return;
     sendColorScheme();
   }
 
@@ -1776,6 +1687,12 @@ class Terminal
     final value = _terminfoCapability(key);
     if (value == null) return;
     onOutput?.call(_emitter.terminfoCapability(key, value));
+  }
+
+  @override
+  void unknownDCS(String payload) {
+    if (onUnknownSequence == null) return;
+    _reportUnknownSequence();
   }
 
   String? _hexDecode(String value) {
@@ -2052,7 +1969,7 @@ class Terminal
 
     return switch (query) {
       'm' => _sgrStatusString(),
-      '>4m' => '>4;$_modifyOtherKeysMode' 'm',
+      '>4m' => '>4;${_modes._modifyOtherKeysMode}' 'm',
       '|' => '$_transmitTerminationCharacter|',
       "'s" => "$_lineTransmitTerminationCharacter's",
       '}' => '$_protectedFieldsAttribute}',
@@ -2136,7 +2053,7 @@ class Terminal
   }
 
   String? _leftRightMarginStatusString() {
-    if (!_leftRightMarginMode) return null;
+    if (!_modes._leftRightMarginMode) return null;
     return '${_buffer.marginLeft + 1};${_buffer.marginRight + 1}s';
   }
 
@@ -2196,7 +2113,7 @@ class Terminal
   }
 
   int _cursorShapeStatus() {
-    return switch ((_applicationCursorType, _cursorBlinkMode)) {
+    return switch ((_modes._applicationCursorType, _modes._cursorBlinkMode)) {
       (TerminalCursorType.block || null, true) => 1,
       (TerminalCursorType.block || null, false) => 2,
       (TerminalCursorType.underline, true) => 3,
@@ -2216,7 +2133,7 @@ class Terminal
 
   @override
   void setLeftRightMargins(int left, [int? right]) {
-    if (!_leftRightMarginMode) return;
+    if (!_modes._leftRightMarginMode) return;
 
     final effectiveRight = right ?? viewWidth - 1;
     if (left >= effectiveRight) return;
@@ -2621,7 +2538,7 @@ class Terminal
       true => 'A',
       false => '@',
     };
-    final flags = switch (_originMode) {
+    final flags = switch (_modes._originMode) {
       true => 'A',
       false => '@',
     };
@@ -2657,31 +2574,32 @@ class Terminal
 
   @override
   void unknownCSI(int finalByte) {
-    // no-op
+    if (onUnknownSequence == null) return;
+    _reportUnknownSequence();
   }
 
   @override
   void setCursorShape(int style) {
     if (style == 0) {
-      _applicationCursorType = null;
-      _cursorBlinkMode = false;
+      _modes._applicationCursorType = null;
+      _modes._cursorBlinkMode = false;
       return;
     }
 
-    _applicationCursorType = switch (style) {
+    _modes._applicationCursorType = switch (style) {
       1 || 2 => TerminalCursorType.block,
       3 || 4 => TerminalCursorType.underline,
       5 || 6 => TerminalCursorType.verticalBar,
-      _ => _applicationCursorType,
+      _ => _modes._applicationCursorType,
     };
     if (style < 1 || style > 6) return;
-    _cursorBlinkMode = style.isOdd;
+    _modes._cursorBlinkMode = style.isOdd;
   }
 
   @override
   void setProtectedMode(bool enabled) {
     if (enabled) {
-      _protectionMode = _ProtectionMode.dec;
+      _modes._protectionMode = _ProtectionMode.dec;
       return _cursorStyle.setProtected();
     }
     _cursorStyle.unsetProtected();
@@ -2690,34 +2608,34 @@ class Terminal
   @override
   void setIsoProtectedMode(bool enabled) {
     if (enabled) {
-      _protectionMode = _ProtectionMode.iso;
+      _modes._protectionMode = _ProtectionMode.iso;
       return _cursorStyle.setProtected();
     }
     _cursorStyle.unsetProtected();
   }
 
-  bool get _usesIsoProtection => _protectionMode == _ProtectionMode.iso;
+  bool get _usesIsoProtection => _modes._protectionMode == _ProtectionMode.iso;
 
   /* Modes */
 
   @override
   void setInsertMode(bool enabled) {
-    _insertMode = enabled;
+    _modes._insertMode = enabled;
   }
 
   @override
   void setSendReceiveMode(bool enabled) {
-    _sendReceiveMode = enabled;
+    _modes._sendReceiveMode = enabled;
   }
 
   @override
   void setKeyboardActionMode(bool enabled) {
-    _keyboardActionMode = enabled;
+    _modes._keyboardActionMode = enabled;
   }
 
   @override
   void setLineFeedMode(bool enabled) {
-    _lineFeedMode = enabled;
+    _modes._lineFeedMode = enabled;
   }
 
   @override
@@ -2729,30 +2647,30 @@ class Terminal
 
   @override
   void setCursorKeysMode(bool enabled) {
-    _cursorKeysMode = enabled;
+    _modes._cursorKeysMode = enabled;
   }
 
   @override
   void setReverseDisplayMode(bool enabled) {
-    _reverseDisplayMode = enabled;
+    _modes._reverseDisplayMode = enabled;
   }
 
   @override
   void setOriginMode(bool enabled) {
-    _originMode = enabled;
+    _modes._originMode = enabled;
     _buffer.setCursor(0, 0);
   }
 
   @override
   void setColumnMode(bool enabled) {
-    if (!_enableColumnMode) return;
+    if (!_modes._enableColumnMode) return;
 
     _buffer.resetViewport();
   }
 
   @override
   void setEnableColumnMode(bool enabled) {
-    _enableColumnMode = enabled;
+    _modes._enableColumnMode = enabled;
     if (!enabled) return;
 
     _buffer.resetViewport();
@@ -2760,42 +2678,42 @@ class Terminal
 
   @override
   void setSlowScrollMode(bool enabled) {
-    _slowScrollMode = enabled;
+    _modes._slowScrollMode = enabled;
   }
 
   @override
   void setAutoWrapMode(bool enabled) {
-    _autoWrapMode = enabled;
+    _modes._autoWrapMode = enabled;
   }
 
   @override
   void setAutoRepeatMode(bool enabled) {
-    _autoRepeatMode = enabled;
+    _modes._autoRepeatMode = enabled;
   }
 
   @override
   void setReverseWrapMode(bool enabled) {
-    _reverseWrapMode = enabled;
+    _modes._reverseWrapMode = enabled;
   }
 
   @override
   void setReverseWrapExtendedMode(bool enabled) {
-    _reverseWrapExtendedMode = enabled;
+    _modes._reverseWrapExtendedMode = enabled;
   }
 
   @override
   void setMouseMode(MouseMode mode) {
-    _mouseMode = mode;
+    _modes._mouseMode = mode;
   }
 
   @override
   void setCursorBlinkMode(bool enabled) {
-    _cursorBlinkMode = enabled;
+    _modes._cursorBlinkMode = enabled;
   }
 
   @override
   void setCursorVisibleMode(bool enabled) {
-    _cursorVisibleMode = enabled;
+    _modes._cursorVisibleMode = enabled;
   }
 
   @override
@@ -2827,22 +2745,22 @@ class Terminal
 
   @override
   void setAppKeypadMode(bool enabled) {
-    _appKeypadMode = enabled;
+    _modes._appKeypadMode = enabled;
   }
 
   @override
   void setIgnoreKeypadWithNumLockMode(bool enabled) {
-    _ignoreKeypadWithNumLockMode = enabled;
+    _modes._ignoreKeypadWithNumLockMode = enabled;
   }
 
   @override
   void setBackarrowKeyMode(bool enabled) {
-    _backarrowKeyMode = enabled;
+    _modes._backarrowKeyMode = enabled;
   }
 
   @override
   void setReportFocusMode(bool enabled) {
-    _reportFocusMode = enabled;
+    _modes._reportFocusMode = enabled;
     if (!enabled) return;
 
     focusInput(_focused);
@@ -2850,37 +2768,37 @@ class Terminal
 
   @override
   void setMouseShiftCaptureMode(bool enabled) {
-    _mouseShiftCaptureMode = enabled;
+    _modes._mouseShiftCaptureMode = enabled;
   }
 
   @override
   void setMouseReportMode(MouseReportMode mode) {
-    _mouseReportMode = mode;
+    _modes._mouseReportMode = mode;
   }
 
   @override
   void setAltBufferMouseScrollMode(bool enabled) {
-    _altBufferMouseScrollMode = enabled;
+    _modes._altBufferMouseScrollMode = enabled;
   }
 
   @override
   void setAltEscPrefixMode(bool enabled) {
-    _altEscPrefixMode = enabled;
+    _modes._altEscPrefixMode = enabled;
   }
 
   @override
   void setAltSendsEscapeMode(bool enabled) {
-    _altSendsEscapeMode = enabled;
+    _modes._altSendsEscapeMode = enabled;
   }
 
   @override
   void setBracketedPasteMode(bool enabled) {
-    _bracketedPasteMode = enabled;
+    _modes._bracketedPasteMode = enabled;
   }
 
   @override
   void setInBandSizeReportMode(bool enabled) {
-    _inBandSizeReportMode = enabled;
+    _modes._inBandSizeReportMode = enabled;
     if (!enabled) return;
 
     _sendInBandSizeReport();
@@ -2888,7 +2806,7 @@ class Terminal
 
   @override
   void setReportColorSchemeMode(bool enabled) {
-    _reportColorSchemeMode = enabled;
+    _modes._reportColorSchemeMode = enabled;
     if (!enabled) return;
 
     sendColorScheme();
@@ -2897,11 +2815,11 @@ class Terminal
   @override
   void setSynchronizedUpdateMode(bool enabled) {
     _synchronizedUpdateTimer?.cancel();
-    _synchronizedUpdateMode = enabled;
+    _modes._synchronizedUpdateMode = enabled;
     if (!enabled) return;
 
     _synchronizedUpdateTimer = Timer(const Duration(milliseconds: 150), () {
-      _synchronizedUpdateMode = false;
+      _modes._synchronizedUpdateMode = false;
       _synchronizedUpdateTimer = null;
       notifyListeners();
     });
@@ -2909,7 +2827,7 @@ class Terminal
 
   @override
   void setGraphemeClusterMode(bool enabled) {
-    _graphemeClusterMode = enabled;
+    _modes._graphemeClusterMode = enabled;
   }
 
   @override
@@ -2927,51 +2845,51 @@ class Terminal
 
   int _ansiModeState(int mode) {
     return switch (mode) {
-      2 => _reportedState(_keyboardActionMode),
-      4 => _reportedState(_insertMode),
-      12 => _reportedState(_sendReceiveMode),
-      20 => _reportedState(_lineFeedMode),
+      2 => _reportedState(_modes._keyboardActionMode),
+      4 => _reportedState(_modes._insertMode),
+      12 => _reportedState(_modes._sendReceiveMode),
+      20 => _reportedState(_modes._lineFeedMode),
       _ => 0,
     };
   }
 
   int _decModeState(int mode) {
     return switch (mode) {
-      1 => _reportedState(_cursorKeysMode),
+      1 => _reportedState(_modes._cursorKeysMode),
       3 => 0,
-      4 => _reportedState(_slowScrollMode),
-      5 => _reportedState(_reverseDisplayMode),
-      6 => _reportedState(_originMode),
-      7 => _reportedState(_autoWrapMode),
-      8 => _reportedState(_autoRepeatMode),
-      9 => _reportedState(_mouseMode == MouseMode.clickOnly),
-      12 || 13 => _reportedState(_cursorBlinkMode),
-      25 => _reportedState(_cursorVisibleMode),
-      40 => _reportedState(_enableColumnMode),
-      45 => _reportedState(_reverseWrapMode),
+      4 => _reportedState(_modes._slowScrollMode),
+      5 => _reportedState(_modes._reverseDisplayMode),
+      6 => _reportedState(_modes._originMode),
+      7 => _reportedState(_modes._autoWrapMode),
+      8 => _reportedState(_modes._autoRepeatMode),
+      9 => _reportedState(_modes._mouseMode == MouseMode.clickOnly),
+      12 || 13 => _reportedState(_modes._cursorBlinkMode),
+      25 => _reportedState(_modes._cursorVisibleMode),
+      40 => _reportedState(_modes._enableColumnMode),
+      45 => _reportedState(_modes._reverseWrapMode),
       47 || 1047 || 1049 => _reportedState(isUsingAltBuffer),
       1048 => _reportedState(false),
-      66 => _reportedState(_appKeypadMode),
-      67 => _reportedState(_backarrowKeyMode),
-      69 => _reportedState(_leftRightMarginMode),
-      1000 => _reportedState(_mouseMode == MouseMode.upDownScroll),
-      1002 => _reportedState(_mouseMode == MouseMode.upDownScrollDrag),
-      1003 => _reportedState(_mouseMode == MouseMode.upDownScrollMove),
-      1004 => _reportedState(_reportFocusMode),
-      1005 => _reportedState(_mouseReportMode == MouseReportMode.utf),
-      1006 => _reportedState(_mouseReportMode == MouseReportMode.sgr),
-      1007 => _reportedState(_altBufferMouseScrollMode),
-      1015 => _reportedState(_mouseReportMode == MouseReportMode.urxvt),
-      1016 => _reportedState(_mouseReportMode == MouseReportMode.sgrPixels),
-      1035 => _reportedState(_ignoreKeypadWithNumLockMode),
-      1036 => _reportedState(_altEscPrefixMode),
-      1039 => _reportedState(_altSendsEscapeMode),
-      1045 => _reportedState(_reverseWrapExtendedMode),
-      2004 => _reportedState(_bracketedPasteMode),
-      2026 => _reportedState(_synchronizedUpdateMode),
-      2027 => _reportedState(_graphemeClusterMode),
-      2031 => _reportedState(_reportColorSchemeMode),
-      2048 => _reportedState(_inBandSizeReportMode),
+      66 => _reportedState(_modes._appKeypadMode),
+      67 => _reportedState(_modes._backarrowKeyMode),
+      69 => _reportedState(_modes._leftRightMarginMode),
+      1000 => _reportedState(_modes._mouseMode == MouseMode.upDownScroll),
+      1002 => _reportedState(_modes._mouseMode == MouseMode.upDownScrollDrag),
+      1003 => _reportedState(_modes._mouseMode == MouseMode.upDownScrollMove),
+      1004 => _reportedState(_modes._reportFocusMode),
+      1005 => _reportedState(_modes._mouseReportMode == MouseReportMode.utf),
+      1006 => _reportedState(_modes._mouseReportMode == MouseReportMode.sgr),
+      1007 => _reportedState(_modes._altBufferMouseScrollMode),
+      1015 => _reportedState(_modes._mouseReportMode == MouseReportMode.urxvt),
+      1016 => _reportedState(_modes._mouseReportMode == MouseReportMode.sgrPixels),
+      1035 => _reportedState(_modes._ignoreKeypadWithNumLockMode),
+      1036 => _reportedState(_modes._altEscPrefixMode),
+      1039 => _reportedState(_modes._altSendsEscapeMode),
+      1045 => _reportedState(_modes._reverseWrapExtendedMode),
+      2004 => _reportedState(_modes._bracketedPasteMode),
+      2026 => _reportedState(_modes._synchronizedUpdateMode),
+      2027 => _reportedState(_modes._graphemeClusterMode),
+      2031 => _reportedState(_modes._reportColorSchemeMode),
+      2048 => _reportedState(_modes._inBandSizeReportMode),
       _ => 0,
     };
   }
@@ -3001,39 +2919,39 @@ class Terminal
 
   bool? _decModeEnabled(int mode) {
     return switch (mode) {
-      1 => _cursorKeysMode,
-      4 => _slowScrollMode,
-      5 => _reverseDisplayMode,
-      6 => _originMode,
-      7 => _autoWrapMode,
-      8 => _autoRepeatMode,
-      9 => _mouseMode == MouseMode.clickOnly,
-      12 || 13 => _cursorBlinkMode,
-      25 => _cursorVisibleMode,
-      40 => _enableColumnMode,
-      45 => _reverseWrapMode,
+      1 => _modes._cursorKeysMode,
+      4 => _modes._slowScrollMode,
+      5 => _modes._reverseDisplayMode,
+      6 => _modes._originMode,
+      7 => _modes._autoWrapMode,
+      8 => _modes._autoRepeatMode,
+      9 => _modes._mouseMode == MouseMode.clickOnly,
+      12 || 13 => _modes._cursorBlinkMode,
+      25 => _modes._cursorVisibleMode,
+      40 => _modes._enableColumnMode,
+      45 => _modes._reverseWrapMode,
       47 || 1047 || 1049 => isUsingAltBuffer,
-      66 => _appKeypadMode,
-      67 => _backarrowKeyMode,
-      69 => _leftRightMarginMode,
-      1000 => _mouseMode == MouseMode.upDownScroll,
-      1002 => _mouseMode == MouseMode.upDownScrollDrag,
-      1003 => _mouseMode == MouseMode.upDownScrollMove,
-      1004 => _reportFocusMode,
-      1005 => _mouseReportMode == MouseReportMode.utf,
-      1006 => _mouseReportMode == MouseReportMode.sgr,
-      1007 => _altBufferMouseScrollMode,
-      1015 => _mouseReportMode == MouseReportMode.urxvt,
-      1016 => _mouseReportMode == MouseReportMode.sgrPixels,
-      1035 => _ignoreKeypadWithNumLockMode,
-      1036 => _altEscPrefixMode,
-      1039 => _altSendsEscapeMode,
-      1045 => _reverseWrapExtendedMode,
-      2004 => _bracketedPasteMode,
-      2026 => _synchronizedUpdateMode,
-      2027 => _graphemeClusterMode,
-      2031 => _reportColorSchemeMode,
-      2048 => _inBandSizeReportMode,
+      66 => _modes._appKeypadMode,
+      67 => _modes._backarrowKeyMode,
+      69 => _modes._leftRightMarginMode,
+      1000 => _modes._mouseMode == MouseMode.upDownScroll,
+      1002 => _modes._mouseMode == MouseMode.upDownScrollDrag,
+      1003 => _modes._mouseMode == MouseMode.upDownScrollMove,
+      1004 => _modes._reportFocusMode,
+      1005 => _modes._mouseReportMode == MouseReportMode.utf,
+      1006 => _modes._mouseReportMode == MouseReportMode.sgr,
+      1007 => _modes._altBufferMouseScrollMode,
+      1015 => _modes._mouseReportMode == MouseReportMode.urxvt,
+      1016 => _modes._mouseReportMode == MouseReportMode.sgrPixels,
+      1035 => _modes._ignoreKeypadWithNumLockMode,
+      1036 => _modes._altEscPrefixMode,
+      1039 => _modes._altSendsEscapeMode,
+      1045 => _modes._reverseWrapExtendedMode,
+      2004 => _modes._bracketedPasteMode,
+      2026 => _modes._synchronizedUpdateMode,
+      2027 => _modes._graphemeClusterMode,
+      2031 => _modes._reportColorSchemeMode,
+      2048 => _modes._inBandSizeReportMode,
       _ => null,
     };
   }
@@ -3141,49 +3059,49 @@ class Terminal
 
   @override
   void reportKittyKeyboardMode() {
-    onOutput?.call('\x1b[?${_kittyKeyboardMode & _kittyKeyboardModeMask}u');
+    onOutput?.call('\x1b[?${_modes._kittyKeyboardMode & _kittyKeyboardModeMask}u');
   }
 
   @override
   void setKittyKeyboardMode(int mode, int behavior) {
     final normalizedMode = mode & _kittyKeyboardModeMask;
-    _kittyKeyboardMode = switch (behavior) {
-      2 => _kittyKeyboardMode | normalizedMode,
-      3 => _kittyKeyboardMode & ~normalizedMode,
+    _modes._kittyKeyboardMode = switch (behavior) {
+      2 => _modes._kittyKeyboardMode | normalizedMode,
+      3 => _modes._kittyKeyboardMode & ~normalizedMode,
       _ => normalizedMode,
     };
   }
 
   @override
   void pushKittyKeyboardMode(int mode) {
-    if (_kittyKeyboardModeStack.length >= _maxKittyKeyboardModeStackDepth) {
-      _kittyKeyboardModeStack.removeAt(0);
+    if (_modes._kittyKeyboardModeStack.length >= _maxKittyKeyboardModeStackDepth) {
+      _modes._kittyKeyboardModeStack.removeAt(0);
     }
 
     final normalizedMode = mode & _kittyKeyboardModeMask;
-    _kittyKeyboardModeStack.add(_kittyKeyboardMode);
-    _kittyKeyboardMode = normalizedMode;
+    _modes._kittyKeyboardModeStack.add(_modes._kittyKeyboardMode);
+    _modes._kittyKeyboardMode = normalizedMode;
   }
 
   @override
   void popKittyKeyboardModes(int count) {
     if (count <= 0) return;
 
-    if (count > _kittyKeyboardModeStack.length) {
-      _kittyKeyboardModeStack.clear();
-      _kittyKeyboardMode = 0;
+    if (count > _modes._kittyKeyboardModeStack.length) {
+      _modes._kittyKeyboardModeStack.clear();
+      _modes._kittyKeyboardMode = 0;
       return;
     }
 
-    final newLength = _kittyKeyboardModeStack.length - count;
-    _kittyKeyboardMode = _kittyKeyboardModeStack[newLength];
-    _kittyKeyboardModeStack.length = newLength;
+    final newLength = _modes._kittyKeyboardModeStack.length - count;
+    _modes._kittyKeyboardMode = _modes._kittyKeyboardModeStack[newLength];
+    _modes._kittyKeyboardModeStack.length = newLength;
   }
 
   @override
   void setModifyOtherKeysMode(int resource, int mode) {
     if (resource != 4) return;
-    _modifyOtherKeysMode = switch (mode) {
+    _modes._modifyOtherKeysMode = switch (mode) {
       2 => 2,
       _ => 0,
     };
@@ -3196,7 +3114,7 @@ class Terminal
 
   @override
   void setLeftRightMarginMode(bool enabled) {
-    _leftRightMarginMode = enabled;
+    _modes._leftRightMarginMode = enabled;
     if (enabled) return;
 
     _buffer.resetHorizontalMargins();
@@ -3568,8 +3486,8 @@ class Terminal
 
   @override
   void setCursorLineHighlight(bool enabled) {
-    if (_cursorLineHighlightMode == enabled) return;
-    _cursorLineHighlightMode = enabled;
+    if (_modes._cursorLineHighlightMode == enabled) return;
+    _modes._cursorLineHighlightMode = enabled;
   }
 
   @override
@@ -3613,7 +3531,10 @@ class Terminal
     }
 
     _hyperlinks[hyperlinkId] = uri;
-    if (key != null) _explicitHyperlinkIds[key] = hyperlinkId;
+    if (key != null) {
+      _explicitHyperlinkIds[key] = hyperlinkId;
+      _explicitHyperlinkKeyByHyperlinkId[hyperlinkId] = key;
+    }
     _cursorStyle.hyperlinkId = hyperlinkId;
   }
 
@@ -3630,6 +3551,95 @@ class Terminal
     }
     return null;
   }
+
+  /// Called whenever a line falls out of scrollback. This only collects the
+  /// hyperlink ids that lived on [line] - bounded by the line's length, so
+  /// it's cheap and happens on every eviction.
+  ///
+  /// It deliberately does NOT check whether those ids are still referenced
+  /// elsewhere here: doing that requires a full scan of both buffers, and in
+  /// the common case for hyperlink-heavy output (e.g. `ls --hyperlink=auto`,
+  /// build logs, test runners) every line carries its own distinct
+  /// hyperlink, so that scan would find nothing and run to completion on
+  /// every single eviction - turning scrolling into an O(evictions * buffer
+  /// size) operation. Instead, candidate ids are accumulated in
+  /// [_pendingEvictedHyperlinkIds] and resolved together in one batched scan
+  /// once enough of them have piled up. See
+  /// [_resolvePendingHyperlinkEvictions].
+  void _onScrollbackLineEvicted(BufferLine line) {
+    if (_hyperlinks.isEmpty) return;
+
+    for (var column = 0; column < line.length; column++) {
+      final hyperlinkId = line.getHyperlinkId(column);
+      if (hyperlinkId != 0) _pendingEvictedHyperlinkIds.add(hyperlinkId);
+    }
+
+    if (_pendingEvictedHyperlinkIds.length >= _hyperlinkEvictionBatchSize) {
+      _resolvePendingHyperlinkEvictions();
+    }
+  }
+
+  /// Resolves every id in [_pendingEvictedHyperlinkIds] in a single pass over
+  /// both buffers, removing whichever ones are no longer referenced by the
+  /// cursor's current style or by any live cell.
+  ///
+  /// Batching size ([_hyperlinkEvictionBatchSize]) is the amortization knob:
+  /// one scan now answers up to that many candidates instead of one scan per
+  /// candidate, so the average cost per evicted hyperlink is O(buffer size /
+  /// batch size) rather than O(buffer size). 128 was picked as a modest
+  /// fraction (~3%) of [_maxHyperlinks] - large enough that the per-eviction
+  /// overhead of the assert-free path stays close to O(line length), small
+  /// enough that at most 127 dead hyperlinks are ever left resident between
+  /// scans, which is a small sliver of the 4096-entry ceiling this exists to
+  /// avoid hitting.
+  void _resolvePendingHyperlinkEvictions() {
+    if (_pendingEvictedHyperlinkIds.isEmpty) return;
+
+    final remaining = _pendingEvictedHyperlinkIds;
+    if (_cursorStyle.hyperlinkId != 0) {
+      remaining.remove(_cursorStyle.hyperlinkId);
+    }
+
+    void scanBuffer(Buffer buffer) {
+      final lines = buffer.lines;
+      for (var i = 0; i < lines.length; i++) {
+        if (remaining.isEmpty) break;
+        final line = lines[i];
+        for (var column = 0; column < line.length; column++) {
+          _hyperlinkEvictionScanCellsForTesting++;
+          final hyperlinkId = line.getHyperlinkId(column);
+          if (hyperlinkId != 0) remaining.remove(hyperlinkId);
+        }
+      }
+    }
+
+    if (remaining.isNotEmpty) scanBuffer(_mainBuffer);
+    if (remaining.isNotEmpty) scanBuffer(_altBuffer);
+
+    for (final hyperlinkId in remaining) {
+      _hyperlinks.remove(hyperlinkId);
+      final explicitKey = _explicitHyperlinkKeyByHyperlinkId.remove(
+        hyperlinkId,
+      );
+      if (explicitKey != null) _explicitHyperlinkIds.remove(explicitKey);
+    }
+
+    _pendingEvictedHyperlinkIds.clear();
+  }
+
+  /// The number of hyperlinks currently held in the registry. Exposed only
+  /// for tests that verify the registry stays bounded as scrollback lines
+  /// are evicted; not part of the public API surface.
+  @visibleForTesting
+  int get debugHyperlinkCount => _hyperlinks.length;
+
+  /// The number of `getHyperlinkId` cell inspections spent resolving evicted
+  /// hyperlinks so far. Exposed only so a test can assert this stays
+  /// sub-quadratic in the number of evicted lines; not part of the public
+  /// API surface.
+  @visibleForTesting
+  int get debugHyperlinkEvictionScanCells =>
+      _hyperlinkEvictionScanCellsForTesting;
 
   void _pruneUnusedHyperlinks() {
     final usedIds = <int>{};
@@ -3652,14 +3662,18 @@ class Terminal
     for (final hyperlinkId in _hyperlinks.keys.toList()) {
       if (!usedIds.contains(hyperlinkId)) {
         _hyperlinks.remove(hyperlinkId);
+        final explicitKey = _explicitHyperlinkKeyByHyperlinkId.remove(
+          hyperlinkId,
+        );
+        if (explicitKey != null) _explicitHyperlinkIds.remove(explicitKey);
       }
     }
 
-    for (final entry in _explicitHyperlinkIds.entries.toList()) {
-      if (!_hyperlinks.containsKey(entry.value)) {
-        _explicitHyperlinkIds.remove(entry.key);
-      }
-    }
+    // This scan is authoritative over the whole registry, so any hyperlink
+    // id still sitting in the eviction batch has already been accounted for
+    // above (either it wasn't used and is now gone, or it is used and
+    // doesn't need to be resolved again until it's evicted for real).
+    _pendingEvictedHyperlinkIds.clear();
   }
 
   @override
@@ -3671,9 +3685,9 @@ class Terminal
     }
     if (index < 0 || index > 255) return;
     final color = _parseOscColor(value);
-    if (color == null || _indexedColorOverrides[index] == color) return;
-    _indexedColorOverrides[index] = color;
-    _colorRevision++;
+    if (color == null || _colors._indexedColorOverrides[index] == color) return;
+    _colors._indexedColorOverrides[index] = color;
+    _colors._colorRevision++;
   }
 
   @override
@@ -3684,7 +3698,7 @@ class Terminal
       return;
     }
     if (index < 0 || index > 255) return;
-    final color = _indexedColorOverrides[index] ?? onColorQuery?.call(4, index);
+    final color = _colors._indexedColorOverrides[index] ?? onColorQuery?.call(4, index);
     if (color == null) return;
     onOutput?.call('\x1b]4;$index;${_formatOscColor(color)}\x1b\\');
   }
@@ -3692,9 +3706,9 @@ class Terminal
   @override
   void resetIndexedColors(List<int> indices) {
     if (indices.isEmpty) {
-      if (_indexedColorOverrides.isEmpty) return;
-      _indexedColorOverrides.clear();
-      _colorRevision++;
+      if (_colors._indexedColorOverrides.isEmpty) return;
+      _colors._indexedColorOverrides.clear();
+      _colors._colorRevision++;
       return;
     }
 
@@ -3703,21 +3717,21 @@ class Terminal
       final specialIndex = _specialColorIndexFromPaletteIndex(index);
       if (specialIndex != null) {
         changed =
-            _specialColorOverrides.remove(specialIndex) != null || changed;
+            _colors._specialColorOverrides.remove(specialIndex) != null || changed;
         continue;
       }
-      changed = _indexedColorOverrides.remove(index) != null || changed;
+      changed = _colors._indexedColorOverrides.remove(index) != null || changed;
     }
-    if (changed) _colorRevision++;
+    if (changed) _colors._colorRevision++;
   }
 
   @override
   void setSpecialColor(int index, String value) {
     if (!_isSpecialColorIndex(index)) return;
     final color = _parseOscColor(value);
-    if (color == null || _specialColorOverrides[index] == color) return;
-    _specialColorOverrides[index] = color;
-    _colorRevision++;
+    if (color == null || _colors._specialColorOverrides[index] == color) return;
+    _colors._specialColorOverrides[index] = color;
+    _colors._colorRevision++;
   }
 
   @override
@@ -3727,7 +3741,7 @@ class Terminal
 
   void _querySpecialColor(int reportIndex, int storageIndex, int code) {
     if (!_isSpecialColorIndex(storageIndex)) return;
-    final color = _specialColorOverrides[storageIndex] ??
+    final color = _colors._specialColorOverrides[storageIndex] ??
         onColorQuery?.call(5, storageIndex);
     if (color == null) return;
     onOutput?.call('\x1b]$code;$reportIndex;${_formatOscColor(color)}\x1b\\');
@@ -3736,18 +3750,18 @@ class Terminal
   @override
   void resetSpecialColors(List<int> indices) {
     if (indices.isEmpty) {
-      if (_specialColorOverrides.isEmpty) return;
-      _specialColorOverrides.clear();
-      _colorRevision++;
+      if (_colors._specialColorOverrides.isEmpty) return;
+      _colors._specialColorOverrides.clear();
+      _colors._colorRevision++;
       return;
     }
 
     var changed = false;
     for (final index in indices) {
       if (!_isSpecialColorIndex(index)) continue;
-      changed = _specialColorOverrides.remove(index) != null || changed;
+      changed = _colors._specialColorOverrides.remove(index) != null || changed;
     }
-    if (changed) _colorRevision++;
+    if (changed) _colors._colorRevision++;
   }
 
   int? _specialColorIndexFromPaletteIndex(int index) {
@@ -3767,48 +3781,48 @@ class Terminal
 
     switch (code) {
       case 10:
-        if (_foregroundColorOverride == color) return;
-        _foregroundColorOverride = color;
+        if (_colors._foregroundColorOverride == color) return;
+        _colors._foregroundColorOverride = color;
         break;
       case 11:
-        if (_backgroundColorOverride == color) return;
-        _backgroundColorOverride = color;
+        if (_colors._backgroundColorOverride == color) return;
+        _colors._backgroundColorOverride = color;
         break;
       case 12:
-        if (_cursorColorOverride == color) return;
-        _cursorColorOverride = color;
+        if (_colors._cursorColorOverride == color) return;
+        _colors._cursorColorOverride = color;
         break;
       case 13:
       case 14:
       case 15:
       case 16:
       case 18:
-        if (_auxiliaryDynamicColorOverrides[code] == color) return;
-        _auxiliaryDynamicColorOverrides[code] = color;
+        if (_colors._auxiliaryDynamicColorOverrides[code] == color) return;
+        _colors._auxiliaryDynamicColorOverrides[code] = color;
         break;
       case 17:
-        if (_selectionColorOverride == color) return;
-        _selectionColorOverride = color;
+        if (_colors._selectionColorOverride == color) return;
+        _colors._selectionColorOverride = color;
         break;
       case 19:
-        if (_selectionForegroundColorOverride == color) return;
-        _selectionForegroundColorOverride = color;
+        if (_colors._selectionForegroundColorOverride == color) return;
+        _colors._selectionForegroundColorOverride = color;
         break;
       default:
         return;
     }
-    _colorRevision++;
+    _colors._colorRevision++;
   }
 
   @override
   void queryDynamicColor(int code) {
     final override = switch (code) {
-      10 => _foregroundColorOverride,
-      11 => _backgroundColorOverride,
-      12 => _cursorColorOverride,
-      17 => _selectionColorOverride,
-      19 => _selectionForegroundColorOverride,
-      _ => _auxiliaryDynamicColorOverrides[code],
+      10 => _colors._foregroundColorOverride,
+      11 => _colors._backgroundColorOverride,
+      12 => _colors._cursorColorOverride,
+      17 => _colors._selectionColorOverride,
+      19 => _colors._selectionForegroundColorOverride,
+      _ => _colors._auxiliaryDynamicColorOverrides[code],
     };
     final color = override ?? onColorQuery?.call(code, null);
     if (color == null) return;
@@ -3819,89 +3833,56 @@ class Terminal
   void resetDynamicColor(int code) {
     switch (code) {
       case 10:
-        if (_foregroundColorOverride == null) return;
-        _foregroundColorOverride = null;
+        if (_colors._foregroundColorOverride == null) return;
+        _colors._foregroundColorOverride = null;
         break;
       case 11:
-        if (_backgroundColorOverride == null) return;
-        _backgroundColorOverride = null;
+        if (_colors._backgroundColorOverride == null) return;
+        _colors._backgroundColorOverride = null;
         break;
       case 12:
-        if (_cursorColorOverride == null) return;
-        _cursorColorOverride = null;
+        if (_colors._cursorColorOverride == null) return;
+        _colors._cursorColorOverride = null;
         break;
       case 13:
       case 14:
       case 15:
       case 16:
       case 18:
-        if (_auxiliaryDynamicColorOverrides.remove(code) == null) return;
+        if (_colors._auxiliaryDynamicColorOverrides.remove(code) == null) return;
         break;
       case 17:
-        if (_selectionColorOverride == null) return;
-        _selectionColorOverride = null;
+        if (_colors._selectionColorOverride == null) return;
+        _colors._selectionColorOverride = null;
         break;
       case 19:
-        if (_selectionForegroundColorOverride == null) return;
-        _selectionForegroundColorOverride = null;
+        if (_colors._selectionForegroundColorOverride == null) return;
+        _colors._selectionForegroundColorOverride = null;
         break;
       default:
         return;
     }
-    _colorRevision++;
+    _colors._colorRevision++;
   }
 
   @override
   void startITerm2ClipboardCapture(String selector) {
-    _clipboardCaptureSelector = _resolveITerm2ClipboardSelector(selector);
-    _clipboardCaptureBuffer = StringBuffer();
-    _clipboardCaptureOverflowed = false;
+    _clipboardCapture.start(selector);
   }
 
   @override
   void endITerm2ClipboardCapture() {
-    final selector = _clipboardCaptureSelector;
-    final buffer = _clipboardCaptureBuffer;
-    final overflowed = _clipboardCaptureOverflowed;
-    _clipboardCaptureSelector = null;
-    _clipboardCaptureBuffer = null;
-    _clipboardCaptureOverflowed = false;
-
-    if (selector == null || buffer == null || overflowed) return;
-    onClipboardStore?.call(selector, buffer.toString());
+    final result = _clipboardCapture.end();
+    if (result == null) return;
+    onClipboardStore?.call(result.selector, result.text);
   }
 
   void _captureITerm2ClipboardChar(int codePoint) {
-    final buffer = _clipboardCaptureBuffer;
-    if (buffer == null || _clipboardCaptureOverflowed) return;
-
-    final length = switch (codePoint > 0xffff) {
-      true => 2,
-      false => 1,
-    };
-    if (buffer.length + length > _maxClipboardCaptureLength) {
-      _clipboardCaptureBuffer = null;
-      _clipboardCaptureOverflowed = true;
-      return;
-    }
-    buffer.writeCharCode(codePoint);
+    _clipboardCapture.captureChar(codePoint);
   }
 
   void _captureITerm2ClipboardTextRange(String text, int start, int end) {
-    final buffer = _clipboardCaptureBuffer;
-    if (buffer == null || _clipboardCaptureOverflowed) return;
-
-    if (buffer.length + end - start > _maxClipboardCaptureLength) {
-      _clipboardCaptureBuffer = null;
-      _clipboardCaptureOverflowed = true;
-      return;
-    }
-
-    if (start == 0 && end == text.length) {
-      buffer.write(text);
-      return;
-    }
-    buffer.write(text.substring(start, end));
+    _clipboardCapture.captureTextRange(text, start, end);
   }
 
   @override
@@ -3941,6 +3922,13 @@ class Terminal
     _handleVsCodeShellIntegrationOsc(ps, pt);
     _handleContextSignalOsc(ps, pt);
     onPrivateOSC?.call(ps, pt);
+
+    if (onUnknownSequence == null) return;
+    // These OSC families are recognised and acted on above; they only
+    // reach this fallback dispatch because they share it with genuinely
+    // unknown OSCs. Reporting them here would be a false positive.
+    if (ps == '133' || ps == '633' || ps == '3008') return;
+    _reportUnknownSequence();
   }
 
   void _handleContextSignalOsc(String ps, List<String> pt) {

@@ -1,6 +1,8 @@
+import 'dart:collection';
 import 'dart:math' show min;
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
 import 'package:xterm2/src/core/buffer/cell_offset.dart';
 import 'package:xterm2/src/core/cell.dart';
 import 'package:xterm2/src/core/cursor.dart';
@@ -29,6 +31,8 @@ class BufferLine with IndexedItem {
 
   Uint32List _data;
 
+  @Deprecated('Exposes raw cell storage; will be removed in the next major.')
+  @visibleForTesting
   Uint32List get data => _data;
 
   var isWrapped = false;
@@ -41,7 +45,7 @@ class BufferLine with IndexedItem {
 
   Map<int, int>? _underlineColors;
 
-  List<CellAnchor> get anchors => _anchors;
+  List<CellAnchor> get anchors => UnmodifiableListView(_anchors);
 
   bool get hasCombiningCharacters => _combiningCharacters?.isNotEmpty ?? false;
 
@@ -177,6 +181,8 @@ class BufferLine with IndexedItem {
   }
 
   void setCell(int index, int char, int witdh, CursorStyle style) {
+    _repairWideCellPairing(index, witdh, style);
+
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
     _data[offset + _cellBackground] = style.background;
@@ -186,6 +192,37 @@ class BufferLine with IndexedItem {
     _data[offset + _cellContent] = char | (witdh << CellContent.widthShift);
     _setUnderlineColor(index, style.underlineColor);
     _combiningCharacters?.remove(index);
+  }
+
+  /// Keeps the width-2 lead / width-0 placeholder pairing invariant intact
+  /// across a raw [setCell] write, regardless of what the caller remembers
+  /// (or forgets) to clean up beforehand.
+  ///
+  /// This primitive used to know nothing about the pairing convention, which
+  /// meant every call site had to repeat the same "clear the neighbouring
+  /// half first" dance - and the fuzzer kept finding call sites that forgot
+  /// it (see the regression tests in parser_fuzz_test.dart). Two cases can
+  /// break the pairing:
+  ///  - [index] is currently the width-0 placeholder half of a pair, and this
+  ///    write gives it a non-zero width - its former lead at `index - 1` is
+  ///    left dangling with no placeholder, so erase that lead too.
+  ///  - This write is itself a new width-2 lead, and `index + 1` currently
+  ///    holds an unrelated stale wide lead - it would become an invalid
+  ///    "placeholder" for the new pair, so erase it (and its own
+  ///    placeholder) first.
+  void _repairWideCellPairing(int index, int witdh, CursorStyle style) {
+    if (witdh != 0 &&
+        index > 0 &&
+        getWidth(index) == 0 &&
+        getWidth(index - 1) == 2) {
+      eraseCell(index - 1, style);
+    }
+    if (witdh == 2 && index + 1 < _length && getWidth(index + 1) == 2) {
+      eraseCell(index + 1, style);
+      if (index + 2 < _length) {
+        eraseCell(index + 2, style);
+      }
+    }
   }
 
   void setAsciiCells(
@@ -541,6 +578,8 @@ class BufferLine with IndexedItem {
       return;
     }
 
+    final oldLength = _length;
+
     if (length > _length) {
       final newBufferSize = _calcCapacity(length) * _cellSize;
 
@@ -552,6 +591,26 @@ class BufferLine with IndexedItem {
     }
 
     _length = length;
+
+    if (length > oldLength) {
+      // Growing intentionally preserves cell data past the old length (so
+      // it can reappear if the line was previously shrunk and is now being
+      // grown back - see the tests for this behaviour). But the raw bytes
+      // newly exposed by this grow may hold a wide-char lead/placeholder
+      // pair that was frozen mid-pair by some earlier resize whose own
+      // boundary happened to land between the two halves (e.g. a shrink to
+      // a width that kept the lead but cut off its placeholder, or a
+      // subsequent write at a since-shrunk width that landed on the
+      // placeholder half without the lead in scope to clear alongside it).
+      // Scan the whole newly exposed range - not just its last column - for
+      // a dangling lead and clear it so the width-2/placeholder invariant
+      // holds for every cell we just made visible again.
+      for (var i = oldLength; i < length; i++) {
+        if (getWidth(i) == 2 && (i + 1 >= length || getWidth(i + 1) != 0)) {
+          resetCell(i);
+        }
+      }
+    }
 
     for (var i = 0; i < _anchors.length; i++) {
       final anchor = _anchors[i];

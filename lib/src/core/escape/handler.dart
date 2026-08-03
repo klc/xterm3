@@ -74,6 +74,9 @@ abstract class EscapeHandler {
 
   void singleShiftCharset(int charset);
 
+  void unknownEscape(int char);
+
+  @Deprecated('Use unknownEscape instead. Will be removed in the next major.')
   void unkownEscape(int char);
 
   /* CSI */
@@ -128,6 +131,11 @@ abstract class EscapeHandler {
   void sendStatusString(String query);
 
   void sendTerminfoCapability(String query);
+
+  /// Called for a DCS payload that does not match any recognised DCS
+  /// request. [payload] is the raw text between the DCS introducer and the
+  /// string terminator.
+  void unknownDCS(String payload);
 
   void setMargins(int i, [int? bottom]);
 

@@ -1,5 +1,52 @@
 ## Unreleased
 
+* Fix wide characters corrupting the cell grid. `BufferLine.setCell` now repairs the
+  width-2 lead / width-0 placeholder pairing itself, so no caller can leave half a
+  wide character behind — a filler cell written when a wide character does not fit
+  before the right margin used to overwrite an existing placeholder in place, and
+  growing a previously shrunk line could resurrect a stale lead whose placeholder was
+  cut off. Found by the new parser fuzz harness.
+* Defer soft-keyboard input while an IME composition is open, in both `deleteDetection`
+  modes, so Turkish and CJK text reaches the terminal only once the keyboard commits it.
+  Previously an uncorrected preview (`gg` before `ğıİşçöü`, `ni` before `nihao`) was
+  written to the terminal as literal text. Composition is now tracked by composing-range
+  identity rather than length, which keeps single keypresses that Android keyboards wrap
+  in a never-collapsing composing range landing exactly once.
+* Recognise a backspace at offset 0 as a delete when `deleteDetection` is off. It
+  previously produced an empty insert and no delete ever reached the terminal.
+* Add an opt-in `Terminal.onUnknownSequence` diagnostic callback, reporting ESC, CSI, OSC
+  and DCS sequences the parser does not recognise. It costs nothing when unset, and
+  deliberately stays silent for sequences that are handled internally.
+* **Behavior change:** `Observable.listeners` is now an `Iterable<void Function()>`
+  view instead of a `Set<void Function()>`. Iterating, `length` and `contains`
+  keep working; code that mutated the set directly must call `addListener` and
+  `removeListener` instead. The backing storage is now an append-only list with
+  tombstoned removals, so `notifyListeners` no longer allocates a defensive copy
+  on every notification — it ran once per `Terminal.write`.
+* Cache rasterised procedural glyphs (box drawing, block elements, Powerline,
+  Braille) as `ui.Picture` keyed on code point, cell size and colour. They were
+  re-tesselated as vector paths on every repaint, including on a static screen.
+* Replace the paragraph cache's O(n log n) eviction with a lazily repaired
+  binary min-heap. Eviction previously copied and sorted every entry once per
+  batch; the cache-hit path stays allocation-free and untouched.
+* Prune OSC 8 hyperlink URIs when scrollback lines are evicted, instead of only
+  when the registry hits its ceiling. Eviction scans are batched so hyperlink
+  heavy output does not pay a full buffer scan per evicted line.
+* Assert that `Terminal.write` is not re-entered. Re-entering it from a listener
+  or an `onOutput`/`onBell`/`onTitleChange` callback corrupts parser state.
+* **Deprecated:** `EscapeHandler.unkownEscape` is superseded by the correctly
+  spelled `unknownEscape`. The old name still works and forwards to the new one;
+  it will be removed in the next major.
+* **Deprecated:** `CellData.getHash` is unused inside the package and will be
+  removed in the next major.
+* `BufferLine.data` is deprecated and marked `@visibleForTesting`; it exposed raw
+  cell storage for mutation. `BufferLine.anchors` now returns an unmodifiable
+  live view.
+* Add a seeded parser fuzz harness and assert real invariants in the stress test,
+  which previously only checked that nothing threw. Two pre-existing bugs the
+  harness uncovered — a `RangeError` in resize reflow and a wide character left
+  in a line's last column without room for its placeholder — are recorded as
+  skipped regression tests pending a fix.
 * **Behavior change:** `TerminalController` now defaults to `PointerInputs.all()`,
   so pointer motion and drag events reach the terminal. Applications that enable
   DEC private modes 1002 (button-event tracking) and 1003 (any-event tracking)
