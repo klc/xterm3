@@ -66,6 +66,12 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// collapsed editing value; it must not reach the terminal twice.
   String? _actionCommittedText;
 
+  /// The content of an open composing range in [deleteDetection] mode, once
+  /// it has been recognised as a genuine multi-character preview (as opposed
+  /// to a single trapped keystroke - see [_updateEditingValueWithDeleteDetection]).
+  /// Non-null exactly while such a preview is open and not yet committed.
+  String? _pendingComposingText;
+
   @override
   void initState() {
     widget.focusNode.addListener(_onFocusChange);
@@ -230,36 +236,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void updateEditingValue(TextEditingValue value) {
     _currentEditingState = value;
 
-    // In deleteDetection mode (mobile IME), process text deltas immediately
-    // to prevent Android keyboards (Gboard, Samsung, SwiftKey) from trapping
-    // keypresses inside composing range and causing double insertions.
     if (widget.deleteDetection) {
-      widget.onComposing(null);
-
-      final text = value.text;
-      final initLength = _initEditingState.text.length;
-
-      if (text.length < initLength) {
-        final deleteCount = initLength - text.length;
-        for (var i = 0; i < deleteCount; i++) {
-          widget.onDelete();
-        }
-        _resetEditingState();
-        return;
-      }
-
-      if (text.length > initLength) {
-        final textDelta = text.substring(initLength);
-        if (textDelta.isNotEmpty) {
-          widget.onInsert(textDelta);
-        }
-        _resetEditingState();
-        return;
-      }
-
-      if (text != _initEditingState.text) {
-        _resetEditingState();
-      }
+      _updateEditingValueWithDeleteDetection(value);
       return;
     }
 
@@ -301,6 +279,14 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     if (_currentEditingState.text.length < _initEditingState.text.length) {
       widget.onDelete();
+    } else if (textDelta.isEmpty &&
+        _currentEditingState.text == _initEditingState.text) {
+      // The local buffer is already at its floor (empty, cursor at 0), so
+      // there is nothing left for a backspace to shorten. Some soft
+      // keyboards still emit this exact no-op editing value for that
+      // keypress instead of staying silent - treat it as the delete it
+      // represents rather than as an empty insert.
+      widget.onDelete();
     } else {
       widget.onInsert(textDelta);
     }
@@ -308,6 +294,73 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     // Reset editing state if composing is done
     if (_currentEditingState.composing.isCollapsed &&
         _currentEditingState.text != _initEditingState.text) {
+      _resetEditingState();
+    }
+  }
+
+  /// Handles [updateEditingValue] for [CustomTextEdit.deleteDetection] mode.
+  ///
+  /// This mode pads the editing state with a sentinel (see
+  /// [_initEditingState]) so a backspace at offset 0 always has something to
+  /// remove, letting the deletion be derived from how much of the sentinel
+  /// is left rather than from a raw text-length diff against empty.
+  ///
+  /// Composition must still work here. While `value.composing` is a genuine,
+  /// still-open multi-character preview, emission is deferred and only the
+  /// text the IME actually commits is emitted once composing closes.
+  ///
+  /// The exception is the pattern some Android keyboards (Gboard, Samsung,
+  /// SwiftKey) produce for a single already-resolved keypress: they wrap it
+  /// in a composing range that never collapses on its own (fixed by
+  /// f6568e1). Such a range always opens fresh (no composition already
+  /// tracked) with exactly one character in it, unlike a real preview, which
+  /// opens with the word/syllable being built. That one-character-fresh-open
+  /// shape is committed immediately instead of waiting for a collapse that
+  /// will never arrive, which is what keeps every trapped keystroke landing
+  /// exactly once.
+  void _updateEditingValueWithDeleteDetection(TextEditingValue value) {
+    final text = value.text;
+    final initLength = _initEditingState.text.length;
+
+    if (value.composing.isValid) {
+      final composingText = value.composing.textInside(text);
+
+      if (_pendingComposingText == null && composingText.length <= 1) {
+        widget.onComposing(null);
+        if (composingText.isNotEmpty) {
+          widget.onInsert(composingText);
+        }
+        _resetEditingState();
+        return;
+      }
+
+      _pendingComposingText = composingText;
+      widget.onComposing(composingText);
+      return;
+    }
+
+    widget.onComposing(null);
+    _pendingComposingText = null;
+
+    if (text.length < initLength) {
+      final deleteCount = initLength - text.length;
+      for (var i = 0; i < deleteCount; i++) {
+        widget.onDelete();
+      }
+      _resetEditingState();
+      return;
+    }
+
+    if (text.length > initLength) {
+      final textDelta = text.substring(initLength);
+      if (textDelta.isNotEmpty) {
+        widget.onInsert(textDelta);
+      }
+      _resetEditingState();
+      return;
+    }
+
+    if (text != _initEditingState.text) {
       _resetEditingState();
     }
   }
@@ -345,6 +398,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   void _resetEditingState() {
     _currentEditingState = _initEditingState;
+    _pendingComposingText = null;
     _connection?.setEditingState(_initEditingState);
   }
 
