@@ -28,6 +28,8 @@ import 'package:xterm2/src/utils/ascii.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
 import 'package:xterm2/src/utils/escape_format.dart';
 
+part 'terminal_modes.dart';
+
 enum _ProtectionMode { off, iso, dec }
 
 enum TerminalSemanticPromptContent {
@@ -570,77 +572,13 @@ class Terminal
 
   final _cursorStyle = CursorStyle();
 
-  _ProtectionMode _protectionMode = _ProtectionMode.off;
+  final _modes = _TerminalModes();
 
-  bool _insertMode = false;
-
-  bool _sendReceiveMode = true;
-
-  bool _keyboardActionMode = false;
-
-  bool _lineFeedMode = false;
-
-  bool _cursorKeysMode = false;
-
-  bool _reverseDisplayMode = false;
-
-  bool _originMode = false;
-
-  bool _enableColumnMode = false;
-
-  bool _slowScrollMode = false;
-
-  bool _autoWrapMode = true;
-
-  bool _autoRepeatMode = false;
-
-  bool _reverseWrapMode = false;
-
-  bool _reverseWrapExtendedMode = false;
-
-  MouseMode _mouseMode = MouseMode.none;
-
-  MouseReportMode _mouseReportMode = MouseReportMode.normal;
-
-  bool _cursorBlinkMode = false;
-
-  bool _cursorVisibleMode = true;
-
-  TerminalCursorType? _applicationCursorType;
-
-  TerminalCursorType? get applicationCursorType => _applicationCursorType;
-
-  bool _appKeypadMode = false;
-
-  bool _ignoreKeypadWithNumLockMode = true;
-
-  bool _backarrowKeyMode = false;
-
-  bool _reportFocusMode = false;
+  TerminalCursorType? get applicationCursorType => _modes._applicationCursorType;
 
   bool _focused = true;
 
-  bool _mouseShiftCaptureMode = false;
-
-  bool _altBufferMouseScrollMode = false;
-
-  bool _altEscPrefixMode = true;
-
-  bool _altSendsEscapeMode = false;
-
-  bool _bracketedPasteMode = false;
-
-  bool _inBandSizeReportMode = false;
-
-  bool _reportColorSchemeMode = false;
-
-  bool _graphemeClusterMode = true;
-
-  bool _leftRightMarginMode = false;
-
-  bool _cursorLineHighlightMode = false;
-
-  bool get cursorLineHighlightMode => _cursorLineHighlightMode;
+  bool get cursorLineHighlightMode => _modes._cursorLineHighlightMode;
 
   bool _attributeChangeExtentRectangular = false;
 
@@ -678,17 +616,9 @@ class Terminal
 
   final _titleModes = <int>{};
 
-  bool _synchronizedUpdateMode = false;
-
   Timer? _synchronizedUpdateTimer;
 
   final _savedDecModes = <int, bool>{};
-
-  int _kittyKeyboardMode = 0;
-
-  int _modifyOtherKeysMode = 0;
-
-  final _kittyKeyboardModeStack = <int>[];
 
   String? _title;
 
@@ -714,82 +644,82 @@ class Terminal
   CursorStyle get cursor => _cursorStyle;
 
   @override
-  bool get insertMode => _insertMode;
+  bool get insertMode => _modes._insertMode;
 
   @override
-  bool get lineFeedMode => _lineFeedMode;
+  bool get lineFeedMode => _modes._lineFeedMode;
 
   @override
-  bool get cursorKeysMode => _cursorKeysMode;
+  bool get cursorKeysMode => _modes._cursorKeysMode;
 
   @override
-  bool get reverseDisplayMode => _reverseDisplayMode;
+  bool get reverseDisplayMode => _modes._reverseDisplayMode;
 
   @override
-  bool get originMode => _originMode;
+  bool get originMode => _modes._originMode;
 
   @override
-  bool get autoWrapMode => _autoWrapMode;
+  bool get autoWrapMode => _modes._autoWrapMode;
 
   @override
-  bool get reverseWrapMode => _reverseWrapMode;
+  bool get reverseWrapMode => _modes._reverseWrapMode;
 
   @override
-  bool get reverseWrapExtendedMode => _reverseWrapExtendedMode;
+  bool get reverseWrapExtendedMode => _modes._reverseWrapExtendedMode;
 
   @override
-  MouseMode get mouseMode => _mouseMode;
+  MouseMode get mouseMode => _modes._mouseMode;
 
   @override
-  MouseReportMode get mouseReportMode => _mouseReportMode;
+  MouseReportMode get mouseReportMode => _modes._mouseReportMode;
 
   @override
-  bool get cursorBlinkMode => _cursorBlinkMode;
+  bool get cursorBlinkMode => _modes._cursorBlinkMode;
 
   @override
-  bool get cursorVisibleMode => _cursorVisibleMode;
+  bool get cursorVisibleMode => _modes._cursorVisibleMode;
 
   @override
-  bool get appKeypadMode => _appKeypadMode;
+  bool get appKeypadMode => _modes._appKeypadMode;
 
   @override
-  bool get ignoreKeypadWithNumLockMode => _ignoreKeypadWithNumLockMode;
+  bool get ignoreKeypadWithNumLockMode => _modes._ignoreKeypadWithNumLockMode;
 
   @override
-  bool get backarrowKeyMode => _backarrowKeyMode;
+  bool get backarrowKeyMode => _modes._backarrowKeyMode;
 
   @override
-  bool get reportFocusMode => _reportFocusMode;
+  bool get reportFocusMode => _modes._reportFocusMode;
 
   @override
-  bool get mouseShiftCaptureMode => _mouseShiftCaptureMode;
+  bool get mouseShiftCaptureMode => _modes._mouseShiftCaptureMode;
 
   @override
-  bool get altBufferMouseScrollMode => _altBufferMouseScrollMode;
+  bool get altBufferMouseScrollMode => _modes._altBufferMouseScrollMode;
 
   @override
-  bool get altEscPrefixMode => _altEscPrefixMode;
+  bool get altEscPrefixMode => _modes._altEscPrefixMode;
 
   @override
-  bool get altSendsEscapeMode => _altSendsEscapeMode;
+  bool get altSendsEscapeMode => _modes._altSendsEscapeMode;
 
   @override
-  bool get bracketedPasteMode => _bracketedPasteMode;
+  bool get bracketedPasteMode => _modes._bracketedPasteMode;
 
   @override
-  bool get inBandSizeReportMode => _inBandSizeReportMode;
+  bool get inBandSizeReportMode => _modes._inBandSizeReportMode;
 
   @override
-  bool get reportColorSchemeMode => _reportColorSchemeMode;
+  bool get reportColorSchemeMode => _modes._reportColorSchemeMode;
 
   @override
-  bool get graphemeClusterMode => _graphemeClusterMode;
+  bool get graphemeClusterMode => _modes._graphemeClusterMode;
 
   @override
-  int get kittyKeyboardMode => _kittyKeyboardMode;
+  int get kittyKeyboardMode => _modes._kittyKeyboardMode;
 
   @override
-  int get modifyOtherKeysMode => _modifyOtherKeysMode;
+  int get modifyOtherKeysMode => _modes._modifyOtherKeysMode;
 
   /// Current active buffer of the terminal. This is initially [mainBuffer] and
   /// can be switched back and forth from [altBuffer] to [mainBuffer] when
@@ -835,7 +765,7 @@ class Terminal
     } finally {
       _writing = false;
     }
-    if (_synchronizedUpdateMode) return;
+    if (_modes._synchronizedUpdateMode) return;
     notifyListeners();
   }
 
@@ -845,7 +775,7 @@ class Terminal
     final activePrompt = _activeSemanticPromptOffset();
     _buffer.clear();
     _restoreActiveSemanticPrompt(activePrompt);
-    if (_synchronizedUpdateMode) return;
+    if (_modes._synchronizedUpdateMode) return;
     notifyListeners();
   }
 
@@ -854,7 +784,7 @@ class Terminal
     _isDisposed = true;
     _synchronizedUpdateTimer?.cancel();
     _synchronizedUpdateTimer = null;
-    _synchronizedUpdateMode = false;
+    _modes._synchronizedUpdateMode = false;
     clearListeners();
     _clipboardCaptureSelector = null;
     _clipboardCaptureBuffer = null;
@@ -884,7 +814,7 @@ class Terminal
     String? text,
   }) {
     if (_isDisposed) return false;
-    if (_keyboardActionMode) return false;
+    if (_modes._keyboardActionMode) return false;
     final output = inputHandler?.call(
       TerminalKeyboardEvent(
         key: key,
@@ -923,7 +853,7 @@ class Terminal
     bool ctrl = false,
   }) {
     if (_isDisposed) return false;
-    if (_keyboardActionMode) return false;
+    if (_modes._keyboardActionMode) return false;
     if (ctrl) {
       // a(97) ~ z(122)
       if (charCode >= Ascii.a && charCode <= Ascii.z) {
@@ -960,7 +890,7 @@ class Terminal
   /// - [paste]
   void textInput(String text) {
     if (_isDisposed) return;
-    if (_keyboardActionMode) return;
+    if (_modes._keyboardActionMode) return;
     onOutput?.call(text);
   }
 
@@ -973,9 +903,9 @@ class Terminal
   /// - [textInput]
   void paste(String text) {
     if (_isDisposed) return;
-    if (_keyboardActionMode) return;
+    if (_modes._keyboardActionMode) return;
     final sanitizedText = _sanitizePasteText(text);
-    if (_bracketedPasteMode) {
+    if (_modes._bracketedPasteMode) {
       onOutput?.call(_emitter.bracketedPaste(sanitizedText));
       return;
     }
@@ -1131,7 +1061,7 @@ class Terminal
   void focusInput(bool focused) {
     _focused = focused;
     if (_isDisposed) return;
-    if (!_reportFocusMode) return;
+    if (!_modes._reportFocusMode) return;
     onOutput?.call(switch (focused) {
       true => _emitter.focusIn(),
       false => _emitter.focusOut(),
@@ -1180,11 +1110,11 @@ class Terminal
 
     final nextCellPixelWidth = pixelWidth ?? _cellPixelWidth;
     final nextCellPixelHeight = pixelHeight ?? _cellPixelHeight;
-    final wasSynchronizedUpdateMode = _synchronizedUpdateMode;
+    final wasSynchronizedUpdateMode = _modes._synchronizedUpdateMode;
     if (wasSynchronizedUpdateMode) {
       _synchronizedUpdateTimer?.cancel();
       _synchronizedUpdateTimer = null;
-      _synchronizedUpdateMode = false;
+      _modes._synchronizedUpdateMode = false;
     }
 
     if (newWidth == _viewWidth &&
@@ -1192,7 +1122,7 @@ class Terminal
         nextCellPixelWidth == _cellPixelWidth &&
         nextCellPixelHeight == _cellPixelHeight) {
       if (wasSynchronizedUpdateMode) notifyListeners();
-      if (_inBandSizeReportMode && pixelWidth != null && pixelHeight != null) {
+      if (_modes._inBandSizeReportMode && pixelWidth != null && pixelHeight != null) {
         _sendInBandSizeReport();
       }
       return;
@@ -1227,7 +1157,7 @@ class Terminal
     _mainBuffer.resetVerticalMargins();
 
     if (wasSynchronizedUpdateMode) notifyListeners();
-    if (_inBandSizeReportMode) _sendInBandSizeReport();
+    if (_modes._inBandSizeReportMode) _sendInBandSizeReport();
   }
 
   @override
@@ -1350,12 +1280,12 @@ class Terminal
 
   @override
   void saveCursor() {
-    _buffer.saveCursor(originMode: _originMode);
+    _buffer.saveCursor(originMode: _modes._originMode);
   }
 
   @override
   void saveCursorOrSetLeftRightMargins() {
-    if (_leftRightMarginMode) {
+    if (_modes._leftRightMarginMode) {
       return setLeftRightMargins(0);
     }
     saveCursor();
@@ -1363,7 +1293,7 @@ class Terminal
 
   @override
   void restoreCursor() {
-    _originMode = _buffer.restoreCursor();
+    _modes._originMode = _buffer.restoreCursor();
   }
 
   @override
@@ -1386,7 +1316,6 @@ class Terminal
   void reset() {
     _synchronizedUpdateTimer?.cancel();
     _synchronizedUpdateTimer = null;
-    _synchronizedUpdateMode = false;
     _buffer = _mainBuffer;
     _precedingCodepoint = 0;
     _semanticInputTerminatesAtLineFeed = false;
@@ -1397,42 +1326,7 @@ class Terminal
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
     _cursorStyle.semanticAttrs = 0;
-    _protectionMode = _ProtectionMode.off;
-    _insertMode = false;
-    _sendReceiveMode = true;
-    _keyboardActionMode = false;
-    _lineFeedMode = false;
-    _cursorKeysMode = false;
-    _reverseDisplayMode = false;
-    _originMode = false;
-    _enableColumnMode = false;
-    _slowScrollMode = false;
-    _autoWrapMode = true;
-    _autoRepeatMode = false;
-    _reverseWrapMode = false;
-    _reverseWrapExtendedMode = false;
-    _mouseMode = MouseMode.none;
-    _mouseReportMode = MouseReportMode.normal;
-    _cursorBlinkMode = false;
-    _cursorVisibleMode = true;
-    _applicationCursorType = null;
-    _appKeypadMode = false;
-    _ignoreKeypadWithNumLockMode = true;
-    _backarrowKeyMode = false;
-    _reportFocusMode = false;
-    _mouseShiftCaptureMode = false;
-    _altBufferMouseScrollMode = false;
-    _altEscPrefixMode = true;
-    _altSendsEscapeMode = false;
-    _bracketedPasteMode = false;
-    _inBandSizeReportMode = false;
-    _reportColorSchemeMode = false;
-    _graphemeClusterMode = true;
-    _leftRightMarginMode = false;
-    _cursorLineHighlightMode = false;
-    _kittyKeyboardMode = 0;
-    _modifyOtherKeysMode = 0;
-    _kittyKeyboardModeStack.clear();
+    _modes.reset();
     _title = null;
     _iconTitle = null;
     _clipboardCaptureSelector = null;
@@ -1453,7 +1347,6 @@ class Terminal
   void softReset() {
     _synchronizedUpdateTimer?.cancel();
     _synchronizedUpdateTimer = null;
-    _synchronizedUpdateMode = false;
     _precedingCodepoint = 0;
     _semanticInputTerminatesAtLineFeed = false;
     _semanticPromptState = const TerminalSemanticPromptState(
@@ -1462,41 +1355,7 @@ class Terminal
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
     _cursorStyle.semanticAttrs = 0;
-    _protectionMode = _ProtectionMode.off;
-    _insertMode = false;
-    _sendReceiveMode = true;
-    _keyboardActionMode = false;
-    _lineFeedMode = false;
-    _cursorKeysMode = false;
-    _reverseDisplayMode = false;
-    _originMode = false;
-    _enableColumnMode = false;
-    _slowScrollMode = false;
-    _autoWrapMode = true;
-    _autoRepeatMode = false;
-    _reverseWrapMode = false;
-    _reverseWrapExtendedMode = false;
-    _mouseMode = MouseMode.none;
-    _mouseReportMode = MouseReportMode.normal;
-    _cursorBlinkMode = false;
-    _cursorVisibleMode = true;
-    _applicationCursorType = null;
-    _appKeypadMode = false;
-    _ignoreKeypadWithNumLockMode = true;
-    _backarrowKeyMode = false;
-    _reportFocusMode = false;
-    _mouseShiftCaptureMode = false;
-    _altBufferMouseScrollMode = false;
-    _altEscPrefixMode = true;
-    _altSendsEscapeMode = false;
-    _bracketedPasteMode = false;
-    _inBandSizeReportMode = false;
-    _reportColorSchemeMode = false;
-    _graphemeClusterMode = true;
-    _leftRightMarginMode = false;
-    _kittyKeyboardMode = 0;
-    _modifyOtherKeysMode = 0;
-    _kittyKeyboardModeStack.clear();
+    _modes.softReset();
     _tabStops.reset();
     _buffer.charset.reset();
     _buffer.resetVerticalMargins();
@@ -1509,7 +1368,7 @@ class Terminal
       foreground: _cursorStyle.foreground,
       background: _cursorStyle.background,
     );
-    _originMode = false;
+    _modes._originMode = false;
     _buffer.screenAlignmentTest(style);
   }
 
@@ -1662,7 +1521,7 @@ class Terminal
   }
 
   int _horizontalTabLeftLimit() {
-    return switch (_originMode) {
+    return switch (_modes._originMode) {
       true => _buffer.marginLeft,
       false => 0,
     };
@@ -1690,11 +1549,11 @@ class Terminal
 
   @override
   void sendCursorPosition() {
-    final x = switch (_originMode) {
+    final x = switch (_modes._originMode) {
       true => max(0, _buffer.cursorX - _buffer.marginLeft),
       false => _buffer.cursorX,
     };
-    final y = switch (_originMode) {
+    final y = switch (_modes._originMode) {
       true => max(0, _buffer.cursorY - _buffer.marginTop),
       false => _buffer.cursorY,
     };
@@ -1826,7 +1685,7 @@ class Terminal
   }
 
   void reportColorSchemeChange() {
-    if (!_reportColorSchemeMode) return;
+    if (!_modes._reportColorSchemeMode) return;
     sendColorScheme();
   }
 
@@ -2129,7 +1988,7 @@ class Terminal
 
     return switch (query) {
       'm' => _sgrStatusString(),
-      '>4m' => '>4;$_modifyOtherKeysMode' 'm',
+      '>4m' => '>4;${_modes._modifyOtherKeysMode}' 'm',
       '|' => '$_transmitTerminationCharacter|',
       "'s" => "$_lineTransmitTerminationCharacter's",
       '}' => '$_protectedFieldsAttribute}',
@@ -2213,7 +2072,7 @@ class Terminal
   }
 
   String? _leftRightMarginStatusString() {
-    if (!_leftRightMarginMode) return null;
+    if (!_modes._leftRightMarginMode) return null;
     return '${_buffer.marginLeft + 1};${_buffer.marginRight + 1}s';
   }
 
@@ -2273,7 +2132,7 @@ class Terminal
   }
 
   int _cursorShapeStatus() {
-    return switch ((_applicationCursorType, _cursorBlinkMode)) {
+    return switch ((_modes._applicationCursorType, _modes._cursorBlinkMode)) {
       (TerminalCursorType.block || null, true) => 1,
       (TerminalCursorType.block || null, false) => 2,
       (TerminalCursorType.underline, true) => 3,
@@ -2293,7 +2152,7 @@ class Terminal
 
   @override
   void setLeftRightMargins(int left, [int? right]) {
-    if (!_leftRightMarginMode) return;
+    if (!_modes._leftRightMarginMode) return;
 
     final effectiveRight = right ?? viewWidth - 1;
     if (left >= effectiveRight) return;
@@ -2698,7 +2557,7 @@ class Terminal
       true => 'A',
       false => '@',
     };
-    final flags = switch (_originMode) {
+    final flags = switch (_modes._originMode) {
       true => 'A',
       false => '@',
     };
@@ -2741,25 +2600,25 @@ class Terminal
   @override
   void setCursorShape(int style) {
     if (style == 0) {
-      _applicationCursorType = null;
-      _cursorBlinkMode = false;
+      _modes._applicationCursorType = null;
+      _modes._cursorBlinkMode = false;
       return;
     }
 
-    _applicationCursorType = switch (style) {
+    _modes._applicationCursorType = switch (style) {
       1 || 2 => TerminalCursorType.block,
       3 || 4 => TerminalCursorType.underline,
       5 || 6 => TerminalCursorType.verticalBar,
-      _ => _applicationCursorType,
+      _ => _modes._applicationCursorType,
     };
     if (style < 1 || style > 6) return;
-    _cursorBlinkMode = style.isOdd;
+    _modes._cursorBlinkMode = style.isOdd;
   }
 
   @override
   void setProtectedMode(bool enabled) {
     if (enabled) {
-      _protectionMode = _ProtectionMode.dec;
+      _modes._protectionMode = _ProtectionMode.dec;
       return _cursorStyle.setProtected();
     }
     _cursorStyle.unsetProtected();
@@ -2768,34 +2627,34 @@ class Terminal
   @override
   void setIsoProtectedMode(bool enabled) {
     if (enabled) {
-      _protectionMode = _ProtectionMode.iso;
+      _modes._protectionMode = _ProtectionMode.iso;
       return _cursorStyle.setProtected();
     }
     _cursorStyle.unsetProtected();
   }
 
-  bool get _usesIsoProtection => _protectionMode == _ProtectionMode.iso;
+  bool get _usesIsoProtection => _modes._protectionMode == _ProtectionMode.iso;
 
   /* Modes */
 
   @override
   void setInsertMode(bool enabled) {
-    _insertMode = enabled;
+    _modes._insertMode = enabled;
   }
 
   @override
   void setSendReceiveMode(bool enabled) {
-    _sendReceiveMode = enabled;
+    _modes._sendReceiveMode = enabled;
   }
 
   @override
   void setKeyboardActionMode(bool enabled) {
-    _keyboardActionMode = enabled;
+    _modes._keyboardActionMode = enabled;
   }
 
   @override
   void setLineFeedMode(bool enabled) {
-    _lineFeedMode = enabled;
+    _modes._lineFeedMode = enabled;
   }
 
   @override
@@ -2807,30 +2666,30 @@ class Terminal
 
   @override
   void setCursorKeysMode(bool enabled) {
-    _cursorKeysMode = enabled;
+    _modes._cursorKeysMode = enabled;
   }
 
   @override
   void setReverseDisplayMode(bool enabled) {
-    _reverseDisplayMode = enabled;
+    _modes._reverseDisplayMode = enabled;
   }
 
   @override
   void setOriginMode(bool enabled) {
-    _originMode = enabled;
+    _modes._originMode = enabled;
     _buffer.setCursor(0, 0);
   }
 
   @override
   void setColumnMode(bool enabled) {
-    if (!_enableColumnMode) return;
+    if (!_modes._enableColumnMode) return;
 
     _buffer.resetViewport();
   }
 
   @override
   void setEnableColumnMode(bool enabled) {
-    _enableColumnMode = enabled;
+    _modes._enableColumnMode = enabled;
     if (!enabled) return;
 
     _buffer.resetViewport();
@@ -2838,42 +2697,42 @@ class Terminal
 
   @override
   void setSlowScrollMode(bool enabled) {
-    _slowScrollMode = enabled;
+    _modes._slowScrollMode = enabled;
   }
 
   @override
   void setAutoWrapMode(bool enabled) {
-    _autoWrapMode = enabled;
+    _modes._autoWrapMode = enabled;
   }
 
   @override
   void setAutoRepeatMode(bool enabled) {
-    _autoRepeatMode = enabled;
+    _modes._autoRepeatMode = enabled;
   }
 
   @override
   void setReverseWrapMode(bool enabled) {
-    _reverseWrapMode = enabled;
+    _modes._reverseWrapMode = enabled;
   }
 
   @override
   void setReverseWrapExtendedMode(bool enabled) {
-    _reverseWrapExtendedMode = enabled;
+    _modes._reverseWrapExtendedMode = enabled;
   }
 
   @override
   void setMouseMode(MouseMode mode) {
-    _mouseMode = mode;
+    _modes._mouseMode = mode;
   }
 
   @override
   void setCursorBlinkMode(bool enabled) {
-    _cursorBlinkMode = enabled;
+    _modes._cursorBlinkMode = enabled;
   }
 
   @override
   void setCursorVisibleMode(bool enabled) {
-    _cursorVisibleMode = enabled;
+    _modes._cursorVisibleMode = enabled;
   }
 
   @override
@@ -2905,22 +2764,22 @@ class Terminal
 
   @override
   void setAppKeypadMode(bool enabled) {
-    _appKeypadMode = enabled;
+    _modes._appKeypadMode = enabled;
   }
 
   @override
   void setIgnoreKeypadWithNumLockMode(bool enabled) {
-    _ignoreKeypadWithNumLockMode = enabled;
+    _modes._ignoreKeypadWithNumLockMode = enabled;
   }
 
   @override
   void setBackarrowKeyMode(bool enabled) {
-    _backarrowKeyMode = enabled;
+    _modes._backarrowKeyMode = enabled;
   }
 
   @override
   void setReportFocusMode(bool enabled) {
-    _reportFocusMode = enabled;
+    _modes._reportFocusMode = enabled;
     if (!enabled) return;
 
     focusInput(_focused);
@@ -2928,37 +2787,37 @@ class Terminal
 
   @override
   void setMouseShiftCaptureMode(bool enabled) {
-    _mouseShiftCaptureMode = enabled;
+    _modes._mouseShiftCaptureMode = enabled;
   }
 
   @override
   void setMouseReportMode(MouseReportMode mode) {
-    _mouseReportMode = mode;
+    _modes._mouseReportMode = mode;
   }
 
   @override
   void setAltBufferMouseScrollMode(bool enabled) {
-    _altBufferMouseScrollMode = enabled;
+    _modes._altBufferMouseScrollMode = enabled;
   }
 
   @override
   void setAltEscPrefixMode(bool enabled) {
-    _altEscPrefixMode = enabled;
+    _modes._altEscPrefixMode = enabled;
   }
 
   @override
   void setAltSendsEscapeMode(bool enabled) {
-    _altSendsEscapeMode = enabled;
+    _modes._altSendsEscapeMode = enabled;
   }
 
   @override
   void setBracketedPasteMode(bool enabled) {
-    _bracketedPasteMode = enabled;
+    _modes._bracketedPasteMode = enabled;
   }
 
   @override
   void setInBandSizeReportMode(bool enabled) {
-    _inBandSizeReportMode = enabled;
+    _modes._inBandSizeReportMode = enabled;
     if (!enabled) return;
 
     _sendInBandSizeReport();
@@ -2966,7 +2825,7 @@ class Terminal
 
   @override
   void setReportColorSchemeMode(bool enabled) {
-    _reportColorSchemeMode = enabled;
+    _modes._reportColorSchemeMode = enabled;
     if (!enabled) return;
 
     sendColorScheme();
@@ -2975,11 +2834,11 @@ class Terminal
   @override
   void setSynchronizedUpdateMode(bool enabled) {
     _synchronizedUpdateTimer?.cancel();
-    _synchronizedUpdateMode = enabled;
+    _modes._synchronizedUpdateMode = enabled;
     if (!enabled) return;
 
     _synchronizedUpdateTimer = Timer(const Duration(milliseconds: 150), () {
-      _synchronizedUpdateMode = false;
+      _modes._synchronizedUpdateMode = false;
       _synchronizedUpdateTimer = null;
       notifyListeners();
     });
@@ -2987,7 +2846,7 @@ class Terminal
 
   @override
   void setGraphemeClusterMode(bool enabled) {
-    _graphemeClusterMode = enabled;
+    _modes._graphemeClusterMode = enabled;
   }
 
   @override
@@ -3005,51 +2864,51 @@ class Terminal
 
   int _ansiModeState(int mode) {
     return switch (mode) {
-      2 => _reportedState(_keyboardActionMode),
-      4 => _reportedState(_insertMode),
-      12 => _reportedState(_sendReceiveMode),
-      20 => _reportedState(_lineFeedMode),
+      2 => _reportedState(_modes._keyboardActionMode),
+      4 => _reportedState(_modes._insertMode),
+      12 => _reportedState(_modes._sendReceiveMode),
+      20 => _reportedState(_modes._lineFeedMode),
       _ => 0,
     };
   }
 
   int _decModeState(int mode) {
     return switch (mode) {
-      1 => _reportedState(_cursorKeysMode),
+      1 => _reportedState(_modes._cursorKeysMode),
       3 => 0,
-      4 => _reportedState(_slowScrollMode),
-      5 => _reportedState(_reverseDisplayMode),
-      6 => _reportedState(_originMode),
-      7 => _reportedState(_autoWrapMode),
-      8 => _reportedState(_autoRepeatMode),
-      9 => _reportedState(_mouseMode == MouseMode.clickOnly),
-      12 || 13 => _reportedState(_cursorBlinkMode),
-      25 => _reportedState(_cursorVisibleMode),
-      40 => _reportedState(_enableColumnMode),
-      45 => _reportedState(_reverseWrapMode),
+      4 => _reportedState(_modes._slowScrollMode),
+      5 => _reportedState(_modes._reverseDisplayMode),
+      6 => _reportedState(_modes._originMode),
+      7 => _reportedState(_modes._autoWrapMode),
+      8 => _reportedState(_modes._autoRepeatMode),
+      9 => _reportedState(_modes._mouseMode == MouseMode.clickOnly),
+      12 || 13 => _reportedState(_modes._cursorBlinkMode),
+      25 => _reportedState(_modes._cursorVisibleMode),
+      40 => _reportedState(_modes._enableColumnMode),
+      45 => _reportedState(_modes._reverseWrapMode),
       47 || 1047 || 1049 => _reportedState(isUsingAltBuffer),
       1048 => _reportedState(false),
-      66 => _reportedState(_appKeypadMode),
-      67 => _reportedState(_backarrowKeyMode),
-      69 => _reportedState(_leftRightMarginMode),
-      1000 => _reportedState(_mouseMode == MouseMode.upDownScroll),
-      1002 => _reportedState(_mouseMode == MouseMode.upDownScrollDrag),
-      1003 => _reportedState(_mouseMode == MouseMode.upDownScrollMove),
-      1004 => _reportedState(_reportFocusMode),
-      1005 => _reportedState(_mouseReportMode == MouseReportMode.utf),
-      1006 => _reportedState(_mouseReportMode == MouseReportMode.sgr),
-      1007 => _reportedState(_altBufferMouseScrollMode),
-      1015 => _reportedState(_mouseReportMode == MouseReportMode.urxvt),
-      1016 => _reportedState(_mouseReportMode == MouseReportMode.sgrPixels),
-      1035 => _reportedState(_ignoreKeypadWithNumLockMode),
-      1036 => _reportedState(_altEscPrefixMode),
-      1039 => _reportedState(_altSendsEscapeMode),
-      1045 => _reportedState(_reverseWrapExtendedMode),
-      2004 => _reportedState(_bracketedPasteMode),
-      2026 => _reportedState(_synchronizedUpdateMode),
-      2027 => _reportedState(_graphemeClusterMode),
-      2031 => _reportedState(_reportColorSchemeMode),
-      2048 => _reportedState(_inBandSizeReportMode),
+      66 => _reportedState(_modes._appKeypadMode),
+      67 => _reportedState(_modes._backarrowKeyMode),
+      69 => _reportedState(_modes._leftRightMarginMode),
+      1000 => _reportedState(_modes._mouseMode == MouseMode.upDownScroll),
+      1002 => _reportedState(_modes._mouseMode == MouseMode.upDownScrollDrag),
+      1003 => _reportedState(_modes._mouseMode == MouseMode.upDownScrollMove),
+      1004 => _reportedState(_modes._reportFocusMode),
+      1005 => _reportedState(_modes._mouseReportMode == MouseReportMode.utf),
+      1006 => _reportedState(_modes._mouseReportMode == MouseReportMode.sgr),
+      1007 => _reportedState(_modes._altBufferMouseScrollMode),
+      1015 => _reportedState(_modes._mouseReportMode == MouseReportMode.urxvt),
+      1016 => _reportedState(_modes._mouseReportMode == MouseReportMode.sgrPixels),
+      1035 => _reportedState(_modes._ignoreKeypadWithNumLockMode),
+      1036 => _reportedState(_modes._altEscPrefixMode),
+      1039 => _reportedState(_modes._altSendsEscapeMode),
+      1045 => _reportedState(_modes._reverseWrapExtendedMode),
+      2004 => _reportedState(_modes._bracketedPasteMode),
+      2026 => _reportedState(_modes._synchronizedUpdateMode),
+      2027 => _reportedState(_modes._graphemeClusterMode),
+      2031 => _reportedState(_modes._reportColorSchemeMode),
+      2048 => _reportedState(_modes._inBandSizeReportMode),
       _ => 0,
     };
   }
@@ -3079,39 +2938,39 @@ class Terminal
 
   bool? _decModeEnabled(int mode) {
     return switch (mode) {
-      1 => _cursorKeysMode,
-      4 => _slowScrollMode,
-      5 => _reverseDisplayMode,
-      6 => _originMode,
-      7 => _autoWrapMode,
-      8 => _autoRepeatMode,
-      9 => _mouseMode == MouseMode.clickOnly,
-      12 || 13 => _cursorBlinkMode,
-      25 => _cursorVisibleMode,
-      40 => _enableColumnMode,
-      45 => _reverseWrapMode,
+      1 => _modes._cursorKeysMode,
+      4 => _modes._slowScrollMode,
+      5 => _modes._reverseDisplayMode,
+      6 => _modes._originMode,
+      7 => _modes._autoWrapMode,
+      8 => _modes._autoRepeatMode,
+      9 => _modes._mouseMode == MouseMode.clickOnly,
+      12 || 13 => _modes._cursorBlinkMode,
+      25 => _modes._cursorVisibleMode,
+      40 => _modes._enableColumnMode,
+      45 => _modes._reverseWrapMode,
       47 || 1047 || 1049 => isUsingAltBuffer,
-      66 => _appKeypadMode,
-      67 => _backarrowKeyMode,
-      69 => _leftRightMarginMode,
-      1000 => _mouseMode == MouseMode.upDownScroll,
-      1002 => _mouseMode == MouseMode.upDownScrollDrag,
-      1003 => _mouseMode == MouseMode.upDownScrollMove,
-      1004 => _reportFocusMode,
-      1005 => _mouseReportMode == MouseReportMode.utf,
-      1006 => _mouseReportMode == MouseReportMode.sgr,
-      1007 => _altBufferMouseScrollMode,
-      1015 => _mouseReportMode == MouseReportMode.urxvt,
-      1016 => _mouseReportMode == MouseReportMode.sgrPixels,
-      1035 => _ignoreKeypadWithNumLockMode,
-      1036 => _altEscPrefixMode,
-      1039 => _altSendsEscapeMode,
-      1045 => _reverseWrapExtendedMode,
-      2004 => _bracketedPasteMode,
-      2026 => _synchronizedUpdateMode,
-      2027 => _graphemeClusterMode,
-      2031 => _reportColorSchemeMode,
-      2048 => _inBandSizeReportMode,
+      66 => _modes._appKeypadMode,
+      67 => _modes._backarrowKeyMode,
+      69 => _modes._leftRightMarginMode,
+      1000 => _modes._mouseMode == MouseMode.upDownScroll,
+      1002 => _modes._mouseMode == MouseMode.upDownScrollDrag,
+      1003 => _modes._mouseMode == MouseMode.upDownScrollMove,
+      1004 => _modes._reportFocusMode,
+      1005 => _modes._mouseReportMode == MouseReportMode.utf,
+      1006 => _modes._mouseReportMode == MouseReportMode.sgr,
+      1007 => _modes._altBufferMouseScrollMode,
+      1015 => _modes._mouseReportMode == MouseReportMode.urxvt,
+      1016 => _modes._mouseReportMode == MouseReportMode.sgrPixels,
+      1035 => _modes._ignoreKeypadWithNumLockMode,
+      1036 => _modes._altEscPrefixMode,
+      1039 => _modes._altSendsEscapeMode,
+      1045 => _modes._reverseWrapExtendedMode,
+      2004 => _modes._bracketedPasteMode,
+      2026 => _modes._synchronizedUpdateMode,
+      2027 => _modes._graphemeClusterMode,
+      2031 => _modes._reportColorSchemeMode,
+      2048 => _modes._inBandSizeReportMode,
       _ => null,
     };
   }
@@ -3219,49 +3078,49 @@ class Terminal
 
   @override
   void reportKittyKeyboardMode() {
-    onOutput?.call('\x1b[?${_kittyKeyboardMode & _kittyKeyboardModeMask}u');
+    onOutput?.call('\x1b[?${_modes._kittyKeyboardMode & _kittyKeyboardModeMask}u');
   }
 
   @override
   void setKittyKeyboardMode(int mode, int behavior) {
     final normalizedMode = mode & _kittyKeyboardModeMask;
-    _kittyKeyboardMode = switch (behavior) {
-      2 => _kittyKeyboardMode | normalizedMode,
-      3 => _kittyKeyboardMode & ~normalizedMode,
+    _modes._kittyKeyboardMode = switch (behavior) {
+      2 => _modes._kittyKeyboardMode | normalizedMode,
+      3 => _modes._kittyKeyboardMode & ~normalizedMode,
       _ => normalizedMode,
     };
   }
 
   @override
   void pushKittyKeyboardMode(int mode) {
-    if (_kittyKeyboardModeStack.length >= _maxKittyKeyboardModeStackDepth) {
-      _kittyKeyboardModeStack.removeAt(0);
+    if (_modes._kittyKeyboardModeStack.length >= _maxKittyKeyboardModeStackDepth) {
+      _modes._kittyKeyboardModeStack.removeAt(0);
     }
 
     final normalizedMode = mode & _kittyKeyboardModeMask;
-    _kittyKeyboardModeStack.add(_kittyKeyboardMode);
-    _kittyKeyboardMode = normalizedMode;
+    _modes._kittyKeyboardModeStack.add(_modes._kittyKeyboardMode);
+    _modes._kittyKeyboardMode = normalizedMode;
   }
 
   @override
   void popKittyKeyboardModes(int count) {
     if (count <= 0) return;
 
-    if (count > _kittyKeyboardModeStack.length) {
-      _kittyKeyboardModeStack.clear();
-      _kittyKeyboardMode = 0;
+    if (count > _modes._kittyKeyboardModeStack.length) {
+      _modes._kittyKeyboardModeStack.clear();
+      _modes._kittyKeyboardMode = 0;
       return;
     }
 
-    final newLength = _kittyKeyboardModeStack.length - count;
-    _kittyKeyboardMode = _kittyKeyboardModeStack[newLength];
-    _kittyKeyboardModeStack.length = newLength;
+    final newLength = _modes._kittyKeyboardModeStack.length - count;
+    _modes._kittyKeyboardMode = _modes._kittyKeyboardModeStack[newLength];
+    _modes._kittyKeyboardModeStack.length = newLength;
   }
 
   @override
   void setModifyOtherKeysMode(int resource, int mode) {
     if (resource != 4) return;
-    _modifyOtherKeysMode = switch (mode) {
+    _modes._modifyOtherKeysMode = switch (mode) {
       2 => 2,
       _ => 0,
     };
@@ -3274,7 +3133,7 @@ class Terminal
 
   @override
   void setLeftRightMarginMode(bool enabled) {
-    _leftRightMarginMode = enabled;
+    _modes._leftRightMarginMode = enabled;
     if (enabled) return;
 
     _buffer.resetHorizontalMargins();
@@ -3646,8 +3505,8 @@ class Terminal
 
   @override
   void setCursorLineHighlight(bool enabled) {
-    if (_cursorLineHighlightMode == enabled) return;
-    _cursorLineHighlightMode = enabled;
+    if (_modes._cursorLineHighlightMode == enabled) return;
+    _modes._cursorLineHighlightMode = enabled;
   }
 
   @override
