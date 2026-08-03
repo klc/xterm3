@@ -29,6 +29,7 @@ class CellData {
 
   int content;
 
+  @Deprecated('Unused internally; will be removed in the next major.')
   int getHash() {
     final visualFlags = flags & CellAttr.visualMask;
     final hyperlinkFlag = hyperlinkId == 0 ? 0 : CellAttr.hyperlinkMarker;
