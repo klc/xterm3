@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' show max, min;
 
+import 'package:meta/meta.dart';
 import 'package:xterm2/src/base/observable.dart';
 import 'package:xterm2/src/core/buffer/buffer.dart';
 import 'package:xterm2/src/core/buffer/cell_offset.dart';
@@ -408,6 +409,27 @@ class Terminal
 
   final Map<String, int> _explicitHyperlinkIds = {};
 
+  /// Reverse lookup of [_explicitHyperlinkIds], so a hyperlink id can be
+  /// resolved to its explicit-id key (if any) in O(1) instead of scanning
+  /// the whole map. Kept in sync wherever [_explicitHyperlinkIds] is
+  /// written to or cleared.
+  final Map<int, String> _explicitHyperlinkKeyByHyperlinkId = {};
+
+  /// Hyperlink ids collected from evicted scrollback lines that have not yet
+  /// been checked against the live buffers. See
+  /// [_onScrollbackLineEvicted] for why this is batched instead of resolved
+  /// immediately.
+  final Set<int> _pendingEvictedHyperlinkIds = {};
+
+  /// Number of distinct evicted hyperlink ids to accumulate before spending
+  /// a full buffer scan to resolve them. See [_onScrollbackLineEvicted].
+  static const _hyperlinkEvictionBatchSize = 128;
+
+  /// Count of `getHyperlinkId` cell inspections spent resolving evicted
+  /// hyperlinks. Exposed via [debugHyperlinkEvictionScanCells] for tests
+  /// only.
+  int _hyperlinkEvictionScanCellsForTesting = 0;
+
   final Map<int, int> _indexedColorOverrides = {};
   final Map<int, int> _specialColorOverrides = {};
   final Map<int, int> _auxiliaryDynamicColorOverrides = {};
@@ -500,6 +522,7 @@ class Terminal
     maxLines: maxLines,
     isAltBuffer: false,
     wordSeparators: wordSeparators,
+    onLineEvicted: _onScrollbackLineEvicted,
   );
 
   late final _altBuffer = Buffer(
@@ -507,6 +530,7 @@ class Terminal
     maxLines: maxLines,
     isAltBuffer: true,
     wordSeparators: wordSeparators,
+    onLineEvicted: _onScrollbackLineEvicted,
   );
 
   final _tabStops = TabStops();
@@ -655,6 +679,8 @@ class Terminal
 
   bool _isDisposed = false;
 
+  var _writing = false;
+
   /* State getters */
 
   /// Number of cells in a terminal row.
@@ -783,7 +809,13 @@ class Terminal
   /// [onTitleChange] when the escape sequences in [data] request it.
   void write(String data) {
     if (_isDisposed) return;
-    _parser.write(data);
+    assert(!_writing, 'Terminal.write() is not reentrant');
+    _writing = true;
+    try {
+      _parser.write(data);
+    } finally {
+      _writing = false;
+    }
     if (_synchronizedUpdateMode) return;
     notifyListeners();
   }
@@ -811,6 +843,8 @@ class Terminal
     _clearSemanticPromptAnchors();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
+    _explicitHyperlinkKeyByHyperlinkId.clear();
+    _pendingEvictedHyperlinkIds.clear();
   }
 
   /// Sends a key event to the underlying program.
@@ -1388,6 +1422,8 @@ class Terminal
     _titleStack.clear();
     _hyperlinks.clear();
     _explicitHyperlinkIds.clear();
+    _explicitHyperlinkKeyByHyperlinkId.clear();
+    _pendingEvictedHyperlinkIds.clear();
     _nextHyperlinkId = 1;
     _tabStops.reset();
     _mainBuffer.reset();
@@ -1489,9 +1525,13 @@ class Terminal
   }
 
   @override
-  void unkownEscape(int char) {
+  void unknownEscape(int char) {
     // no-op
   }
+
+  @Deprecated('Use unknownEscape instead. Will be removed in the next major.')
+  @override
+  void unkownEscape(int char) => unknownEscape(char);
 
   /* CSI */
 
@@ -3613,7 +3653,10 @@ class Terminal
     }
 
     _hyperlinks[hyperlinkId] = uri;
-    if (key != null) _explicitHyperlinkIds[key] = hyperlinkId;
+    if (key != null) {
+      _explicitHyperlinkIds[key] = hyperlinkId;
+      _explicitHyperlinkKeyByHyperlinkId[hyperlinkId] = key;
+    }
     _cursorStyle.hyperlinkId = hyperlinkId;
   }
 
@@ -3630,6 +3673,95 @@ class Terminal
     }
     return null;
   }
+
+  /// Called whenever a line falls out of scrollback. This only collects the
+  /// hyperlink ids that lived on [line] - bounded by the line's length, so
+  /// it's cheap and happens on every eviction.
+  ///
+  /// It deliberately does NOT check whether those ids are still referenced
+  /// elsewhere here: doing that requires a full scan of both buffers, and in
+  /// the common case for hyperlink-heavy output (e.g. `ls --hyperlink=auto`,
+  /// build logs, test runners) every line carries its own distinct
+  /// hyperlink, so that scan would find nothing and run to completion on
+  /// every single eviction - turning scrolling into an O(evictions * buffer
+  /// size) operation. Instead, candidate ids are accumulated in
+  /// [_pendingEvictedHyperlinkIds] and resolved together in one batched scan
+  /// once enough of them have piled up. See
+  /// [_resolvePendingHyperlinkEvictions].
+  void _onScrollbackLineEvicted(BufferLine line) {
+    if (_hyperlinks.isEmpty) return;
+
+    for (var column = 0; column < line.length; column++) {
+      final hyperlinkId = line.getHyperlinkId(column);
+      if (hyperlinkId != 0) _pendingEvictedHyperlinkIds.add(hyperlinkId);
+    }
+
+    if (_pendingEvictedHyperlinkIds.length >= _hyperlinkEvictionBatchSize) {
+      _resolvePendingHyperlinkEvictions();
+    }
+  }
+
+  /// Resolves every id in [_pendingEvictedHyperlinkIds] in a single pass over
+  /// both buffers, removing whichever ones are no longer referenced by the
+  /// cursor's current style or by any live cell.
+  ///
+  /// Batching size ([_hyperlinkEvictionBatchSize]) is the amortization knob:
+  /// one scan now answers up to that many candidates instead of one scan per
+  /// candidate, so the average cost per evicted hyperlink is O(buffer size /
+  /// batch size) rather than O(buffer size). 128 was picked as a modest
+  /// fraction (~3%) of [_maxHyperlinks] - large enough that the per-eviction
+  /// overhead of the assert-free path stays close to O(line length), small
+  /// enough that at most 127 dead hyperlinks are ever left resident between
+  /// scans, which is a small sliver of the 4096-entry ceiling this exists to
+  /// avoid hitting.
+  void _resolvePendingHyperlinkEvictions() {
+    if (_pendingEvictedHyperlinkIds.isEmpty) return;
+
+    final remaining = _pendingEvictedHyperlinkIds;
+    if (_cursorStyle.hyperlinkId != 0) {
+      remaining.remove(_cursorStyle.hyperlinkId);
+    }
+
+    void scanBuffer(Buffer buffer) {
+      final lines = buffer.lines;
+      for (var i = 0; i < lines.length; i++) {
+        if (remaining.isEmpty) break;
+        final line = lines[i];
+        for (var column = 0; column < line.length; column++) {
+          _hyperlinkEvictionScanCellsForTesting++;
+          final hyperlinkId = line.getHyperlinkId(column);
+          if (hyperlinkId != 0) remaining.remove(hyperlinkId);
+        }
+      }
+    }
+
+    if (remaining.isNotEmpty) scanBuffer(_mainBuffer);
+    if (remaining.isNotEmpty) scanBuffer(_altBuffer);
+
+    for (final hyperlinkId in remaining) {
+      _hyperlinks.remove(hyperlinkId);
+      final explicitKey = _explicitHyperlinkKeyByHyperlinkId.remove(
+        hyperlinkId,
+      );
+      if (explicitKey != null) _explicitHyperlinkIds.remove(explicitKey);
+    }
+
+    _pendingEvictedHyperlinkIds.clear();
+  }
+
+  /// The number of hyperlinks currently held in the registry. Exposed only
+  /// for tests that verify the registry stays bounded as scrollback lines
+  /// are evicted; not part of the public API surface.
+  @visibleForTesting
+  int get debugHyperlinkCount => _hyperlinks.length;
+
+  /// The number of `getHyperlinkId` cell inspections spent resolving evicted
+  /// hyperlinks so far. Exposed only so a test can assert this stays
+  /// sub-quadratic in the number of evicted lines; not part of the public
+  /// API surface.
+  @visibleForTesting
+  int get debugHyperlinkEvictionScanCells =>
+      _hyperlinkEvictionScanCellsForTesting;
 
   void _pruneUnusedHyperlinks() {
     final usedIds = <int>{};
@@ -3652,14 +3784,18 @@ class Terminal
     for (final hyperlinkId in _hyperlinks.keys.toList()) {
       if (!usedIds.contains(hyperlinkId)) {
         _hyperlinks.remove(hyperlinkId);
+        final explicitKey = _explicitHyperlinkKeyByHyperlinkId.remove(
+          hyperlinkId,
+        );
+        if (explicitKey != null) _explicitHyperlinkIds.remove(explicitKey);
       }
     }
 
-    for (final entry in _explicitHyperlinkIds.entries.toList()) {
-      if (!_hyperlinks.containsKey(entry.value)) {
-        _explicitHyperlinkIds.remove(entry.key);
-      }
-    }
+    // This scan is authoritative over the whole registry, so any hyperlink
+    // id still sitting in the eviction batch has already been accounted for
+    // above (either it wasn't used and is now gone, or it is used and
+    // doesn't need to be resolved again until it's evicted for real).
+    _pendingEvictedHyperlinkIds.clear();
   }
 
   @override

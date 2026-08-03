@@ -25,11 +25,16 @@ class Buffer {
   /// defaults to [defaultWordSeparators].
   final Set<int>? wordSeparators;
 
+  /// Called after a line is dropped from the front of [lines] because
+  /// scrollback overflowed.
+  final void Function(BufferLine line)? onLineEvicted;
+
   Buffer(
     this.terminal, {
     required this.maxLines,
     required this.isAltBuffer,
     this.wordSeparators,
+    this.onLineEvicted,
   }) {
     for (int i = 0; i < terminal.viewHeight; i++) {
       lines.push(_newEmptyLine());
@@ -73,6 +78,7 @@ class Buffer {
   /// greater than [viewHeight].
   late final lines = IndexAwareCircularBuffer<BufferLine>(
     max(maxLines, terminal.viewHeight),
+    onEvict: onLineEvicted,
   );
 
   /// Total number of lines in the buffer. Always equal or greater than

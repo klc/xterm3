@@ -1,8 +1,16 @@
 /// A circular buffer in which elements know their index in the buffer.
 class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// Creates a new circular list with the specified [maxLength].
-  IndexAwareCircularBuffer(int maxLength)
+  ///
+  /// If [onEvict] is given, it is called synchronously with an item right
+  /// after it has been trimmed off the front of the list because [push] was
+  /// called while the list was already full.
+  IndexAwareCircularBuffer(int maxLength, {this.onEvict})
       : _array = List<T?>.filled(maxLength, null);
+
+  /// Called after an item is dropped from the front of the list due to
+  /// overflow in [push].
+  final void Function(T item)? onEvict;
 
   /// The backing array for this list. Length is always equal to [maxLength].
   late List<T?> _array;
@@ -146,15 +154,19 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// Adds [value] to the end of the list. May cause the first element to be
   /// trimmed if the list is full.
   void push(T value) {
+    final isOverflowing = _length == _array.length;
+    final evicted = isOverflowing ? _getChild(0) : null;
+
     _adoptChild(_length, value);
 
-    if (_length == _array.length) {
+    if (isOverflowing) {
       // When the list is full, we trim the first element
       _startIndex++;
       _absoluteStartIndex++;
       if (_startIndex == _array.length) {
         _startIndex = 0;
       }
+      if (evicted != null) onEvict?.call(evicted);
     } else {
       // When the list is not full, we just increase the length
       _length++;

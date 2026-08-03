@@ -74,6 +74,9 @@ abstract class EscapeHandler {
 
   void singleShiftCharset(int charset);
 
+  void unknownEscape(int char);
+
+  @Deprecated('Use unknownEscape instead. Will be removed in the next major.')
   void unkownEscape(int char);
 
   /* CSI */

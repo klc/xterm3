@@ -214,9 +214,13 @@ class _TerminalDebuggerHandler implements EscapeHandler {
   }
 
   @override
-  void unkownEscape(int char) {
-    onCommand('unkownEscape(${String.fromCharCode(char)})', error: true);
+  void unknownEscape(int char) {
+    onCommand('unknownEscape(${String.fromCharCode(char)})', error: true);
   }
+
+  @Deprecated('Use unknownEscape instead. Will be removed in the next major.')
+  @override
+  void unkownEscape(int char) => unknownEscape(char);
 
   /* CSI */
 

@@ -4859,6 +4859,59 @@ void main() {
     );
   });
 
+  test('Terminal prunes hyperlinks as scrollback lines are evicted', () {
+    final terminal = Terminal(maxLines: 20)..resize(10, 1);
+
+    // Each hyperlink lives on its own line. Once scrollback (20 lines) starts
+    // evicting old lines, the hyperlinks that lived only on those lines
+    // should eventually be pruned from the registry instead of lingering
+    // all the way to the 4096 entry ceiling. Evictions are resolved in
+    // batches rather than immediately, so a small multiple of the batch
+    // size is expected to remain resident at any given moment - the bound
+    // below is generous but still far below the 4096 ceiling.
+    for (var index = 0; index < 500; index++) {
+      terminal.write(
+        '\x1b]8;;https://example.com/$index\x1b\\x\x1b]8;;\x1b\\\n',
+      );
+    }
+
+    expect(terminal.debugHyperlinkCount, lessThan(300));
+  });
+
+  test(
+      'Terminal amortizes hyperlink eviction scans instead of scanning per '
+      'eviction', () {
+    final terminal = Terminal(maxLines: 50)..resize(20, 1);
+
+    // Each hyperlink is distinct and lives on its own line, so once a line
+    // is evicted its hyperlink is never referenced anywhere else - the
+    // worst case for eviction pruning (this is what tools like
+    // `ls --hyperlink=auto` or build logs produce). If eviction resolution
+    // scans both buffers on every single eviction (instead of batching many
+    // evictions into one scan), the total number of cell inspections grows
+    // roughly with evictions * scrollback size, i.e. quadratically in the
+    // number of lines written. With batching it grows roughly linearly:
+    // number of scans is evictions / batchSize, each costing O(buffer
+    // size), so total cost is O(evictions * buffer size / batchSize).
+    const lineCount = 4000;
+    for (var index = 0; index < lineCount; index++) {
+      terminal.write(
+        '\x1b]8;;https://example.com/$index\x1b\\x\x1b]8;;\x1b\\\n',
+      );
+    }
+
+    // Unbatched (scan-per-eviction) would cost roughly
+    // evictions * (maxLines + altBufferLines) * columns
+    // = ~3950 * 51 * 20 ≈ 4,000,000 cell inspections.
+    // Batched (128-per-scan) costs roughly
+    // (evictions / 128) * (maxLines + altBufferLines) * columns
+    // ≈ 31 * 51 * 20 ≈ 31,000 cell inspections.
+    // The bound below sits comfortably above the batched estimate and
+    // nowhere near the unbatched one, so it fails against a scan-per-
+    // eviction implementation and passes against a batched one.
+    expect(terminal.debugHyperlinkEvictionScanCells, lessThan(200000));
+  });
+
   test('Terminal insert blank chars shifts hyperlinks without linking blanks',
       () {
     final terminal = Terminal()..resize(10, 2);
