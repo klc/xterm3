@@ -2,6 +2,7 @@ import 'dart:math' show max, min;
 import 'dart:ui';
 
 import 'package:xterm2/src/ui/branch_glyphs.dart';
+import 'package:xterm2/src/ui/procedural_glyph_cache.dart';
 
 const _singleLineBoxArms = <int>[
   0x44,
@@ -469,23 +470,63 @@ bool paintProceduralGlyph(
   Offset offset,
   Size cellSize,
   int codePoint,
-  Paint paint,
-) {
+  Paint paint, {
+  ProceduralGlyphCache? cache,
+}) {
   if (!_isProceduralGlyph(codePoint)) {
     return false;
   }
 
+  if (cache == null) {
+    canvas.save();
+    canvas.clipRect(offset & cellSize, doAntiAlias: false);
+    final painted = _paintProceduralGlyph(
+      canvas,
+      offset,
+      cellSize,
+      codePoint,
+      paint,
+    );
+    canvas.restore();
+    return painted;
+  }
+
+  // The rasterised shape only depends on the codepoint, the cell size and
+  // the fill color - never on where the cell sits on screen - so the cached
+  // Picture is recorded once at the origin and simply translated into place
+  // on every subsequent paint. `paint.color` is the only property of `paint`
+  // read anywhere below (everything else - stroke widths, shading alphas -
+  // is derived from `cellSize` and the codepoint), so it's the only other
+  // input that needs to be part of the key.
+  final key = (codePoint, cellSize, paint.color.toARGB32());
+  var picture = cache.getFromCache(key);
+  if (picture == null) {
+    final recorder = PictureRecorder();
+    final recordingCanvas = Canvas(recorder, Offset.zero & cellSize);
+    final painted = _paintProceduralGlyph(
+      recordingCanvas,
+      Offset.zero,
+      cellSize,
+      codePoint,
+      paint,
+    );
+    final recorded = recorder.endRecording();
+    if (!painted) {
+      // _isProceduralGlyph matched but the inner switch didn't paint
+      // anything after all; don't cache an empty picture for this key.
+      recorded.dispose();
+      return false;
+    }
+    picture = recorded;
+    cache.insert(key, picture);
+  }
+
   canvas.save();
   canvas.clipRect(offset & cellSize, doAntiAlias: false);
-  final painted = _paintProceduralGlyph(
-    canvas,
-    offset,
-    cellSize,
-    codePoint,
-    paint,
-  );
+  canvas.translate(offset.dx, offset.dy);
+  canvas.drawPicture(picture);
   canvas.restore();
-  return painted;
+  return true;
 }
 
 bool _paintProceduralGlyph(
