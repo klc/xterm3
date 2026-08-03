@@ -1,6 +1,8 @@
+import 'dart:collection';
 import 'dart:math' show min;
 import 'dart:typed_data';
 
+import 'package:meta/meta.dart';
 import 'package:xterm2/src/core/buffer/cell_offset.dart';
 import 'package:xterm2/src/core/cell.dart';
 import 'package:xterm2/src/core/cursor.dart';
@@ -29,6 +31,8 @@ class BufferLine with IndexedItem {
 
   Uint32List _data;
 
+  @Deprecated('Exposes raw cell storage; will be removed in the next major.')
+  @visibleForTesting
   Uint32List get data => _data;
 
   var isWrapped = false;
@@ -41,7 +45,7 @@ class BufferLine with IndexedItem {
 
   Map<int, int>? _underlineColors;
 
-  List<CellAnchor> get anchors => _anchors;
+  List<CellAnchor> get anchors => UnmodifiableListView(_anchors);
 
   bool get hasCombiningCharacters => _combiningCharacters?.isNotEmpty ?? false;
 
