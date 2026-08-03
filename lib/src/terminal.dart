@@ -31,34 +31,9 @@ import 'package:xterm2/src/utils/escape_format.dart';
 part 'terminal_clipboard.dart';
 part 'terminal_colors.dart';
 part 'terminal_modes.dart';
+part 'terminal_semantic_prompt.dart';
 
 enum _ProtectionMode { off, iso, dec }
-
-enum TerminalSemanticPromptContent {
-  output,
-  prompt,
-  input,
-}
-
-enum TerminalSemanticPromptKind {
-  initial,
-  right,
-  continuation,
-  secondary,
-}
-
-enum TerminalSemanticPromptClickMode {
-  line,
-  multiple,
-  eventsAbsolute,
-  eventsRelative,
-}
-
-enum TerminalSemanticPromptRedraw {
-  disabled,
-  enabled,
-  last,
-}
 
 enum TerminalContextSignalAction {
   start,
@@ -196,35 +171,6 @@ final class TerminalContextSignal {
     }
     return int.tryParse(value);
   }
-}
-
-final class TerminalSemanticPromptState {
-  const TerminalSemanticPromptState({
-    required this.content,
-    this.lastCommandExitCode,
-    this.aid,
-    this.promptKind,
-    this.clickMode,
-    this.redraw,
-    this.specialKey,
-    this.commandLine,
-  });
-
-  final TerminalSemanticPromptContent content;
-
-  final int? lastCommandExitCode;
-
-  final String? aid;
-
-  final TerminalSemanticPromptKind? promptKind;
-
-  final TerminalSemanticPromptClickMode? clickMode;
-
-  final TerminalSemanticPromptRedraw? redraw;
-
-  final bool? specialKey;
-
-  final String? commandLine;
 }
 
 /// [Terminal] is an interface to interact with command line applications. It
@@ -456,18 +402,14 @@ class Terminal
 
   final _clipboardCapture = _ClipboardCapture();
 
-  TerminalSemanticPromptState _semanticPromptState =
-      const TerminalSemanticPromptState(
-    content: TerminalSemanticPromptContent.output,
-  );
-  bool _semanticInputTerminatesAtLineFeed = false;
+  final _semanticPrompt = _SemanticPromptTracker();
   final Queue<CellAnchor> _semanticPromptAnchors = Queue<CellAnchor>();
 
   int _nextHyperlinkId = 1;
 
   int get colorRevision => _colors._colorRevision;
 
-  TerminalSemanticPromptState get semanticPromptState => _semanticPromptState;
+  TerminalSemanticPromptState get semanticPromptState => _semanticPrompt.state;
 
   /// Returns whether [line] starts a primary semantic prompt.
   bool isSemanticPromptLine(int line) {
@@ -1301,10 +1243,7 @@ class Terminal
     _synchronizedUpdateTimer = null;
     _buffer = _mainBuffer;
     _precedingCodepoint = 0;
-    _semanticInputTerminatesAtLineFeed = false;
-    _semanticPromptState = const TerminalSemanticPromptState(
-      content: TerminalSemanticPromptContent.output,
-    );
+    _semanticPrompt.reset();
     _clearSemanticPromptAnchors();
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
@@ -1329,10 +1268,7 @@ class Terminal
     _synchronizedUpdateTimer?.cancel();
     _synchronizedUpdateTimer = null;
     _precedingCodepoint = 0;
-    _semanticInputTerminatesAtLineFeed = false;
-    _semanticPromptState = const TerminalSemanticPromptState(
-      content: TerminalSemanticPromptContent.output,
-    );
+    _semanticPrompt.reset();
     _cursorStyle.reset();
     _cursorStyle.hyperlinkId = 0;
     _cursorStyle.semanticAttrs = 0;
@@ -2189,7 +2125,7 @@ class Terminal
 
   bool _shouldScrollClearBeforeEraseDisplay() {
     if (isUsingAltBuffer) return false;
-    return switch (_semanticPromptState.content) {
+    return switch (_semanticPrompt.state.content) {
       TerminalSemanticPromptContent.prompt ||
       TerminalSemanticPromptContent.input =>
         true,
@@ -2727,8 +2663,9 @@ class Terminal
   void useMainBuffer() {
     _endScreenHyperlinkState();
     _buffer = _mainBuffer;
-    _cursorStyle.semanticAttrs = _semanticAttributes(
-      _semanticPromptState.content,
+    _cursorStyle.semanticAttrs = _SemanticPromptTracker.semanticAttributes(
+      _semanticPrompt.state.content,
+      isMainBuffer: identical(_buffer, _mainBuffer),
     );
   }
 
@@ -4003,7 +3940,7 @@ class Terminal
 
     final exitCode = switch (actionCode) {
       0x44 => _parseSemanticPromptExitCode(pt),
-      _ => _semanticPromptState.lastCommandExitCode,
+      _ => _semanticPrompt.state.lastCommandExitCode,
     };
     final state = TerminalSemanticPromptState(
       content: content,
@@ -4015,10 +3952,13 @@ class Terminal
       specialKey: _parseSemanticPromptBoolean(options['special_key']),
       commandLine: _parseSemanticPromptCommandLine(options),
     );
-    _semanticInputTerminatesAtLineFeed = actionCode == 0x49;
-    _semanticPromptState = state;
-    _cursorStyle.semanticAttrs = _semanticAttributes(content);
-    if (_isPrimarySemanticPrompt(state)) {
+    _semanticPrompt.inputTerminatesAtLineFeed = actionCode == 0x49;
+    _semanticPrompt.state = state;
+    _cursorStyle.semanticAttrs = _SemanticPromptTracker.semanticAttributes(
+      content,
+      isMainBuffer: identical(_buffer, _mainBuffer),
+    );
+    if (_SemanticPromptTracker.isPrimaryPrompt(state)) {
       _recordSemanticPromptAnchor();
     }
     onSemanticPrompt?.call(state);
@@ -4031,18 +3971,19 @@ class Terminal
   }
 
   void _semanticPromptLineFeed() {
-    if (!_semanticInputTerminatesAtLineFeed) return;
-    if (_semanticPromptState.content != TerminalSemanticPromptContent.input) {
-      _semanticInputTerminatesAtLineFeed = false;
+    if (!_semanticPrompt.inputTerminatesAtLineFeed) return;
+    if (_semanticPrompt.state.content !=
+        TerminalSemanticPromptContent.input) {
+      _semanticPrompt.inputTerminatesAtLineFeed = false;
       return;
     }
 
-    _semanticInputTerminatesAtLineFeed = false;
+    _semanticPrompt.inputTerminatesAtLineFeed = false;
     final state = TerminalSemanticPromptState(
       content: TerminalSemanticPromptContent.output,
-      lastCommandExitCode: _semanticPromptState.lastCommandExitCode,
+      lastCommandExitCode: _semanticPrompt.state.lastCommandExitCode,
     );
-    _semanticPromptState = state;
+    _semanticPrompt.state = state;
     _cursorStyle.semanticAttrs = 0;
     onSemanticPrompt?.call(state);
   }
@@ -4071,28 +4012,21 @@ class Terminal
 
     final exitCode = switch (action.codeUnitAt(0)) {
       0x44 => _parseSemanticPromptExitCode(pt),
-      _ => _semanticPromptState.lastCommandExitCode,
+      _ => _semanticPrompt.state.lastCommandExitCode,
     };
     final state = TerminalSemanticPromptState(
       content: content,
       lastCommandExitCode: exitCode,
     );
-    _semanticPromptState = state;
-    _cursorStyle.semanticAttrs = _semanticAttributes(content);
+    _semanticPrompt.state = state;
+    _cursorStyle.semanticAttrs = _SemanticPromptTracker.semanticAttributes(
+      content,
+      isMainBuffer: identical(_buffer, _mainBuffer),
+    );
     if (content == TerminalSemanticPromptContent.prompt) {
       _recordSemanticPromptAnchor();
     }
     onSemanticPrompt?.call(state);
-  }
-
-  bool _isPrimarySemanticPrompt(TerminalSemanticPromptState state) {
-    if (state.content != TerminalSemanticPromptContent.prompt) return false;
-    return switch (state.promptKind) {
-      TerminalSemanticPromptKind.continuation ||
-      TerminalSemanticPromptKind.secondary =>
-        false,
-      _ => true,
-    };
   }
 
   void _recordSemanticPromptAnchor() {
@@ -4147,7 +4081,8 @@ class Terminal
 
   ({int rowsAboveCursor, int column})? _activeSemanticPromptOffset() {
     if (!identical(_buffer, _mainBuffer)) return null;
-    if (_semanticPromptState.content == TerminalSemanticPromptContent.output) {
+    if (_semanticPrompt.state.content ==
+        TerminalSemanticPromptContent.output) {
       return null;
     }
 
@@ -4176,14 +4111,6 @@ class Terminal
     _semanticPromptAnchors.add(_mainBuffer.createAnchor(column, line));
   }
 
-  int _semanticAttributes(TerminalSemanticPromptContent content) {
-    if (!identical(_buffer, _mainBuffer)) return 0;
-    return switch (content) {
-      TerminalSemanticPromptContent.prompt => CellAttr.semanticPrompt,
-      TerminalSemanticPromptContent.input => CellAttr.semanticInput,
-      TerminalSemanticPromptContent.output => 0,
-    };
-  }
 }
 
 bool _isValidContextSignalId(String value) {
@@ -4192,20 +4119,6 @@ bool _isValidContextSignalId(String value) {
     if (codeUnit < 0x20 || codeUnit > 0x7e) return false;
   }
   return true;
-}
-
-Map<String, String> _parseSemanticPromptOptions(List<String> pt) {
-  final options = <String, String>{};
-  for (var index = 1; index < pt.length; index++) {
-    final part = pt[index];
-    final separator = part.indexOf('=');
-    if (separator <= 0) continue;
-    final key = part.substring(0, separator);
-    final value = part.substring(separator + 1);
-    if (key.isEmpty) continue;
-    options[key] = value;
-  }
-  return options;
 }
 
 String? _contextSignalValue(List<String> pt, String key) {
@@ -4220,117 +4133,6 @@ String? _contextSignalValue(List<String> pt, String key) {
     return value;
   }
   return null;
-}
-
-int? _parseSemanticPromptExitCode(List<String> pt) {
-  if (pt.length < 2) return null;
-  return int.tryParse(pt[1]);
-}
-
-TerminalSemanticPromptKind? _parseSemanticPromptKind(String? value) {
-  return switch (value) {
-    'i' => TerminalSemanticPromptKind.initial,
-    'r' => TerminalSemanticPromptKind.right,
-    'c' => TerminalSemanticPromptKind.continuation,
-    's' => TerminalSemanticPromptKind.secondary,
-    _ => null,
-  };
-}
-
-TerminalSemanticPromptClickMode? _parseSemanticPromptClickMode(
-  Map<String, String> options,
-) {
-  final clickEvents = switch (options['click_events']) {
-    '1' => TerminalSemanticPromptClickMode.eventsAbsolute,
-    '2' => TerminalSemanticPromptClickMode.eventsRelative,
-    _ => null,
-  };
-  if (clickEvents != null) return clickEvents;
-
-  return switch (options['cl']) {
-    'line' => TerminalSemanticPromptClickMode.line,
-    'm' => TerminalSemanticPromptClickMode.multiple,
-    _ => null,
-  };
-}
-
-TerminalSemanticPromptRedraw? _parseSemanticPromptRedraw(String? value) {
-  return switch (value) {
-    '0' => TerminalSemanticPromptRedraw.disabled,
-    '1' => TerminalSemanticPromptRedraw.enabled,
-    'last' => TerminalSemanticPromptRedraw.last,
-    _ => null,
-  };
-}
-
-bool? _parseSemanticPromptBoolean(String? value) {
-  return switch (value) {
-    '0' => false,
-    '1' => true,
-    _ => null,
-  };
-}
-
-String? _parseSemanticPromptCommandLine(Map<String, String> options) {
-  final commandLine = options['cmdline'];
-  if (commandLine != null) {
-    return _decodeSemanticPromptPrintfQ(commandLine);
-  }
-
-  final commandLineUrl = options['cmdline_url'];
-  if (commandLineUrl == null) return null;
-
-  try {
-    return Uri.decodeFull(commandLineUrl);
-  } on FormatException {
-    return null;
-  }
-}
-
-String? _decodeSemanticPromptPrintfQ(String value) {
-  final data = switch (value) {
-    final text when text.startsWith(r"$'") => switch (text.endsWith("'")) {
-        true => text.substring(2, text.length - 1),
-        false => null,
-      },
-    final text when text.startsWith("'") => switch (text.endsWith("'")) {
-        true => text.substring(1, text.length - 1),
-        false => null,
-      },
-    _ => value,
-  };
-  if (data == null) return null;
-
-  final result = StringBuffer();
-  var index = 0;
-  while (index < data.length) {
-    final codeUnit = data.codeUnitAt(index);
-    if (codeUnit != 0x5c) {
-      result.writeCharCode(codeUnit);
-      index++;
-      continue;
-    }
-
-    if (index + 1 >= data.length) return null;
-    final escaped = switch (data.codeUnitAt(index + 1)) {
-      0x20 => 0x20,
-      0x5c => 0x5c,
-      0x22 => 0x22,
-      0x27 => 0x27,
-      0x24 => 0x24,
-      0x65 => Ascii.ESC,
-      0x6e => Ascii.LF,
-      0x72 => Ascii.CR,
-      0x74 => Ascii.HT,
-      0x76 => Ascii.VT,
-      _ => null,
-    };
-    if (escaped == null) return null;
-
-    result.writeCharCode(escaped);
-    index += 2;
-  }
-  return result.toString();
 }
 
 String? _resolveClipboardSelector(String selector) {
