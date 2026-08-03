@@ -235,6 +235,95 @@ void main() {
     );
   });
 
+  group('Composition that OPENS with a single character (the real hole)', () {
+    // The length<=1 heuristic in _updateEditingValueWithDeleteDetection
+    // (added by f6568e1 to swallow keyboards that trap a single already-
+    // resolved keypress in a composing range that never collapses) also
+    // matches the *first* keystroke of an entirely ordinary multi-step
+    // composition, because real compositions open with exactly one
+    // character too. These tests model that first keystroke explicitly,
+    // instead of jumping straight to a two-or-more-character composing
+    // range like the groups above do.
+    const prefixTrue = '  ';
+
+    testWidgets(
+      'Turkish (Gboard dead-key): opens as a single char, then grows and '
+      'commits - nothing should leak before the commit',
+      (tester) async {
+        final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+
+        // First keystroke: composing opens fresh with just 'g'.
+        compose(tester, prefixTrue, 'g', collapsed: false);
+        expect(
+          output,
+          isEmpty,
+          reason: 'a freshly-opened single-character composing range must '
+              'not be assumed resolved - it might still be a live preview',
+        );
+
+        // Dead-key resolves 'g' into 'ğ', still a single character, same
+        // composing range.
+        compose(tester, prefixTrue, 'ğ', collapsed: false);
+        expect(output, isEmpty);
+
+        // The user keeps typing; the composing buffer grows letter by
+        // letter, extending the same range.
+        compose(tester, prefixTrue, 'ğı', collapsed: false);
+        expect(output, isEmpty);
+
+        compose(tester, prefixTrue, 'ğıİ', collapsed: false);
+        expect(output, isEmpty);
+
+        // Composition commits.
+        compose(tester, prefixTrue, 'ğıİ', collapsed: true);
+
+        expect(output.join(), 'ğıİ');
+      },
+      // KNOWN CONFLICT: see report - the g -> ğ step is byte-for-byte
+      // identical in shape (same base, same length, different content, no
+      // collapse) to the f6568e1 trapped-keystroke pattern exercised below,
+      // so no discriminator over TextEditingValue alone can tell them apart
+      // without a third event or a collapse. Preserving the f6568e1
+      // guarantee (a trapped keystroke must still land, with nothing else
+      // to go on) forces the g -> ğ transition to also be treated as
+      // resolved, which reproduces the leak this test wants to forbid.
+      skip: true,
+    );
+
+    testWidgets(
+      'CJK (pinyin): opens as a single char, then grows and commits - '
+      'nothing should leak before the commit',
+      (tester) async {
+        final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+
+        // First keystroke: composing opens fresh with just 'n'.
+        compose(tester, prefixTrue, 'n', collapsed: false);
+        expect(
+          output,
+          isEmpty,
+          reason: 'a freshly-opened single-character composing range must '
+              'not be assumed resolved - it might still be a live preview',
+        );
+
+        // Subsequent keystrokes extend the SAME composing range - this is
+        // what distinguishes a real preview from a trapped keystroke.
+        compose(tester, prefixTrue, 'ni', collapsed: false);
+        expect(output, isEmpty);
+
+        compose(tester, prefixTrue, 'nih', collapsed: false);
+        expect(output, isEmpty);
+
+        compose(tester, prefixTrue, 'nihao', collapsed: false);
+        expect(output, isEmpty);
+
+        // Composition commits.
+        compose(tester, prefixTrue, 'nihao', collapsed: true);
+
+        expect(output.join(), 'nihao');
+      },
+    );
+  });
+
   testWidgets(
     'double-insertion regression (f6568e1): trapped composing keypresses '
     'each land exactly once',
