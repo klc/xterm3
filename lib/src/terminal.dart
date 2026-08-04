@@ -30,149 +30,16 @@ import 'package:xterm2/src/utils/escape_format.dart';
 
 part 'terminal_clipboard.dart';
 part 'terminal_colors.dart';
+part 'terminal_context_signal.dart';
+part 'terminal_device_settings.dart';
 part 'terminal_modes.dart';
+part 'terminal_paste.dart';
 part 'terminal_semantic_prompt.dart';
 part 'terminal_sgr.dart';
+part 'terminal_status_string.dart';
+part 'terminal_terminfo.dart';
 
 enum _ProtectionMode { off, iso, dec }
-
-enum TerminalContextSignalAction {
-  start,
-  end,
-}
-
-enum TerminalContextType {
-  boot,
-  container,
-  vm,
-  elevate,
-  chpriv,
-  subcontext,
-  remote,
-  shell,
-  command,
-  app,
-  service,
-  session,
-}
-
-enum TerminalContextExitStatus {
-  success,
-  failure,
-  crash,
-  interrupt,
-}
-
-/// A hierarchical context update reported through OSC 3008.
-final class TerminalContextSignal {
-  TerminalContextSignal._({
-    required this.action,
-    required this.id,
-    required Iterable<String> metadataFields,
-  }) : _metadataFields = List.unmodifiable(metadataFields);
-
-  final TerminalContextSignalAction action;
-
-  /// The printable ASCII context identifier.
-  final String id;
-
-  /// All well-formed metadata fields, including fields unknown to xterm2.
-  Map<String, String> get metadata {
-    final existing = _metadata;
-    if (existing != null) return existing;
-
-    final result = <String, String>{};
-    for (final field in _metadataFields) {
-      final separator = field.indexOf('=');
-      if (separator <= 0) continue;
-      final key = field.substring(0, separator);
-      if (result.containsKey(key)) continue;
-      result[key] = field.substring(separator + 1);
-    }
-    return _metadata = Map.unmodifiable(result);
-  }
-
-  final List<String> _metadataFields;
-  Map<String, String>? _metadata;
-
-  TerminalContextType? get type => switch (_value('type')) {
-        'boot' => TerminalContextType.boot,
-        'container' => TerminalContextType.container,
-        'vm' => TerminalContextType.vm,
-        'elevate' => TerminalContextType.elevate,
-        'chpriv' => TerminalContextType.chpriv,
-        'subcontext' => TerminalContextType.subcontext,
-        'remote' => TerminalContextType.remote,
-        'shell' => TerminalContextType.shell,
-        'command' => TerminalContextType.command,
-        'app' => TerminalContextType.app,
-        'service' => TerminalContextType.service,
-        'session' => TerminalContextType.session,
-        _ => null,
-      };
-
-  String? get user => _value('user');
-
-  String? get hostname => _value('hostname');
-
-  String? get machineId => _value('machineid');
-
-  String? get bootId => _value('bootid');
-
-  int? get pid => _unsignedValue('pid');
-
-  int? get pidfdId => _unsignedValue('pidfdid');
-
-  String? get command => _value('comm');
-
-  String? get currentDirectory => _value('cwd');
-
-  String? get commandLine => _value('cmdline');
-
-  String? get virtualMachine => _value('vm');
-
-  String? get container => _value('container');
-
-  String? get targetUser => _value('targetuser');
-
-  String? get targetHost => _value('targethost');
-
-  String? get sessionId => _value('sessionid');
-
-  TerminalContextExitStatus? get exitStatus => switch (_value('exit')) {
-        'success' => TerminalContextExitStatus.success,
-        'failure' => TerminalContextExitStatus.failure,
-        'crash' => TerminalContextExitStatus.crash,
-        'interrupt' => TerminalContextExitStatus.interrupt,
-        _ => null,
-      };
-
-  int? get status => _unsignedValue('status');
-
-  String? get signal => _value('signal');
-
-  String? _value(String key) {
-    for (final field in _metadataFields) {
-      if (!field.startsWith(key)) continue;
-      if (field.length <= key.length || field.codeUnitAt(key.length) != 0x3d) {
-        continue;
-      }
-      final value = field.substring(key.length + 1);
-      if (value.isEmpty) return null;
-      return value;
-    }
-    return null;
-  }
-
-  int? _unsignedValue(String key) {
-    final value = _value(key);
-    if (value == null) return null;
-    for (final codeUnit in value.codeUnits) {
-      if (codeUnit < 0x30 || codeUnit > 0x39) return null;
-    }
-    return int.tryParse(value);
-  }
-}
 
 /// [Terminal] is an interface to interact with command line applications. It
 /// translates escape sequences from the application into updates to the
@@ -180,7 +47,11 @@ final class TerminalContextSignal {
 /// translating user input into escape sequences that the application can
 /// understand.
 class Terminal
-    with Observable, _SgrHandlers
+    with
+        Observable,
+        _SgrHandlers,
+        _ContextSignalHandlers,
+        _StatusStringReports
     implements TerminalState, EscapeHandler, EscapeTextHandler {
   static const _maxHyperlinks = 4096;
   static const _maxHyperlinkId =
@@ -256,6 +127,7 @@ class Terminal
 
   /// Called when the application reports a hierarchical context update using
   /// OSC 3008.
+  @override
   void Function(TerminalContextSignal signal)? onContextSignal;
 
   /// Resolves the currently displayed color for OSC color queries. [code] is
@@ -403,6 +275,9 @@ class Terminal
 
   final _clipboardCapture = _ClipboardCapture();
 
+  @override
+  final _settings = _DeviceSettings();
+
   final _semanticPrompt = _SemanticPromptTracker();
   final Queue<CellAnchor> _semanticPromptAnchors = Queue<CellAnchor>();
 
@@ -464,6 +339,7 @@ class Terminal
   int? get selectionForegroundColorOverride =>
       _colors._selectionForegroundColorOverride;
 
+  @override
   late var _buffer = _mainBuffer;
 
   late final _mainBuffer = Buffer(
@@ -490,8 +366,10 @@ class Terminal
 
   /* TerminalState */
 
+  @override
   int _viewWidth = 80;
 
+  @override
   int _viewHeight = 24;
 
   int _cellPixelWidth = 0;
@@ -501,6 +379,7 @@ class Terminal
   @override
   final _cursorStyle = CursorStyle();
 
+  @override
   final _modes = _TerminalModes();
 
   TerminalCursorType? get applicationCursorType => _modes._applicationCursorType;
@@ -509,42 +388,8 @@ class Terminal
 
   bool get cursorLineHighlightMode => _modes._cursorLineHighlightMode;
 
-  bool _attributeChangeExtentRectangular = false;
-
-  int _keyClickVolume = 0;
-
-  int _marginBellVolume = 0;
-
-  int _warningBellVolume = 0;
-
-  int _lockKeyStyle = 0;
-
-  int _terminalModeEmulation = 0;
-
-  int _activeStatusDisplay = 0;
-
-  int _statusLineType = 0;
-
-  int _conformanceLevel = 61;
-
-  int _conformanceControls = 1;
-
-  int _protectedFieldsAttribute = 0;
-
-  int _transmitTerminationCharacter = 0;
-
-  int _lineTransmitTerminationCharacter = 0;
-
   @override
   final _assignedColors = <int, ({int foreground, int background})>{};
-
-  final _alternateTextColors = <int, ({int foreground, int background})>{};
-
-  int _preferredSupplementalSetSize = 94;
-
-  String _preferredSupplementalSetFinal = '%5';
-
-  final _titleModes = <int>{};
 
   Timer? _synchronizedUpdateTimer;
 
@@ -845,145 +690,13 @@ class Terminal
     onOutput?.call(sanitizedText.replaceAll('\n', '\r'));
   }
 
-  static const _pasteControlReplacements = {
-    0x00, // NUL
-    0x03, // VINTR / Ctrl+C
-    0x04, // EOT
-    0x05, // ENQ
-    0x08, // BS
-    0x0f, // VDISCARD / Ctrl+O
-    0x11, // VSTART / Ctrl+Q
-    0x12, // VREPRINT / Ctrl+R
-    0x13, // VSTOP / Ctrl+S
-    0x15, // VKILL / Ctrl+U
-    0x16, // VLNEXT / Ctrl+V
-    0x17, // VWERASE / Ctrl+W
-    0x1a, // VSUSP / Ctrl+Z
-    0x1b, // ESC
-    0x1c, // VQUIT / Ctrl+\
-    0x7f, // DEL
-  };
-
   /// Returns whether [text] is safe enough to paste without user confirmation.
   ///
   /// This follows the same protection model used by modern terminals such as
   /// Ghostty: newlines and bracketed-paste terminators can inject commands,
   /// while terminal control bytes can alter terminal state. [paste] still
   /// sanitizes the payload; this method is for UI confirmation decisions.
-  static bool isPasteSafe(String text) {
-    if (text.contains('\n') || text.contains('\r')) return false;
-    if (text.contains('\x1b[201~')) return false;
-    for (final codePoint in text.runes) {
-      if (codePoint == 0x09) continue;
-      if (codePoint < 0x20) return false;
-      if (codePoint == 0x7f) return false;
-      if (codePoint >= 0x80 && codePoint <= 0x9f) return false;
-    }
-    return true;
-  }
-
-  String _sanitizePasteText(String text) {
-    if (!_pasteNeedsSanitization(text)) return text;
-
-    final sanitized = StringBuffer();
-    var copyStart = 0;
-    var index = 0;
-    while (index < text.length) {
-      final codeUnit = text.codeUnitAt(index);
-      if (codeUnit == 0x1b) {
-        sanitized.write(text.substring(copyStart, index));
-        index = _skipPastedEscapeSequence(text, index) + 1;
-        copyStart = index;
-        continue;
-      }
-      if (_shouldReplacePastedControl(codeUnit)) {
-        sanitized.write(text.substring(copyStart, index));
-        sanitized.writeCharCode(0x20);
-        index++;
-        copyStart = index;
-        continue;
-      }
-      index++;
-    }
-
-    sanitized.write(text.substring(copyStart));
-    return sanitized.toString();
-  }
-
-  bool _pasteNeedsSanitization(String text) {
-    for (final codeUnit in text.codeUnits) {
-      if (_shouldReplacePastedControl(codeUnit)) return true;
-    }
-    return false;
-  }
-
-  bool _shouldReplacePastedControl(int codePoint) {
-    if (_pasteControlReplacements.contains(codePoint)) return true;
-    return codePoint >= 0x80 && codePoint <= 0x9f;
-  }
-
-  int _skipPastedEscapeSequence(String text, int escapeIndex) {
-    final nextIndex = escapeIndex + 1;
-    if (nextIndex >= text.length) return escapeIndex;
-
-    final next = text.codeUnitAt(nextIndex);
-    if (next == 0x5b) {
-      return _skipPastedCsiSequence(text, nextIndex);
-    }
-    if (next == 0x5d) {
-      return _skipPastedOscSequence(text, nextIndex);
-    }
-    if (next == 0x50 || next == 0x5e || next == 0x5f) {
-      return _skipPastedStringControl(text, nextIndex);
-    }
-    if (_isHighSurrogate(next) &&
-        nextIndex + 1 < text.length &&
-        _isLowSurrogate(text.codeUnitAt(nextIndex + 1))) {
-      return nextIndex + 1;
-    }
-
-    return nextIndex;
-  }
-
-  bool _isHighSurrogate(int codeUnit) {
-    return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
-  }
-
-  bool _isLowSurrogate(int codeUnit) {
-    return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
-  }
-
-  int _skipPastedCsiSequence(String text, int csiIndex) {
-    for (var index = csiIndex + 1; index < text.length; index++) {
-      final codeUnit = text.codeUnitAt(index);
-      if (codeUnit >= 0x40 && codeUnit <= 0x7e) return index;
-    }
-    return text.length - 1;
-  }
-
-  int _skipPastedOscSequence(String text, int oscIndex) {
-    for (var index = oscIndex + 1; index < text.length; index++) {
-      final codeUnit = text.codeUnitAt(index);
-      if (codeUnit == 0x07) return index;
-      if (codeUnit == 0x1b &&
-          index + 1 < text.length &&
-          text.codeUnitAt(index + 1) == 0x5c) {
-        return index + 1;
-      }
-    }
-    return text.length - 1;
-  }
-
-  int _skipPastedStringControl(String text, int controlIndex) {
-    for (var index = controlIndex + 1; index < text.length; index++) {
-      if (text.codeUnitAt(index) == 0x1b &&
-          index + 1 < text.length &&
-          text.codeUnitAt(index + 1) == 0x5c) {
-        return index + 1;
-      }
-    }
-    return text.length - 1;
-  }
+  static bool isPasteSafe(String text) => _isPasteSafe(text);
 
   /// Reports a terminal viewport focus change to the underlying application.
   void focusInput(bool focused) {
@@ -1100,11 +813,7 @@ class Terminal
 
   @override
   void setConformanceLevel(int level, int controls) {
-    _conformanceLevel = level;
-    _conformanceControls = switch (controls) {
-      0 => 1,
-      _ => controls,
-    };
+    _settings.setConformanceLevel(level, controls);
   }
 
   @override
@@ -1623,7 +1332,11 @@ class Terminal
   void sendTerminfoCapability(String query) {
     final key = _hexDecode(query);
     if (key == null) return;
-    final value = _terminfoCapability(key);
+    final value = _terminfoCapability(
+      key,
+      columns: viewWidth,
+      rows: viewHeight,
+    );
     if (value == null) return;
     onOutput?.call(_emitter.terminfoCapability(key, value));
   }
@@ -1632,434 +1345,6 @@ class Terminal
   void unknownDCS(String payload) {
     if (onUnknownSequence == null) return;
     _reportUnknownSequence();
-  }
-
-  String? _hexDecode(String value) {
-    if (value.length.isOdd) return null;
-    final buffer = StringBuffer();
-    for (var i = 0; i < value.length; i += 2) {
-      final byte = int.tryParse(value.substring(i, i + 2), radix: 16);
-      if (byte == null) return null;
-      buffer.writeCharCode(byte);
-    }
-    return buffer.toString();
-  }
-
-  String? _terminfoCapability(String key) {
-    final modifiedFunctionKey = _modifiedFunctionKeyCapability(key);
-    if (modifiedFunctionKey != null) return modifiedFunctionKey;
-
-    return switch (key) {
-      'TN' => 'xterm-256color',
-      'Co' => '256',
-      'RGB' => '8',
-      'AX' => '1',
-      'Tc' => '1',
-      'Su' => '1',
-      'XT' => '1',
-      'fullkbd' => '1',
-      'colors' => '256',
-      'cols' => viewWidth.toString(),
-      'it' => '8',
-      'lines' => viewHeight.toString(),
-      'pairs' => '32767',
-      'acsc' =>
-        '++\\,\\,--..00``aaffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz{{||}}~~',
-      'Sync' => '\x1b[?2026%?%p1%{1}%-%tl%eh%;',
-      'BD' => '\x1b[?2004l',
-      'BE' => '\x1b[?2004h',
-      'PS' => '\x1b[200~',
-      'PE' => '\x1b[201~',
-      'XM' => '\x1b[?1006;1000%?%p1%{1}%=%th%el%;',
-      'xm' => '\x1b[<%i%p3%d;%p1%d;%p2%d;%?%p4%tM%em%;',
-      'RV' => '\x1b[>c',
-      'rv' => '\x1b\\[[0-9]+;[0-9]+;[0-9]+c',
-      'XR' => '\x1b[>0q',
-      'xr' => '\x1bP>\\|[ -~]+a\x1b\\',
-      'Enmg' => '\x1b[?69h',
-      'Dsmg' => '\x1b[?69l',
-      'Clmg' => '\x1b[s',
-      'Cmg' => '\x1b[%i%p1%d;%p2%ds',
-      'Ms' => '\x1b]52;%p1%s;%p2%s\x07',
-      'Ss' => '\x1b[%p1%d q',
-      'Se' => '\x1b[0 q',
-      'Smulx' => '\x1b[4:%p1%dm',
-      'Setulc' =>
-        '\x1b[58:2::%p1%{65536}%/%d:%p1%{256}%/%{255}%&%d:%p1%{255}%&%d%;m',
-      'sitm' => '\x1b[3m',
-      'ritm' => '\x1b[23m',
-      'smxx' => '\x1b[9m',
-      'rmxx' => '\x1b[29m',
-      'clear' => '\x1b[H\x1b[2J',
-      'E3' => '\x1b[3J',
-      'fe' => '\x1b[?1004h',
-      'fd' => '\x1b[?1004l',
-      'kxIN' => '\x1b[I',
-      'kxOUT' => '\x1b[O',
-      'bel' => '\x07',
-      'blink' => '\x1b[5m',
-      'bold' => '\x1b[1m',
-      'cbt' => '\x1b[Z',
-      'civis' => '\x1b[?25l',
-      'cnorm' => '\x1b[?12l\x1b[?25h',
-      'cr' => '\r',
-      'dim' => '\x1b[2m',
-      'dsl' => '\x1b]2;\x07',
-      'flash' => '\x1b[?5h\$<100/>\x1b[?5l',
-      'fsl' => '\x07',
-      'home' => '\x1b[H',
-      'invis' => '\x1b[8m',
-      'rmacs' => '\x1b(B',
-      'rmam' => '\x1b[?7l',
-      'rmir' => '\x1b[4l',
-      'rmkx' => '\x1b[?1l\x1b>',
-      'rev' => '\x1b[7m',
-      'smacs' => '\x1b(0',
-      'smam' => '\x1b[?7h',
-      'smir' => '\x1b[4h',
-      'smkx' => '\x1b[?1h\x1b=',
-      'smul' => '\x1b[4m',
-      'rmul' => '\x1b[24m',
-      'smso' => '\x1b[7m',
-      'rmso' => '\x1b[27m',
-      'sgr0' => '\x1b(B\x1b[m',
-      'tsl' => '\x1b]2;',
-      'op' => '\x1b[39;49m',
-      'setaf' =>
-        '\x1b[%?%p1%{8}%<%t3%p1%d%e%p1%{16}%<%t9%p1%{8}%-%d%e38;5;%p1%d%;m',
-      'setab' =>
-        '\x1b[%?%p1%{8}%<%t4%p1%d%e%p1%{16}%<%t10%p1%{8}%-%d%e48;5;%p1%d%;m',
-      'setrgbf' => '\x1b[38:2:%p1%d:%p2%d:%p3%dm',
-      'setrgbb' => '\x1b[48:2:%p1%d:%p2%d:%p3%dm',
-      'cup' => '\x1b[%i%p1%d;%p2%dH',
-      'hpa' => '\x1b[%i%p1%dG',
-      'vpa' => '\x1b[%i%p1%dd',
-      'cuu' => '\x1b[%p1%dA',
-      'cuu1' => '\x1b[A',
-      'cud' => '\x1b[%p1%dB',
-      'cud1' => '\n',
-      'cuf' => '\x1b[%p1%dC',
-      'cuf1' => '\x1b[C',
-      'cub' => '\x1b[%p1%dD',
-      'cub1' => '\b',
-      'ed' => '\x1b[J',
-      'el' => '\x1b[K',
-      'el1' => '\x1b[1K',
-      'ech' => '\x1b[%p1%dX',
-      'ich' => '\x1b[%p1%d@',
-      'ich1' => '\x1b[@',
-      'dch' => '\x1b[%p1%dP',
-      'dch1' => '\x1b[P',
-      'il' => '\x1b[%p1%dL',
-      'il1' => '\x1b[L',
-      'dl' => '\x1b[%p1%dM',
-      'dl1' => '\x1b[M',
-      'indn' => '\x1b[%p1%dS',
-      'rin' => '\x1b[%p1%dT',
-      'csr' => '\x1b[%i%p1%d;%p2%dr',
-      'tbc' => '\x1b[3g',
-      'hts' => '\x1bH',
-      'rep' => '%p1%c\x1b[%p2%{1}%-%db',
-      'smcup' => '\x1b[?1049h',
-      'rmcup' => '\x1b[?1049l',
-      'kbs' => '\x7f',
-      'kcbt' => '\x1b[Z',
-      'kent' => '\x1bOM',
-      'khome' => '\x1b[H',
-      'kend' => '\x1b[F',
-      'kich1' => '\x1b[2~',
-      'kdch1' => '\x1b[3~',
-      'kpp' => '\x1b[5~',
-      'knp' => '\x1b[6~',
-      'kcuu1' => '\x1b[A',
-      'kcud1' => '\x1b[B',
-      'kcuf1' => '\x1b[C',
-      'kcub1' => '\x1b[D',
-      'kf1' => '\x1bOP',
-      'kf2' => '\x1bOQ',
-      'kf3' => '\x1bOR',
-      'kf4' => '\x1bOS',
-      'kf5' => '\x1b[15~',
-      'kf6' => '\x1b[17~',
-      'kf7' => '\x1b[18~',
-      'kf8' => '\x1b[19~',
-      'kf9' => '\x1b[20~',
-      'kf10' => '\x1b[21~',
-      'kf11' => '\x1b[23~',
-      'kf12' => '\x1b[24~',
-      'u6' => '\x1b[%i%d;%dR',
-      'u7' => '\x1b[6n',
-      'u8' => '\x1b[?%[;0123456789]c',
-      'u9' => '\x1b[c',
-      'kUP' || 'kri' => '\x1b[1;2A',
-      'kUP3' => '\x1b[1;3A',
-      'kUP4' => '\x1b[1;4A',
-      'kUP5' => '\x1b[1;5A',
-      'kUP6' => '\x1b[1;6A',
-      'kUP7' => '\x1b[1;7A',
-      'kDN' || 'kind' => '\x1b[1;2B',
-      'kDN3' => '\x1b[1;3B',
-      'kDN4' => '\x1b[1;4B',
-      'kDN5' => '\x1b[1;5B',
-      'kDN6' => '\x1b[1;6B',
-      'kDN7' => '\x1b[1;7B',
-      'kRIT' => '\x1b[1;2C',
-      'kRIT3' => '\x1b[1;3C',
-      'kRIT4' => '\x1b[1;4C',
-      'kRIT5' => '\x1b[1;5C',
-      'kRIT6' => '\x1b[1;6C',
-      'kRIT7' => '\x1b[1;7C',
-      'kLFT' => '\x1b[1;2D',
-      'kLFT3' => '\x1b[1;3D',
-      'kLFT4' => '\x1b[1;4D',
-      'kLFT5' => '\x1b[1;5D',
-      'kLFT6' => '\x1b[1;6D',
-      'kLFT7' => '\x1b[1;7D',
-      'kHOM' => '\x1b[1;2H',
-      'kHOM3' => '\x1b[1;3H',
-      'kHOM4' => '\x1b[1;4H',
-      'kHOM5' => '\x1b[1;5H',
-      'kHOM6' => '\x1b[1;6H',
-      'kHOM7' => '\x1b[1;7H',
-      'kEND' => '\x1b[1;2F',
-      'kEND3' => '\x1b[1;3F',
-      'kEND4' => '\x1b[1;4F',
-      'kEND5' => '\x1b[1;5F',
-      'kEND6' => '\x1b[1;6F',
-      'kEND7' => '\x1b[1;7F',
-      'kIC' => '\x1b[2;2~',
-      'kIC3' => '\x1b[2;3~',
-      'kIC4' => '\x1b[2;4~',
-      'kIC5' => '\x1b[2;5~',
-      'kIC6' => '\x1b[2;6~',
-      'kIC7' => '\x1b[2;7~',
-      'kDC' => '\x1b[3;2~',
-      'kDC3' => '\x1b[3;3~',
-      'kDC4' => '\x1b[3;4~',
-      'kDC5' => '\x1b[3;5~',
-      'kDC6' => '\x1b[3;6~',
-      'kDC7' => '\x1b[3;7~',
-      'kPRV' => '\x1b[5;2~',
-      'kPRV3' => '\x1b[5;3~',
-      'kPRV4' => '\x1b[5;4~',
-      'kPRV5' => '\x1b[5;5~',
-      'kPRV6' => '\x1b[5;6~',
-      'kPRV7' => '\x1b[5;7~',
-      'kNXT' => '\x1b[6;2~',
-      'kNXT3' => '\x1b[6;3~',
-      'kNXT4' => '\x1b[6;4~',
-      'kNXT5' => '\x1b[6;5~',
-      'kNXT6' => '\x1b[6;6~',
-      'kNXT7' => '\x1b[6;7~',
-      _ => null,
-    };
-  }
-
-  String? _modifiedFunctionKeyCapability(String key) {
-    if (!key.startsWith('kf')) return null;
-
-    final number = int.tryParse(key.substring(2));
-    if (number == null) return null;
-    if (number < 13 || number > 63) return null;
-
-    final group = switch (number) {
-      >= 13 && <= 24 => (offset: number - 13, modifier: 2),
-      >= 25 && <= 36 => (offset: number - 25, modifier: 5),
-      >= 37 && <= 48 => (offset: number - 37, modifier: 6),
-      >= 49 && <= 60 => (offset: number - 49, modifier: 3),
-      >= 61 && <= 63 => (offset: number - 61, modifier: 4),
-      _ => null,
-    };
-    if (group == null) return null;
-
-    if (group.offset < 4) {
-      final finalByte = switch (group.offset) {
-        0 => 'P',
-        1 => 'Q',
-        2 => 'R',
-        3 => 'S',
-        _ => null,
-      };
-      if (finalByte == null) return null;
-      return '\x1b[1;${group.modifier}$finalByte';
-    }
-
-    final base = switch (group.offset) {
-      4 => 15,
-      5 => 17,
-      6 => 18,
-      7 => 19,
-      8 => 20,
-      9 => 21,
-      10 => 23,
-      11 => 24,
-      _ => null,
-    };
-    if (base == null) return null;
-    return '\x1b[$base;${group.modifier}~';
-  }
-
-  String? _statusString(String query) {
-    final titleModeStatus = _titleModeStatusString(query);
-    if (titleModeStatus != null) return titleModeStatus;
-
-    final colorStatus = _attributeColorStatusString(query);
-    if (colorStatus != null) return colorStatus;
-
-    return switch (query) {
-      'm' => _sgrStatusString(),
-      '>4m' => '>4;${_modes._modifyOtherKeysMode}' 'm',
-      '|' => '$_transmitTerminationCharacter|',
-      "'s" => "$_lineTransmitTerminationCharacter's",
-      '}' => '$_protectedFieldsAttribute}',
-      '"p' => '$_conformanceLevel;$_conformanceControls"p',
-      '"q' => '${switch (_cursorStyle.isProtected) {
-          true => 1,
-          false => 0,
-        }}"q',
-      r'$|' => '$_viewWidth\$|',
-      r'$}' => '$_activeStatusDisplay\$}',
-      '*x' => '${switch (_attributeChangeExtentRectangular) {
-          true => 2,
-          false => 0,
-        }}*x',
-      '*|' => '$_viewHeight*|',
-      r'$~' => '$_statusLineType\$~',
-      ' q' => '${_cursorShapeStatus()} q',
-      ' r' => '$_keyClickVolume r',
-      ' u' => '$_marginBellVolume u',
-      ' v' => '$_lockKeyStyle v',
-      ' t' => '$_warningBellVolume t',
-      ' ~' => '$_terminalModeEmulation ~',
-      'r' => '${_buffer.marginTop + 1};${_buffer.marginBottom + 1}r',
-      's' => _leftRightMarginStatusString(),
-      't' => '${_viewHeight}t',
-      '+q' ||
-      '*}' ||
-      '+r' ||
-      '-q' ||
-      ',z' ||
-      '-r' ||
-      '*u' ||
-      '*r' ||
-      ')p' ||
-      r'$q' ||
-      '*s' ||
-      r'$s' ||
-      '"t' ||
-      '*p' ||
-      'p' ||
-      ',x' ||
-      '+w' ||
-      ' p' ||
-      '"u' ||
-      '-p' ||
-      '){' ||
-      ',{' ||
-      ',y' =>
-        '0$query',
-      _ => null,
-    };
-  }
-
-  String? _attributeColorStatusString(String query) {
-    if (query.endsWith(',}')) {
-      final attribute = int.tryParse(query.substring(0, query.length - 2));
-      if (attribute == null || attribute < 0 || attribute > 15) return null;
-      final color = _alternateTextColors[attribute];
-      return '$attribute;${color?.foreground ?? 0};${color?.background ?? 0},}';
-    }
-
-    if (query.endsWith(',|')) {
-      final attribute = int.tryParse(query.substring(0, query.length - 2));
-      if (attribute == null || attribute < 1 || attribute > 2) return null;
-      final color = _assignedColors[attribute];
-      return '$attribute;${color?.foreground ?? 0};${color?.background ?? 0},|';
-    }
-
-    return null;
-  }
-
-  String? _titleModeStatusString(String query) {
-    if (!query.startsWith('>') || !query.endsWith('t')) return null;
-    final mode = int.tryParse(query.substring(1, query.length - 1));
-    if (mode == null || mode < 0 || mode > 3) return null;
-    final enabled = switch (_titleModes.contains(mode)) {
-      true => 1,
-      false => 0,
-    };
-    return '>$mode;${enabled}t';
-  }
-
-  String? _leftRightMarginStatusString() {
-    if (!_modes._leftRightMarginMode) return null;
-    return '${_buffer.marginLeft + 1};${_buffer.marginRight + 1}s';
-  }
-
-  String _sgrStatusString() {
-    final attributes = <int>[0];
-    if (_cursorStyle.isBold) attributes.add(1);
-    if (_cursorStyle.isFaint) attributes.add(2);
-    if (_cursorStyle.isItalis) attributes.add(3);
-    if (_cursorStyle.isUnderline) attributes.add(4);
-    if (_cursorStyle.isBlink) attributes.add(5);
-    if (_cursorStyle.isInverse) attributes.add(7);
-    if (_cursorStyle.isInvisible) attributes.add(8);
-    if (_cursorStyle.attrs & CellAttr.strikethrough != 0) attributes.add(9);
-    if (_cursorStyle.isDoubleUnderline) attributes.add(21);
-    if (_cursorStyle.isFramed) attributes.add(51);
-    if (_cursorStyle.isEncircled) attributes.add(52);
-    if (_cursorStyle.isOverline) attributes.add(53);
-    _appendSgrColor(attributes, _cursorStyle.foreground, 30, 90, 38);
-    _appendSgrColor(attributes, _cursorStyle.background, 40, 100, 48);
-    _appendSgrColor(attributes, _cursorStyle.underlineColor, 0, 0, 58);
-    return '${attributes.join(';')}m';
-  }
-
-  void _appendSgrColor(
-    List<int> attributes,
-    int color,
-    int namedBase,
-    int brightBase,
-    int extendedPrefix,
-  ) {
-    final type = color & CellColor.typeMask;
-    final value = color & CellColor.valueMask;
-    switch (type) {
-      case CellColor.named:
-        if (extendedPrefix == 58) {
-          attributes.addAll([58, 5, value]);
-          return;
-        }
-        if (value < 8) {
-          attributes.add(namedBase + value);
-          return;
-        }
-        attributes.add(brightBase + value - 8);
-        return;
-      case CellColor.palette:
-        attributes.addAll([extendedPrefix, 5, value]);
-        return;
-      case CellColor.rgb:
-        attributes.addAll([
-          extendedPrefix,
-          2,
-          (value >> 16) & 0xFF,
-          (value >> 8) & 0xFF,
-          value & 0xFF,
-        ]);
-    }
-  }
-
-  int _cursorShapeStatus() {
-    return switch ((_modes._applicationCursorType, _modes._cursorBlinkMode)) {
-      (TerminalCursorType.block || null, true) => 1,
-      (TerminalCursorType.block || null, false) => 2,
-      (TerminalCursorType.underline, true) => 3,
-      (TerminalCursorType.underline, false) => 4,
-      (TerminalCursorType.verticalBar, true) => 5,
-      (TerminalCursorType.verticalBar, false) => 6,
-    };
   }
 
   @override
@@ -2247,7 +1532,7 @@ class Terminal
       bottom,
       right,
       attribute,
-      rectangular: _attributeChangeExtentRectangular,
+      rectangular: _settings.attributeChangeExtentRectangular,
     );
   }
 
@@ -2265,7 +1550,7 @@ class Terminal
       bottom,
       right,
       attribute,
-      rectangular: _attributeChangeExtentRectangular,
+      rectangular: _settings.attributeChangeExtentRectangular,
     );
   }
 
@@ -2299,67 +1584,62 @@ class Terminal
 
   @override
   void setAttributeChangeExtent(bool rectangular) {
-    _attributeChangeExtentRectangular = rectangular;
+    _settings.attributeChangeExtentRectangular = rectangular;
   }
 
   @override
   void setKeyClickVolume(int volume) {
-    _keyClickVolume = volume.clamp(0, 8);
+    _settings.setKeyClickVolume(volume);
   }
 
   @override
   void setMarginBellVolume(int volume) {
-    _marginBellVolume = volume.clamp(0, 8);
+    _settings.setMarginBellVolume(volume);
   }
 
   @override
   void setWarningBellVolume(int volume) {
-    _warningBellVolume = volume.clamp(0, 8);
+    _settings.setWarningBellVolume(volume);
   }
 
   @override
   void setLockKeyStyle(int style) {
-    _lockKeyStyle = style;
+    _settings.lockKeyStyle = style;
   }
 
   @override
   void setTerminalModeEmulation(int mode) {
-    _terminalModeEmulation = mode;
+    _settings.terminalModeEmulation = mode;
   }
 
   @override
   void setActiveStatusDisplay(int display) {
-    _activeStatusDisplay = display.clamp(0, 1);
+    _settings.setActiveStatusDisplay(display);
   }
 
   @override
   void setStatusLineType(int type) {
-    _statusLineType = type.clamp(0, 2);
+    _settings.setStatusLineType(type);
   }
 
   @override
   void setProtectedFieldsAttribute(int attribute) {
-    _protectedFieldsAttribute = attribute;
+    _settings.protectedFieldsAttribute = attribute;
   }
 
   @override
   void setTransmitTerminationCharacter(int character) {
-    _transmitTerminationCharacter = character;
+    _settings.transmitTerminationCharacter = character;
   }
 
   @override
   void setLineTransmitTerminationCharacter(int character) {
-    _lineTransmitTerminationCharacter = character;
+    _settings.lineTransmitTerminationCharacter = character;
   }
 
   @override
   void setTitleMode(int mode, bool enabled) {
-    if (mode < 0 || mode > 3) return;
-    if (enabled) {
-      _titleModes.add(mode);
-      return;
-    }
-    _titleModes.remove(mode);
+    _settings.setTitleMode(mode, enabled);
   }
 
   @override
@@ -2387,7 +1667,7 @@ class Terminal
     if (attribute < 0 || attribute > 15) return;
     if (!_isDecColor(foreground) || !_isDecColor(background)) return;
 
-    _alternateTextColors[attribute] = (
+    _settings.alternateTextColors[attribute] = (
       foreground: foreground,
       background: background,
     );
@@ -2447,17 +1727,17 @@ class Terminal
     if (charsetFinal.isEmpty) return;
     if (charsetFinal.length > 2) return;
 
-    _preferredSupplementalSetSize = size;
-    _preferredSupplementalSetFinal = charsetFinal;
+    _settings.preferredSupplementalSetSize = size;
+    _settings.preferredSupplementalSetFinal = charsetFinal;
   }
 
   @override
   void sendUserPreferredSupplementalSet() {
-    final size = switch (_preferredSupplementalSetSize) {
+    final size = switch (_settings.preferredSupplementalSetSize) {
       96 => 1,
       _ => 0,
     };
-    onOutput?.call('\x1bP$size!u$_preferredSupplementalSetFinal\x1b\\');
+    onOutput?.call('\x1bP$size!u${_settings.preferredSupplementalSetFinal}\x1b\\');
   }
 
   @override
@@ -3662,51 +2942,6 @@ class Terminal
     _reportUnknownSequence();
   }
 
-  void _handleContextSignalOsc(String ps, List<String> pt) {
-    if (ps != '3008' || pt.isEmpty) return;
-    final actionField = pt.first;
-    final action = switch (actionField) {
-      final value when value.startsWith('start=') =>
-        TerminalContextSignalAction.start,
-      final value when value.startsWith('end=') =>
-        TerminalContextSignalAction.end,
-      _ => null,
-    };
-    if (action == null) return;
-
-    final contextId = actionField.substring(
-      switch (action) {
-        TerminalContextSignalAction.start => 6,
-        TerminalContextSignalAction.end => 4,
-      },
-    );
-    if (!_isValidContextSignalId(contextId)) return;
-
-    final callback = onContextSignal;
-    if (callback == null) {
-      if (action != TerminalContextSignalAction.start) return;
-      final currentDirectory = _contextSignalValue(pt, 'cwd');
-      if (currentDirectory != null) {
-        setCurrentDirectory(currentDirectory);
-      }
-      return;
-    }
-
-    final signal = TerminalContextSignal._(
-      action: action,
-      id: contextId,
-      metadataFields: pt.skip(1),
-    );
-    if (action == TerminalContextSignalAction.start) {
-      final currentDirectory = signal.currentDirectory;
-      if (currentDirectory != null) {
-        setCurrentDirectory(currentDirectory);
-      }
-    }
-
-    callback(signal);
-  }
-
   void _handleSemanticPromptOsc(String ps, List<String> pt) {
     if (ps != '133' || pt.isEmpty) return;
     final action = pt.first;
@@ -3905,28 +3140,6 @@ class Terminal
     _semanticPromptAnchors.add(_mainBuffer.createAnchor(column, line));
   }
 
-}
-
-bool _isValidContextSignalId(String value) {
-  if (value.isEmpty || value.length > 64) return false;
-  for (final codeUnit in value.codeUnits) {
-    if (codeUnit < 0x20 || codeUnit > 0x7e) return false;
-  }
-  return true;
-}
-
-String? _contextSignalValue(List<String> pt, String key) {
-  for (var index = 1; index < pt.length; index++) {
-    final part = pt[index];
-    if (!part.startsWith(key)) continue;
-    if (part.length <= key.length || part.codeUnitAt(key.length) != 0x3d) {
-      continue;
-    }
-    final value = part.substring(key.length + 1);
-    if (value.isEmpty) return null;
-    return value;
-  }
-  return null;
 }
 
 String? _resolveClipboardSelector(String selector) {
