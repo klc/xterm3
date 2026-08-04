@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'dart:ui' as ui;
@@ -778,16 +779,46 @@ void main() {
         'Menlo',
         'Cascadia Mono',
         'DejaVu Sans Mono',
+        'Symbols Nerd Font Mono',
+        'Symbols Nerd Font',
+        'STIX Two Math',
+        'Segoe UI Symbol',
+        'Noto Sans Symbols 2',
+        'Noto Sans Symbols',
         'Apple Color Emoji',
         'Segoe UI Emoji',
         'Noto Color Emoji',
-        'Segoe UI Symbol',
-        'Symbols Nerd Font Mono',
-        'Symbols Nerd Font',
-        'Noto Sans Symbols 2',
-        'Noto Sans Symbols',
       ]),
     );
+  });
+
+  test('TerminalStyle prefers text presentation over color emoji', () {
+    // A codepoint like U+23F8 PAUSE defaults to text presentation and is
+    // missing from every monospace family in the list. Whichever symbol font
+    // supplies it must be consulted before the emoji fonts, or the glyph
+    // arrives as a full-color pictograph inside a line of terminal text.
+    final fallback = const TerminalStyle().fontFamilyFallback;
+    const symbolFamilies = [
+      'Symbols Nerd Font Mono',
+      'STIX Two Math',
+      'Segoe UI Symbol',
+      'Noto Sans Symbols 2',
+    ];
+    const emojiFamilies = [
+      'Apple Color Emoji',
+      'Segoe UI Emoji',
+      'Noto Color Emoji',
+    ];
+
+    final firstEmoji =
+        emojiFamilies.map(fallback.indexOf).where((i) => i >= 0).reduce(min);
+    for (final family in symbolFamilies) {
+      expect(
+        fallback.indexOf(family),
+        allOf(greaterThanOrEqualTo(0), lessThan(firstEmoji)),
+        reason: '$family must precede every color emoji family',
+      );
+    }
   });
 
   test('TerminalStyle disables ligatures and kerning by default', () {

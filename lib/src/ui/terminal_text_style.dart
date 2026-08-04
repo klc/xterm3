@@ -6,6 +6,12 @@ const _kDefaultHeight = 1.2;
 
 const _kDefaultFontFamily = 'monospace';
 
+/// Ordered so that families rendering a codepoint in *text* presentation are
+/// consulted before the color emoji families. Symbols such as U+23F8 PAUSE
+/// default to text presentation and are absent from every monospace family
+/// here; with the emoji fonts first they resolve to a full-color pictograph in
+/// the middle of a line of terminal text, which is never what the program
+/// emitting them intended.
 const _kDefaultFontFamilyFallback = [
   'SF Mono',
   'Menlo',
@@ -20,14 +26,18 @@ const _kDefaultFontFamilyFallback = [
   'Noto Sans Mono CJK KR',
   'Noto Sans Mono CJK JP',
   'Noto Sans Mono CJK HK',
+  'Symbols Nerd Font Mono',
+  'Symbols Nerd Font',
+  // STIX Two Math ships with macOS and is the only system family there that
+  // covers Miscellaneous Technical; the Segoe/Noto entries do the same job on
+  // Windows and Linux.
+  'STIX Two Math',
+  'Segoe UI Symbol',
+  'Noto Sans Symbols 2',
+  'Noto Sans Symbols',
   'Apple Color Emoji',
   'Segoe UI Emoji',
   'Noto Color Emoji',
-  'Segoe UI Symbol',
-  'Symbols Nerd Font Mono',
-  'Symbols Nerd Font',
-  'Noto Sans Symbols 2',
-  'Noto Sans Symbols',
   'monospace',
   'sans-serif',
 ];
