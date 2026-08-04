@@ -77,7 +77,11 @@ class TerminalStyle {
           _kDefaultFontFamily,
       fontFamilyFallback:
           textStyle.fontFamilyFallback ?? _kDefaultFontFamilyFallback,
-      drawBoldTextWithBrightColors: true,
+      // TextStyle has no field for this terminal-specific behavior, so there
+      // is nothing to read off `textStyle`. Falling through to the
+      // constructor default (rather than hardcoding `true` here) keeps this
+      // factory from silently overriding a caller's ability to change that
+      // default in one place.
       enableLigatures: _requestsLigatures(textStyle.fontFeatures),
     );
   }

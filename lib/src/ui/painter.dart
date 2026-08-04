@@ -246,17 +246,30 @@ class TerminalPainter {
     final paragraphStyle = textStyle.getParagraphStyle();
     final textStyleRun = textStyle.getTextStyle(textScaler: _textScaler);
 
+    // Width comes from '0' alone, not the max advance over the whole ASCII
+    // range. On a true monospace font every glyph has the same advance, so
+    // it made no difference which one we asked for; on a proportional font
+    // (e.g. a user-selected UI font like Inter) the widest glyphs ('@', 'W',
+    // 'M') are dramatically wider than the rest, and sizing the cell to fit
+    // them produces a grid with far too few columns. '0' is the reference
+    // glyph other terminals key off for the same reason: it is present in
+    // (near-)every font and monospace fonts deliberately give digits the
+    // same advance as the rest of the glyph set. Height still takes the max
+    // over a small sample: the row must be tall enough for the tallest
+    // glyph a line can contain, and ascenders/descenders vary far less than
+    // horizontal advance does.
+    const widthGlyph = '0';
+    const heightSampleGlyphs = [widthGlyph, 'M', 'g'];
     var width = 0.0;
     var height = 0.0;
-    for (var codePoint = 0x21; codePoint <= 0x7e; codePoint++) {
+    for (final glyph in heightSampleGlyphs) {
       final builder = ParagraphBuilder(paragraphStyle);
       builder.pushStyle(textStyleRun);
-      builder.addText(String.fromCharCode(codePoint));
+      builder.addText(glyph);
 
       final paragraph = builder.build();
       paragraph.layout(ParagraphConstraints(width: double.infinity));
-
-      width = max(width, paragraph.maxIntrinsicWidth);
+      if (glyph == widthGlyph) width = paragraph.maxIntrinsicWidth;
       height = max(height, paragraph.height);
       paragraph.dispose();
     }
