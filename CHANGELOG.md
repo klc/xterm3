@@ -1,5 +1,15 @@
 ## Unreleased
 
+* Roughly double the throughput of non-ASCII text. Grapheme cluster detection had a
+  fast path only for the case where both the previous cell and the incoming code
+  point are ASCII, so a single accented letter — `ö` in Turkish, any Latin-1 word —
+  dropped every following character into full grapheme segmentation, at two string
+  allocations and two segmentation passes each. Nothing below U+0300 can continue a
+  cluster, so that is now the cut, and `writeChar` skips both cluster checks for such
+  code points. Measured with `bin/parse_bench.dart`: 15 MiB/s to 32 MiB/s on Turkish
+  text, against a 35 MiB/s ceiling with grapheme clustering disabled entirely.
+* Add `bin/parse_bench.dart`, which measures write-path throughput with no Flutter and
+  no renderer, separating the parser from the buffer writes it drives.
 * Stop the procedural glyph cache from making large terminals slower than no cache
   at all. Its keys are (codepoint, cell size, colour), so a screen drawing box lines
   in many colours can reference thousands of distinct keys, and at the old 512-entry

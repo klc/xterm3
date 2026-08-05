@@ -183,10 +183,17 @@ class Buffer {
       return cellWidth;
     }
     if (cellWidth < 0) return cellWidth;
-    if (terminal.graphemeClusterMode && _joinRegionalIndicator(codePoint)) {
+    // Below U+0300 nothing can continue the preceding grapheme cluster - see
+    // the same cut in [_joinsPreviousGrapheme] - so neither check below can
+    // return true, and both of them read cells and combining strings to find
+    // that out. Skipping them outright is what keeps Latin text off the
+    // cluster machinery entirely.
+    final mayJoinPreviousGrapheme =
+        terminal.graphemeClusterMode && codePoint >= 0x0300;
+    if (mayJoinPreviousGrapheme && _joinRegionalIndicator(codePoint)) {
       return cellWidth;
     }
-    if (terminal.graphemeClusterMode && _joinsPreviousGrapheme(codePoint)) {
+    if (mayJoinPreviousGrapheme && _joinsPreviousGrapheme(codePoint)) {
       final previousWidth = _joinedPreviousGraphemeWidth(codePoint, cellWidth);
       if (previousWidth == 2 && !_setPreviousGraphemeWidth(2)) {
         return cellWidth;
@@ -351,6 +358,17 @@ class Buffer {
     // Almost all terminal output is ASCII, where a new printable code point
     // always starts a new grapheme. Avoid allocating strings on that path.
     if (base < 0x80 && codePoint < 0x80 && combining == null) return false;
+    // The same shortcut, one alphabet wider. Everything below U+0300 that
+    // reaches this point is a spacing letter or symbol - the first combining
+    // marks are the diacriticals at U+0300, and those have width 0, so they
+    // returned above long before here. Grapheme cluster rules never let such a
+    // code point continue the preceding cluster: the classes that can (Extend,
+    // SpacingMark, ZWJ, regional indicators, emoji modifiers, Hangul V and T)
+    // all sit above this cut, and `combining == null` rules out a cluster that
+    // ends in ZWJ. Without this, one accented letter in a line - `ö` in
+    // Turkish, any Latin-1 word - drops every following character into
+    // grapheme segmentation, at three string allocations each.
+    if (combining == null && codePoint < 0x0300) return false;
     if (combining == null &&
         unicodeV11.wcwidth(base) == 2 &&
         unicodeV11.wcwidth(codePoint) == 2 &&

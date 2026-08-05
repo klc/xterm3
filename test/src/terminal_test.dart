@@ -629,6 +629,33 @@ void main() {
     expect(line.getCodePoint(1), 0x78);
   });
 
+  test('Terminal attaches combining marks to a Latin-1 base', () {
+    // The write path shortcuts grapheme cluster detection for code points
+    // below U+0300, on the grounds that nothing down there can continue a
+    // cluster. The mark itself is above the cut and still has to join, whatever
+    // the base is.
+    final terminal = Terminal()..resize(10, 2);
+
+    terminal.write('\u{00F6}\u{0301}x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x00F6);
+    expect(line.getCombiningCharacters(0), '\u{0301}');
+    expect(line.getCodePoint(1), 0x78);
+  });
+
+  test('Terminal keeps Latin-1 letters in separate cells', () {
+    final terminal = Terminal()..resize(10, 2);
+
+    terminal.write('göz');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x67);
+    expect(line.getCodePoint(1), 0x00F6);
+    expect(line.getCodePoint(2), 0x7A);
+    expect(line.getCombiningCharacters(1), isNull);
+  });
+
   test('Terminal allocates two cells for Unicode 17 emoji', () {
     final terminal = Terminal()..resize(10, 2);
 

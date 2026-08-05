@@ -382,6 +382,80 @@ release and modifier reporting (three), mobile IME double-insertion and
 backspace-at-zero (two), `TerminalView.textScaler` (two), default pointer
 input reporting, box-drawing stroke weight, and a colour golden.
 
+## The write path — 2026-08-06
+
+`flood` says output starves the frame pipeline, but it cannot say which part of
+the write path is paying, because it measures the parser, the buffer writes it
+drives and the repaints it schedules all at once. `bin/parse_bench.dart` splits
+them, with no Flutter and no renderer:
+
+```sh
+dart compile exe bin/parse_bench.dart -o /tmp/parse_bench && /tmp/parse_bench
+```
+
+Compile it — JIT numbers are not comparable to what ships. 32 MiB per workload
+in 8 KiB chunks, 170x50 grid, Apple M1 Pro.
+
+| workload | full | parser | buffer% | no scrollback | no graphemes |
+|---|---|---|---|---|---|
+| ascii | 92 | 435 | 79% | 162 | 91 |
+| ascii-long-lines | 126 | 819 | 85% | 202 | 124 |
+| sgr | 73 | 96 | 24% | 84 | 73 |
+| utf8 | 32 | 102 | 69% | 38 | 35 |
+| altscreen | 171 | 232 | 26% | 172 | 171 |
+
+MiB/s. `full` is `Terminal.write`; `parser` is the same bytes through
+`EscapeParser` with a handler that does nothing; the other two columns turn off
+scrollback and DEC mode 2027 respectively.
+
+**The parser is not the bottleneck, except on `sgr`.** Plain text parses at
+435 MiB/s and the full path manages 92, so 79% of the time is what the terminal
+does per token. `sgr` is the exception: 96 MiB/s through the parser alone means
+CSI dispatch itself is the ceiling there, and no amount of buffer work will
+move it.
+
+**Scrolling costs about 44%.** `ascii` at 92 against 162 with scrollback
+disabled, and `altscreen` — which never scrolls — runs at 171. A line of
+output allocates a `BufferLine`, and its cell storage is a 3 KiB `Uint32List`
+at this width.
+
+**Non-ASCII text runs at a third of ASCII speed.** 32 MiB/s against 92. Part of
+that is per-code-point dispatch: the parser batches printable ASCII into one
+`writeText` call per run, and every non-ASCII character breaks the run. The
+rest was grapheme cluster detection, which is now fixed — see below.
+
+### Grapheme clustering no longer costs Latin text anything
+
+`utf8` measured **15 MiB/s** before this section was written, against a
+34 MiB/s ceiling with mode 2027 turned off — grapheme detection was more than
+half the cost of writing Turkish, and by extension of every non-English
+language written in Latin script.
+
+`_joinsPreviousGrapheme` had a fast path for the case where the previous cell
+and the incoming code point are both ASCII. One accented letter breaks it: with
+`ö` in the previous cell, every following character fell through to real
+grapheme segmentation, which allocates two strings and segments both of them.
+Nothing below U+0300 can continue a grapheme cluster — the first combining
+marks live there, and everything else that can extend a cluster (SpacingMark,
+ZWJ, regional indicators, emoji modifiers, Hangul V and T) sits higher — so the
+cut is now made on the code point, and Latin text never reaches the segmenter.
+The same cut lets `writeChar` skip both cluster checks outright.
+
+15 → 32 MiB/s, against a 35 MiB/s ceiling. What is left is the per-code-point
+path, not clustering.
+
+### Recycling evicted lines — measured, rejected
+
+The obvious answer to the scrolling cost is to blank the line that just fell
+off the scrollback and push it back on, instead of allocating a replacement.
+Implemented as `BufferLine.reset` plus a bounded pool in `Buffer`, it made
+`ascii` **worse**: 92 → 41 MiB/s zeroing the whole capacity, 92 → 52 zeroing
+only the live cells. The VM's allocator hands out typed data that is already
+zeroed, and clearing 3 KiB by hand costs more than asking for a fresh one.
+
+Anything else aimed at the scrolling cost has to reduce the *number* of lines
+allocated or their size, not try to reuse them.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
