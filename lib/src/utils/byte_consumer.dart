@@ -1,4 +1,5 @@
 import 'dart:collection';
+import 'package:xterm2/src/utils/single_cell_text.dart';
 
 class ByteConsumer {
   final _queue = ListQueue<_StringBlock>();
@@ -110,6 +111,24 @@ class ByteConsumer {
     while (offset < data.length) {
       final codeUnit = data.codeUnitAt(offset);
       if (codeUnit < 0x20 || codeUnit > 0x7e) break;
+      offset++;
+    }
+    return offset - _currentOffset;
+  }
+
+  /// Length of the run of code units that can be written straight into cells,
+  /// one unit per cell - see [isSingleCellPrintable].
+  ///
+  /// Wider than [printableAsciiRunLength], which stops at the first byte above
+  /// ASCII. That mattered: one accented letter used to drop the rest of the
+  /// line onto the per-code-point path, because the run ended at the letter
+  /// and every letter after it started a run of its own.
+  int get printableTextRunLength {
+    _advancePastConsumedBlocks();
+    final data = _queue.first.data;
+    var offset = _currentOffset;
+    while (offset < data.length &&
+        isSingleCellPrintable(data.codeUnitAt(offset))) {
       offset++;
     }
     return offset - _currentOffset;

@@ -214,9 +214,11 @@ void main() {
     );
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
-    // 0x2588 is FULL BLOCK, a procedural (not font-shaped) glyph.
+    // 0x253C is BOX DRAWINGS LIGHT VERTICAL AND HORIZONTAL, a procedural
+    // (not font-shaped) glyph built from several canvas operations. Block
+    // elements deliberately bypass this cache - see the test below.
     final cell = CellData.empty()
-      ..content = 0x2588 | (1 << CellContent.widthShift)
+      ..content = 0x253c | (1 << CellContent.widthShift)
       ..foreground = CellColor.rgb | 0xff0000;
 
     for (var i = 0; i < 5; i++) {
@@ -244,7 +246,7 @@ void main() {
     final recorder = ui.PictureRecorder();
     final canvas = ui.Canvas(recorder);
     final cell = CellData.empty()
-      ..content = 0x2588 | (1 << CellContent.widthShift);
+      ..content = 0x253c | (1 << CellContent.widthShift);
 
     for (var color = 1; color <= 3; color++) {
       cell.foreground = CellColor.rgb | color;
@@ -252,6 +254,33 @@ void main() {
     }
 
     expect(painter.proceduralGlyphCacheLength, 2);
+    recorder.endRecording().dispose();
+    painter.dispose();
+  });
+
+  test('TerminalPainter does not cache block elements', () {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(fontSize: 20, height: 1),
+      textScaler: TextScaler.noScaling,
+    );
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+
+    // Block elements (U+2580..U+259F) are one or two `drawRect` calls, so
+    // replaying a recorded Picture per cell costs the raster thread more than
+    // drawing them costs outright. Measured on the benchmark's `fullscreen`
+    // workload, caching U+2588 added 0.4ms of raster per frame at a 100% hit
+    // rate and saved nothing on the UI thread.
+    final cell = CellData.empty()
+      ..content = 0x2588 | (1 << CellContent.widthShift)
+      ..foreground = CellColor.rgb | 0xff0000;
+
+    for (var i = 0; i < 5; i++) {
+      painter.paintCellForeground(canvas, Offset.zero, cell);
+    }
+
+    expect(painter.proceduralGlyphCacheLength, 0);
     recorder.endRecording().dispose();
     painter.dispose();
   });

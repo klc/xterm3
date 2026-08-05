@@ -123,7 +123,7 @@ class EscapeParser {
       }
 
       if (handler case final EscapeTextHandler textHandler) {
-        final runLength = _queue.printableAsciiRunLength;
+        final runLength = _queue.printableTextRunLength;
         if (runLength > 0) {
           tokenBegin = _queue.totalConsumed;
           final data = _queue.currentBlock;

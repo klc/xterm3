@@ -18,11 +18,32 @@ that started this investigation were debug-mode charts.
 
 The harness lives in `example/lib/benchmark.dart`. It drives the terminal with a
 precomputed, fixed byte stream — one write per frame, no PTY, no shell — so two
-runs on the same machine do the same work. The viewport is pinned to
-1000x600 logical pixels rather than filling the window, because cell count
-drives every cost in the paint path.
+runs on the same machine do the same work.
+
+The grid is pinned to **100x37 cells**, not to a pixel size. Cell count drives
+every cost in the paint path, and cell metrics are not stable across builds:
+`fix(ui): size cells from a reference glyph, not the widest ASCII glyph` moved
+them, so the 1000x600 viewport the first tables in this file were taken at
+yields 100 columns on today's build and 102 on the published one. The harness
+therefore bisects the viewport extent at startup until the terminal reports
+exactly 100x37 and aborts the run if it cannot, rather than reporting numbers
+from two different grids as if they were comparable.
 
 Results print to the console prefixed with `[xterm2-bench]`.
+
+To compare this working tree against an older commit:
+
+```sh
+script/bench-compare.sh [baseline-ref] [rounds]   # default 8d938de, 3 rounds
+```
+
+It puts the baseline in a git worktree, copies *this* tree's harness over it so
+both sides run identical measurement code, and alternates the two builds. Runs
+must be interleaved: sequential ones drift (see the `fullscreen` note below).
+`example/lib/bench/bench_stats.dart` is the one harness file that differs
+between the sides — the baseline gets `bench_stats_stub.dart`, because
+`TerminalRenderStats` does not exist there. Frame timings come from
+`SchedulerBinding` and are unaffected.
 
 ## Workloads
 
@@ -233,6 +254,310 @@ the benchmark, so the visible lines genuinely never change. That would have
 been just as true in phases 0-2, where a frozen viewport still costs full-price
 lookups every frame and so looked normal. Until that is confirmed, treat the
 `sgr` row as measuring an unknown, in every table in this file.
+
+## Against the published package — 2026-08-05
+
+`8d938de` (head of `SoFluffyOS/xterm2` master, 2026-07-28) versus `d6f7b59`,
+73 commits later. Apple M1 Pro, macOS 26.5.1, Flutter 3.44.2 stable, profile
+mode, three interleaved rounds per build via `script/bench-compare.sh`.
+
+Both builds measured a 100x37 grid — which is the only reason the table means
+anything. At a fixed 1000x600 viewport the published build lays out **102**
+columns to this build's 100, because cell width changed from 7.86px to 8.00px.
+Comparing those two runs directly would have credited this build with a 2%
+smaller grid.
+
+Median of three rounds, milliseconds. Within-build spread was at most 0.2ms on
+every cell below, so unlike the phase tables in this file, differences of 0.3ms
+are outside the noise here.
+
+| workload | UI p50 pub → now | raster p50 pub → now |
+|---|---|---|
+| plain | 1.3 → **0.8** | 1.5 → **1.3** |
+| sgr | 2.2 → **1.4** | 1.8 → 1.6 |
+| boxdraw | 2.1 → 2.2 | 2.7 → **3.0** |
+| fullscreen | 1.2 → 1.4 | 1.4 → 1.6 |
+| static | 2.4 → **1.5** | 2.4 → 2.1 |
+
+Flood, MiB/s across the three rounds: 72.9 / 66.8 / 67.5 published,
+74.6 / 71.8 / 75.1 now. Every pairwise round favours the newer build, by around
+7%. Nothing in these 73 commits touched the parse loop, so read this as the
+write path being marginally less obstructed, not as the unbounded-parse-per-
+write problem having moved. It has not.
+
+### What moved
+
+**The cached text path got a third faster.** `plain` UI p50 1.3 → 0.8, `sgr`
+2.2 → 1.4, `static` 2.4 → 1.5. The three commits that can account for it are
+`21c8773` (no defensive listener copy per `Terminal.write`), `53ae0e3` (O(1)
+paragraph cache eviction) and `c3051b7` (cached procedural glyph rasters). All
+three are on the per-frame path these workloads sit in.
+
+**The procedural glyph path got slower to rasterise.** `boxdraw` raster
+2.7 → 3.0, `fullscreen` raster 1.4 → 1.6, and both are repeatable across all
+three rounds with no overlap between the builds. This is the opposite of what
+`c3051b7` was supposed to do, and it is the one result here worth chasing:
+replaying a cached `ui.Picture` per glyph appears to cost the raster thread
+more than re-tesselating the path cost it, even at a 97.1% hit rate. Note that
+`3e9266c` also changed how heavily box-drawing bars are stroked, so some of the
+extra raster work is extra pixels rather than extra draw calls — the two have
+not been separated.
+
+Neither direction matters to a user yet: the worst number in the table is
+3.0ms against a 16.7ms budget, and no workload put a single frame over budget
+on either build.
+
+### At a full-screen grid, where the differences are visible
+
+3700 cells is a small window. Re-run at **170x50 (8500 cells)**, the size a
+maximised terminal actually is, and the same commits look different — every
+paint-path cost scales with cell count, so both the wins and the regression
+scale with it. Same three-interleaved-rounds procedure, medians, and the
+within-build spread stayed at 0.1-0.2ms.
+
+| workload | UI p50 pub → now | raster p50 pub → now |
+|---|---|---|
+| plain | 2.1 → **1.6** | 2.4 → 2.6 |
+| sgr | 3.0 → **1.9** | 2.4 → 2.6 |
+| boxdraw | 2.9 → **2.6** | 3.6 → 3.9 |
+| fullscreen | 3.0 → 3.0 | 3.2 → 3.2 |
+| static | 5.1 → **2.7** | 8.6 → **4.5** |
+
+`static` is the headline: raster p50 halves, 8.6ms to 4.5ms, and UI drops 47%.
+At 3700 cells the same commits moved it by under a millisecond and it read as
+noise-adjacent; at 8500 it is a quarter of the frame budget on the raster
+thread. Flood is unchanged at about 55 MiB/s on both builds — the grid is
+bigger, so more of each burst goes into painting, and nothing here touched the
+parse loop anyway.
+
+The remaining `boxdraw` raster gap is **not** a regression. It survives with
+the glyph cache compiled out entirely, and it is explained by cell size: the
+same 170 columns come out 1366.8px wide on this build against 1330.9px on the
+published one, so 2.7% more pixels are rasterised per frame. 3.6 x 1.027 = 3.7.
+
+### The glyph cache defect this run found
+
+The first 170x50 run had `boxdraw` UI p50 at **4.6ms** against the published
+build's 2.9ms, and `fullscreen` raster at 3.6ms against 3.2ms. Both were
+`c3051b7`, the procedural glyph cache, and both are fixed above. Two separate
+faults:
+
+**The cache was too small to hold one screen, and a miss cost more than not
+caching.** Keys are (codepoint, cell size, colour), so `boxdraw`'s 15 glyphs
+across 256 colours reach 3840 live keys against a 512-entry cache. The hit rate
+fell from 97.1% at 3700 cells to **75.0%** at 8500, and because a miss pays for
+the recording and the insert *on top of* the drawing, the cache made the build
+1.9ms per frame slower than painting uncached. Capacity is now 4096. Measured
+at 8192 for comparison: 99.9% hit, and no further gain over 4096's key space.
+
+**Block elements should never have been cached.** `U+2580..U+259F` are one or
+two `drawRect` calls. Recording that into a `Picture` and replaying it per cell
+puts a picture boundary in the raster command stream for every cell, and Skia
+batches worse across many small pictures than across one stream — the same
+effect that sank phase 3 above. On `fullscreen`, which is entirely `U+2588` at
+a 100% hit rate, the cache cost 0.4ms of raster per frame and saved nothing on
+the UI thread. They now bypass the cache, and `fullscreen` is back to parity
+with the published build on both threads.
+
+The general lesson, and it is the second time this file records it: **a cache
+that hands the raster thread more, smaller pictures is not free, and has to be
+measured on the raster thread, not just on the UI thread.**
+
+### Correctness, which is where most of the 73 commits went
+
+Running this build's test suite against the published library:
+
+| | published `8d938de` | now `d6f7b59` |
+|---|---|---|
+| tests run | 391 | 809 |
+| failures | 20 | 0 |
+
+Five of those 20 are whole files that do not compile against the published
+library — `painter_test`, `render_test`, `render_stats_test`,
+`android_ime_input_test` and `terminal_test` — so the tests inside them never
+ran, and 391 is an undercount rather than a comparable total. The 15 that ran
+and failed are the regressions the commits since then fixed: wide-char
+lead/placeholder corruption (five, from the fuzz harness), Kitty keyboard
+release and modifier reporting (three), mobile IME double-insertion and
+backspace-at-zero (two), `TerminalView.textScaler` (two), default pointer
+input reporting, box-drawing stroke weight, and a colour golden.
+
+## The write path — 2026-08-06
+
+`flood` says output starves the frame pipeline, but it cannot say which part of
+the write path is paying, because it measures the parser, the buffer writes it
+drives and the repaints it schedules all at once. `bin/parse_bench.dart` splits
+them, with no Flutter and no renderer:
+
+```sh
+dart compile exe bin/parse_bench.dart -o /tmp/parse_bench && /tmp/parse_bench
+```
+
+Compile it — JIT numbers are not comparable to what ships. 32 MiB per workload
+in 8 KiB chunks, 170x50 grid, Apple M1 Pro.
+
+| workload | full | parser | buffer% | no scrollback | no graphemes |
+|---|---|---|---|---|---|
+| ascii | 103 | 428 | 76% | 173 | 105 |
+| ascii-long-lines | 149 | 828 | 82% | 226 | 144 |
+| sgr | 76 | 99 | 23% | 87 | 76 |
+| utf8 | 58 | 266 | 78% | 86 | 68 |
+| cyrillic | 85 | 293 | 71% | 141 | 83 |
+| altscreen | 171 | 233 | 27% | 173 | 173 |
+
+MiB/s. `full` is `Terminal.write`; `parser` is the same bytes through
+`EscapeParser` with a handler that does nothing; the other two columns turn off
+scrollback and DEC mode 2027 respectively.
+
+**The parser is not the bottleneck, except on `sgr`.** Plain text parses at
+435 MiB/s and the full path manages 92, so 79% of the time is what the terminal
+does per token. `sgr` is the exception: 96 MiB/s through the parser alone means
+CSI dispatch itself is the ceiling there, and no amount of buffer work will
+move it.
+
+**Scrolling costs about 40%.** `ascii` at 103 against 173 with scrollback
+disabled, and `altscreen` — which never scrolls — runs at 171. A line of output
+allocates a `BufferLine`, and its cell storage is a `Uint32List` of three
+kilobytes at this width. Capacity rounding was the cheap part of that bill:
+`_calcCapacity` doubled from 64, so a 170-column line reserved 256 cells and
+addressed 170. Rounding to 32 instead took `ascii` from 92 to 103 MiB/s and
+long lines from 129 to 149. The rest is the allocation itself, and recycling
+the storage does not work — see below.
+
+**Non-ASCII text used to run at a sixth of ASCII speed.** Both causes are
+fixed below; the table above is after those fixes.
+
+### Grapheme clustering no longer costs Latin text anything
+
+`utf8` measured **15 MiB/s** before this section was written, against a
+34 MiB/s ceiling with mode 2027 turned off — grapheme detection was more than
+half the cost of writing Turkish, and by extension of every non-English
+language written in Latin script.
+
+`_joinsPreviousGrapheme` had a fast path for the case where the previous cell
+and the incoming code point are both ASCII. One accented letter breaks it: with
+`ö` in the previous cell, every following character fell through to real
+grapheme segmentation, which allocates two strings and segments both of them.
+Nothing below U+0300 can continue a grapheme cluster — the first combining
+marks live there, and everything else that can extend a cluster (SpacingMark,
+ZWJ, regional indicators, emoji modifiers, Hangul V and T) sits higher — so the
+cut is now made on the code point, and Latin text never reaches the segmenter.
+The same cut lets `writeChar` skip both cluster checks outright.
+
+15 → 32 MiB/s, against a 35 MiB/s ceiling. What was left is the per-code-point
+path, dealt with next.
+
+### Batched writes for alphabets other than English
+
+The parser batches a run of printable ASCII into one `writeText` call and hands
+everything else to `writeChar`, one code point at a time. So the first accented
+letter ended the run, and every letter after it started a run of its own — an
+alphabet that is *entirely* non-ASCII never batched at all. Cyrillic measured
+**6 MiB/s**, a fifteenth of ASCII.
+
+`isSingleCellPrintable` now defines the run: ASCII, Latin-1, Latin Extended-A
+and B, IPA, spacing modifiers, Greek, Cyrillic and Armenian, minus the two
+combining blocks inside that span and U+00AD. Every code point in it is width 1
+and cannot continue a grapheme cluster, which is exactly what a batched write
+needs in order to skip the width table and the cluster rules. The same
+predicate replaces the U+0300 cut in `writeChar`, so a single such character
+outside a run is just as cheap.
+
+Cyrillic 6 → 73 MiB/s. Turkish 32 → 54, where the rest of the gap to ASCII is
+the em dashes and other punctuation the ranges leave out. CJK is deliberately
+not in this set: it is width 2 and needs the path that allocates a lead cell
+and a placeholder.
+
+### Pacing the write path — measured, offered as opt-in
+
+`flood` writes chunks as fast as the event loop takes them, which is what a PTY
+stream listener does. At 170x50 that drains 32 MiB in 566ms and produces 37
+frames per second while it does — the burst spends about 89% of its time
+parsing and 11% painting, so frames happen in whatever gaps parsing leaves.
+
+The harness now also measures a paced variant: parse until a budget is spent,
+hand the thread back, repeat.
+
+| mode | drain | throughput | frames | worst UI frame |
+|---|---|---|---|---|
+| unpaced | 566ms | 58.3 MiB/s | 37.1 fps | 3.2ms |
+| paced, 8ms budget | 854ms | 38.6 MiB/s | **74.9 fps** | 1.9ms |
+| paced, 4ms budget | 1068ms | 30.9 MiB/s | 74.9 fps | 1.4ms |
+
+Pacing doubles the frame rate to the display's full refresh rate, and costs
+about 50% in drain time. 4ms buys no more frames than 8ms and only drains more
+slowly, so 8ms is the default in `PacedTerminalWriter`, which is the opt-in
+this measurement produced. Nothing in the package uses it by default: which
+side of that trade an application wants is not the package's call.
+
+Note what this is not: the unpaced case was never freezing. Its worst UI frame
+during the burst is 3.2ms. The frame rate is low because parsing owns the
+thread between frames, not because any single frame is slow.
+
+### Recycling evicted lines — measured, rejected
+
+The obvious answer to the scrolling cost is to blank the line that just fell
+off the scrollback and push it back on, instead of allocating a replacement.
+Implemented as `BufferLine.reset` plus a bounded pool in `Buffer`, it made
+`ascii` **worse**: 92 → 41 MiB/s zeroing the whole capacity, 92 → 52 zeroing
+only the live cells. The VM's allocator hands out typed data that is already
+zeroed, and clearing 3 KiB by hand costs more than asking for a fresh one.
+
+Anything else aimed at the scrolling cost has to reduce the *number* of lines
+allocated or their size, not try to reuse them.
+
+## Where it stands against the published package — 2026-08-06
+
+Everything above, re-measured against `8d938de` after the render and write-path
+work was done. Render: three interleaved rounds at 170x50, medians, spread
+0.1-0.2ms within a build. Write path: `bin/parse_bench.dart` compiled against
+each build, 32 MiB per workload.
+
+### Frame times, milliseconds
+
+| workload | UI p50 pub → now | raster p50 pub → now |
+|---|---|---|
+| plain | 2.1 → **1.6** | 2.3 → 2.5 |
+| sgr | 3.0 → **1.8** | 2.4 → 2.5 |
+| boxdraw | 2.8 → **2.5** | 3.5 → 3.9 |
+| fullscreen | 3.0 → 3.0 | 3.1 → 3.1 |
+| static | 5.1 → **2.7** | 8.7 → **4.5** |
+
+### Write path, MiB/s
+
+| workload | pub | now |
+|---|---|---|
+| ascii | 93 | **103** |
+| ascii-long-lines | 131 | **146** |
+| sgr | 74 | 76 |
+| utf8 (Turkish) | 16 | **57** |
+| cyrillic | 6 | **84** |
+| altscreen | 172 | 169 |
+
+### Draining 32 MiB into a 170x50 grid
+
+| | pub | now |
+|---|---|---|
+| unpaced | 596ms, 32 fps, worst UI 4.9ms | **532ms, 41 fps**, worst UI 4.0ms |
+| paced 8ms | 855ms, 75 fps, worst UI 4.2ms | **761ms**, 75 fps, worst UI **1.9ms** |
+| paced 4ms | 1563ms, 75 fps | **1068ms**, 75 fps |
+
+Unpaced is both faster to drain and smoother than the published build, which is
+the write-path work showing up. Paced is available on both builds — the harness
+provides the pacing — and the published build pays for its slower parser there
+too, taking 12% longer at an 8ms budget and 46% longer at 4ms.
+
+### What has not moved
+
+`sgr` is unchanged in every table: 74 → 76 MiB/s on the write path, and the
+parser alone caps it at 99. CSI dispatch is the ceiling and nothing here
+touched it. `altscreen` is unchanged because it neither scrolls nor allocates
+lines. `fullscreen` frame times are at parity by design — the glyph cache
+regression that had moved them was removed rather than tuned.
+
+The `boxdraw` raster gap is not a regression: it survives with the glyph cache
+compiled out, and 170 columns are 1366.8px wide on this build against 1330.8px
+on the published one, so 2.7% more pixels are rasterised per frame.
 
 ## Adding a workload
 

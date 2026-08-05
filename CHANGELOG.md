@@ -1,5 +1,45 @@
 ## Unreleased
 
+* Add `PacedTerminalWriter`, an opt-in way to feed PTY output to a terminal a frame's
+  worth at a time. Writing every chunk as it arrives lets a burst own the UI thread
+  between frames: 32 MiB of `cat`-style output on a 170x50 grid drains in 566ms at 37
+  frames per second. Through the writer with its default 8ms budget, the same burst
+  takes 854ms and holds 75 frames per second. It is a trade — around 50% slower to
+  drain, smooth while it drains — so nothing uses it by default.
+* Allocate less slack per buffer line. Line storage rounded its capacity up by
+  doubling from 64, so a 170-column line reserved 256 cells and never addressed half
+  of them. Scrolling allocates one line per line of output, so that slack was charged
+  on the hottest path in the terminal. Capacity now rounds up to a multiple of 32,
+  which still absorbs the small widenings a resize does: 12% more throughput on
+  ordinary output and 16% on long lines.
+* Batch writes for alphabets other than English. The parser wrote a run of printable
+  ASCII into cells in one go and handed everything else to the per-code-point path,
+  so the first accented letter ended the run and a language written entirely in
+  non-ASCII letters never batched at all — Cyrillic ran at 6 MiB/s, a fifteenth of
+  ASCII. Runs are now defined by `isSingleCellPrintable`: ASCII, Latin-1, Latin
+  Extended-A and B, IPA, spacing modifiers, Greek, Cyrillic and Armenian, each of
+  which is width 1 and cannot continue a grapheme cluster. Cyrillic 6 to 73 MiB/s,
+  Turkish 32 to 54.
+* Roughly double the throughput of non-ASCII text. Grapheme cluster detection had a
+  fast path only for the case where both the previous cell and the incoming code
+  point are ASCII, so a single accented letter — `ö` in Turkish, any Latin-1 word —
+  dropped every following character into full grapheme segmentation, at two string
+  allocations and two segmentation passes each. Nothing below U+0300 can continue a
+  cluster, so that is now the cut, and `writeChar` skips both cluster checks for such
+  code points. Measured with `bin/parse_bench.dart`: 15 MiB/s to 32 MiB/s on Turkish
+  text, against a 35 MiB/s ceiling with grapheme clustering disabled entirely.
+* Add `bin/parse_bench.dart`, which measures write-path throughput with no Flutter and
+  no renderer, separating the parser from the buffer writes it drives.
+* Stop the procedural glyph cache from making large terminals slower than no cache
+  at all. Its keys are (codepoint, cell size, colour), so a screen drawing box lines
+  in many colours can reference thousands of distinct keys, and at the old 512-entry
+  capacity a full-screen grid thrashed it — a miss pays for the recording and the
+  insert on top of the drawing, so the cache cost 1.9ms of UI time per frame *over*
+  painting uncached. Capacity is now 4096. Block elements (`U+2580..U+259F`), which
+  are one or two `drawRect` calls, now bypass the cache entirely: replaying a
+  recorded picture per cell put a picture boundary in the raster command stream for
+  every cell and cost 0.4ms of raster per frame at a 100% hit rate, for no saving on
+  the UI thread.
 * Fix wide characters corrupting the cell grid. `BufferLine.setCell` now repairs the
   width-2 lead / width-0 placeholder pairing itself, so no caller can leave half a
   wide character behind — a filler cell written when a wide character does not fit

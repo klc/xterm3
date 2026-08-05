@@ -7,6 +7,7 @@ import 'package:xterm2/src/core/buffer/cell_offset.dart';
 import 'package:xterm2/src/core/cell.dart';
 import 'package:xterm2/src/core/cursor.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
+import 'package:xterm2/src/utils/single_cell_text.dart';
 import 'package:xterm2/src/utils/unicode_v11.dart';
 
 const _cellSize = 4;
@@ -247,7 +248,10 @@ class BufferLine with IndexedItem {
     for (var offset = 0; offset < count; offset++) {
       final cellOffset = (start + offset) * _cellSize;
       final codeUnit = text.codeUnitAt(textStart + offset);
-      assert(codeUnit >= 0x20 && codeUnit <= 0x7e);
+      // Callers must have established that every unit occupies exactly one
+      // cell - see `ByteConsumer.printableTextRunLength`, which is where the
+      // run this writes comes from.
+      assert(isSingleCellPrintable(codeUnit));
       _data[cellOffset + _cellForeground] = foreground;
       _data[cellOffset + _cellBackground] = background;
       _data[cellOffset + _cellAttributes] = attributes;
@@ -719,23 +723,20 @@ class BufferLine with IndexedItem {
     }
   }
 
+  /// Cells to allocate storage for, for a line of [length] cells.
+  ///
+  /// The slack exists so that a terminal resize can usually widen a line
+  /// without reallocating. It is charged on every line ever created, though,
+  /// and scrolling creates one per line of output - so the cheapest thing this
+  /// function can do for throughput is not round up very far. Doubling from 64
+  /// used to take a 170-column line to 256 cells, half of it never addressed;
+  /// rounding to 32 takes it to 192, and measured 12% more `ascii` throughput
+  /// and 16% more on long lines in `bin/parse_bench.dart`.
   static int _calcCapacity(int length) {
     assert(length >= 0);
 
-    var capacity = 64;
-
-    if (length < 256) {
-      while (capacity < length) {
-        capacity *= 2;
-      }
-    } else {
-      capacity = 256;
-      while (capacity < length) {
-        capacity += 32;
-      }
-    }
-
-    return capacity;
+    if (length <= 64) return 64;
+    return (length + 31) & ~31;
   }
 
   String getText([int? from, int? to]) {

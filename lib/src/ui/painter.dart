@@ -16,7 +16,17 @@ const _specialBlinkColor = 2;
 const _specialReverseColor = 3;
 const _specialItalicColor = 4;
 const _defaultParagraphCacheSize = 2048;
-const _defaultProceduralGlyphCacheSize = 512;
+
+/// Entries in the procedural glyph cache.
+///
+/// Keys are (codepoint, cell size, colour), so a screen that draws box lines
+/// in many colours multiplies the glyph count by the palette in use - the
+/// benchmark's `boxdraw` workload alone reaches 3840 live keys. This has to
+/// stay comfortably above what one screen can reference, because a miss is
+/// strictly more expensive than not caching at all: it pays for the recording
+/// and the insert on top of the drawing. At 512 the cache thrashed at 8500
+/// cells and cost 1.9ms of UI time per frame *over* painting uncached.
+const _defaultProceduralGlyphCacheSize = 4096;
 
 /// Upper bound on the number of cells a single shaped ligature run may cover.
 ///

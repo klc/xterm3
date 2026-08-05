@@ -109,6 +109,29 @@ void main() {
     expect(_consumeAll(consumer), 'a😀b😁c'.runes);
   });
 
+  test('single-cell runs span Latin-1, Greek and Cyrillic', () {
+    final consumer = ByteConsumer()..add('göz строка\u{0301}');
+
+    // Stops at the combining acute, which is not a single-cell character.
+    expect(consumer.printableTextRunLength, 'göz строка'.length);
+    // The ASCII-only scan stops at the first accented letter instead.
+    expect(consumer.printableAsciiRunLength, 1);
+  });
+
+  test('single-cell runs stop at characters that need the slow path', () {
+    // Soft hyphen is zero width; the em dash and CJK are outside the ranges;
+    // an emoji is a surrogate pair.
+    for (final text in [
+      'a\u{00AD}b',
+      'a\u{2014}b',
+      'a\u{4E00}b',
+      'a\u{1F600}b'
+    ]) {
+      final consumer = ByteConsumer()..add(text);
+      expect(consumer.printableTextRunLength, 1, reason: text);
+    }
+  });
+
   test('consumes printable ASCII runs without crossing controls or blocks', () {
     final consumer = ByteConsumer()
       ..add('abc\x1b')
