@@ -81,3 +81,5 @@ coverage/
 
 example2/
 test/src/failures/
+
+/graphify-out
