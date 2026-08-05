@@ -27,11 +27,14 @@
 // repaint has to move this row and leave the others alone.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:xterm2/xterm.dart';
+
+import 'bench/bench_stats.dart';
 
 /// Frames written before measurement starts, to let caches and the shader
 /// warm-up settle.
@@ -40,12 +43,44 @@ const _warmupFrames = 60;
 /// Frames measured per workload.
 const _measuredFrames = 400;
 
-/// Fixed logical size for the terminal viewport. Pinning this rather than
-/// filling the window is what makes two runs comparable - the cell count
-/// drives every cost in the paint path.
-const _viewportSize = Size(1000, 600);
+/// The grid every run has to measure, in cells.
+///
+/// The cell count drives every cost in the paint path, so it - not the pixel
+/// size of the viewport - is what has to be held fixed between two builds.
+/// Cell metrics are not stable across builds: `fix(ui): size cells from a
+/// reference glyph, not the widest ASCII glyph` changed them, and a fixed
+/// pixel viewport would therefore have handed the two builds different grids
+/// and made the comparison meaningless. [_calibrate] sizes the viewport until
+/// the grid comes out at exactly these numbers, whatever a cell measures.
+/// Overridable so the same harness can measure a laptop-sized grid and a
+/// full-screen one. The defaults are the grid every table in BENCHMARKS.md
+/// before 2026-08-05 was taken at.
+const _targetColumns = int.fromEnvironment('BENCH_COLS', defaultValue: 100);
+const _targetRows = int.fromEnvironment('BENCH_ROWS', defaultValue: 37);
+
+/// Where calibration starts. The 100x37 grid landed here on the build the
+/// baseline table was measured on, so this is usually the answer already.
+const _initialViewportSize = Size(1000, 600);
+
+/// Bounds of the bisection search for a viewport extent, in logical pixels.
+/// The upper bound has to stay inside the window: a `SizedBox` bigger than the
+/// space the layout has is silently constrained, and the cell count would stop
+/// responding to the size being asked for.
+const _minimumExtent = 100.0;
+const _maximumExtent = 2400.0;
+
+/// How many resize attempts each axis of [_calibrate] gets before giving up.
+const _calibrationAttempts = 24;
 
 const _frameBudgetMs = 1000 / 60;
+
+/// Names the build in the console output, so interleaved runs can be told
+/// apart after the fact. Set by `script/bench-compare.sh`.
+const _label = String.fromEnvironment('BENCH_LABEL', defaultValue: 'local');
+
+/// Quit once the report has been printed. `script/bench-compare.sh` sets this
+/// so `flutter run` returns instead of sitting at its interactive prompt.
+const _exitWhenDone = bool.fromEnvironment('BENCH_EXIT');
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -78,6 +113,15 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
   final _collected = <FrameTiming>[];
   final _results = <_Result>[];
 
+  /// Logical size handed to the terminal view. Adjusted by [_calibrate] until
+  /// the grid is [_targetColumns] x [_targetRows], then left alone.
+  var _viewportSize = _initialViewportSize;
+
+  /// Reads back the size the view was actually laid out at, which is not
+  /// necessarily [_viewportSize]: a `SizedBox` larger than the window is
+  /// silently constrained to it.
+  final _viewKey = GlobalKey();
+
   /// Frames actually produced. `FrameTiming` callbacks are delivered
   /// asynchronously and in batches, so they cannot be used to count frames
   /// inside a window that has just closed - this counter can.
@@ -105,20 +149,127 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     _collected.addAll(timings);
   }
 
+  /// Resizes the viewport until the terminal reports exactly
+  /// [_targetColumns] x [_targetRows] cells, and reports what that took.
+  ///
+  /// Two builds only produce comparable frame times if they are painting the
+  /// same number of cells. Cell metrics change between builds, so the pixel
+  /// size that yields this grid is not a constant and has to be found at run
+  /// time. Returns false if it could not be found, in which case the run is
+  /// worthless and is abandoned rather than reported.
+  Future<bool> _calibrate() async {
+    // The two axes are independent - width decides columns, height decides
+    // rows - so they are searched separately.
+    final width = await _bisect(
+      axis: 'width',
+      target: _targetColumns,
+      measure: () => _terminal.viewWidth,
+      apply: (value) => _viewportSize = Size(value, _viewportSize.height),
+    );
+    if (width == null) return false;
+
+    final height = await _bisect(
+      axis: 'height',
+      target: _targetRows,
+      measure: () => _terminal.viewHeight,
+      apply: (value) => _viewportSize = Size(_viewportSize.width, value),
+    );
+    if (height == null) return false;
+
+    await _idle(3);
+    final columns = _terminal.viewWidth;
+    final rows = _terminal.viewHeight;
+    if (columns != _targetColumns || rows != _targetRows) {
+      _report('calibration did not hold: ${columns}x$rows after both axes');
+      return false;
+    }
+
+    // Report the size the view was laid out at, not the size it was asked
+    // for. They differ when the window is smaller than the request, and the
+    // laid-out one is what the cell metrics have to be read against.
+    final actual = (_viewKey.currentContext?.findRenderObject() as RenderBox?)
+        ?.size;
+    final effective = actual ?? Size(width, height);
+    if (actual != null &&
+        ((actual.width - width).abs() > 0.5 ||
+            (actual.height - height).abs() > 0.5)) {
+      _report('note: window clipped the view to '
+          '${actual.width.toStringAsFixed(1)}x'
+          '${actual.height.toStringAsFixed(1)} px (asked for '
+          '${width.toStringAsFixed(1)}x${height.toStringAsFixed(1)}). '
+          'The grid is still $columns x $rows, so the comparison holds.');
+    }
+
+    _report('calibrated: ${columns}x$rows cells (${columns * rows}) at '
+        '${effective.width.toStringAsFixed(1)}x'
+        '${effective.height.toStringAsFixed(1)} logical px, '
+        'cell <= ${(effective.width / columns).toStringAsFixed(2)}x'
+        '${(effective.height / rows).toStringAsFixed(2)} px');
+    return true;
+  }
+
+  /// Finds a viewport extent along one axis that yields exactly [target] cells.
+  ///
+  /// Bisection rather than arithmetic: cells-per-pixel cannot be derived from
+  /// the cell count the layout reports (that only bounds it), and an estimate
+  /// built from it converges far too slowly - it oscillated between 37 and 38
+  /// rows for a dozen resizes when this was written that way. Cell count is
+  /// monotonic in extent, which is all bisection needs.
+  Future<double?> _bisect({
+    required String axis,
+    required int target,
+    required int Function() measure,
+    required void Function(double) apply,
+  }) async {
+    var low = _minimumExtent;
+    var high = _maximumExtent;
+
+    for (var attempt = 0; attempt < _calibrationAttempts; attempt++) {
+      final mid = (low + high) / 2;
+      setState(() => apply(mid));
+      await _idle(3);
+
+      final got = measure();
+      if (got == target) return mid;
+      if (got < target) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+      if (high - low < 0.5) {
+        _report('calibration failed on $axis: cannot land on $target cells, '
+            'closest $got between ${low.toStringAsFixed(1)} and '
+            '${high.toStringAsFixed(1)} px');
+        return null;
+      }
+    }
+    _report('calibration failed on $axis: no $target-cell extent found in '
+        '$_calibrationAttempts attempts');
+    return null;
+  }
+
   Future<void> _run() async {
     // Let layout settle so the terminal has been resized to the viewport.
     await _idle(10);
 
-    final cols = _terminal.viewWidth;
-    final rows = _terminal.viewHeight;
-    _report('terminal grid: ${cols}x$rows (${cols * rows} cells), '
-        'viewport ${_viewportSize.width.toInt()}x'
-        '${_viewportSize.height.toInt()} logical px');
+    _report('build: $_label');
     _report('release mode: $kReleaseMode  profile mode: $kProfileMode');
     if (!kProfileMode && !kReleaseMode) {
       _report('WARNING: debug mode. Numbers are not comparable to a real '
           'build. Re-run with --profile.');
     }
+
+    if (!await _calibrate()) {
+      _report('ABORT: could not reach a ${_targetColumns}x$_targetRows grid. '
+          'The numbers below would not be comparable to another build, so '
+          'none were taken.');
+      setState(() => _status = 'aborted - see console');
+      if (_exitWhenDone) exit(1);
+      return;
+    }
+
+    final cols = _terminal.viewWidth;
+    final rows = _terminal.viewHeight;
 
     final total = _warmupFrames + _measuredFrames;
     await _runWorkload('plain', _plainFrames(total));
@@ -189,6 +340,12 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     _report('');
 
     setState(() => _status = 'done - see console');
+
+    if (_exitWhenDone) {
+      // Give the console output a frame to flush before the process goes.
+      await _idle(2);
+      exit(0);
+    }
   }
 
   Future<void> _runWorkload(
@@ -217,7 +374,7 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     _collected.clear();
     // Reset after warm-up so the cache ratios describe the steady state, not
     // the compulsory misses of the first frames.
-    TerminalRenderStats.reset();
+    BenchStats.reset();
 
     for (var i = _warmupFrames; i < frames.length; i++) {
       _terminal.write(frames[i]);
@@ -226,7 +383,7 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
 
     // Snapshot the counters before flushing: `_idle` schedules extra frames,
     // and those repaints would otherwise be attributed to the workload.
-    final stats = _StatsSnapshot.capture();
+    final stats = BenchStats.capture();
 
     await _idle(10);
     _results.add(_Result(name, List.of(_collected), stats));
@@ -254,6 +411,13 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
       _report(result.format());
     }
     _report('');
+    if (!BenchStats.available) {
+      _report('paint-path counters: not available in this build - it predates '
+          'TerminalRenderStats. Frame times above are unaffected.');
+      _report('');
+      setState(() => _status = 'done - see console');
+      return;
+    }
     _report('workload    paints | l/pnt | para%  look/f | glyf%  look/f');
     for (final result in _results) {
       _report(result.stats.format(result.name));
@@ -288,6 +452,7 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
           ),
           Center(
             child: SizedBox.fromSize(
+              key: _viewKey,
               size: _viewportSize,
               child: TerminalView(
                 _terminal,
@@ -304,40 +469,7 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
   }
 }
 
-/// The paint-path counters as they stood at the end of a measurement window.
-///
-/// [TerminalRenderStats] is a set of process-wide mutable statics, so a
-/// workload's numbers have to be copied out before the next one starts.
-class _StatsSnapshot {
-  _StatsSnapshot({
-    required this.paints,
-    required this.paintedLines,
-    required this.paragraphHits,
-    required this.paragraphLookups,
-    required this.glyphHits,
-    required this.glyphLookups,
-  });
-
-  factory _StatsSnapshot.capture() {
-    return _StatsSnapshot(
-      paints: TerminalRenderStats.paints,
-      paintedLines: TerminalRenderStats.paintedLines,
-      paragraphHits: TerminalRenderStats.paragraphCacheHits,
-      paragraphLookups: TerminalRenderStats.paragraphCacheHits +
-          TerminalRenderStats.paragraphCacheMisses,
-      glyphHits: TerminalRenderStats.glyphCacheHits,
-      glyphLookups: TerminalRenderStats.glyphCacheHits +
-          TerminalRenderStats.glyphCacheMisses,
-    );
-  }
-
-  final int paints;
-  final int paintedLines;
-  final int paragraphHits;
-  final int paragraphLookups;
-  final int glyphHits;
-  final int glyphLookups;
-
+extension _StatsReport on BenchStats {
   String format(String name) {
     String ratio(int hits, int lookups) {
       if (lookups == 0) return '    -';
@@ -361,7 +493,7 @@ class _Result {
 
   final String name;
   final List<FrameTiming> timings;
-  final _StatsSnapshot stats;
+  final BenchStats stats;
 
   String format() {
     final ui = timings
