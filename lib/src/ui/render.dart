@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:developer' show Timeline;
 import 'dart:math' show max, min;
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:xterm2/src/core/buffer/buffer.dart';
@@ -17,6 +19,7 @@ import 'package:xterm2/src/terminal.dart';
 import 'package:xterm2/src/ui/controller.dart';
 import 'package:xterm2/src/ui/cursor_type.dart';
 import 'package:xterm2/src/ui/painter.dart';
+import 'package:xterm2/src/ui/render_stats.dart';
 import 'package:xterm2/src/ui/selection_mode.dart';
 import 'package:xterm2/src/ui/terminal_size.dart';
 import 'package:xterm2/src/ui/terminal_text_style.dart';
@@ -742,15 +745,95 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final canvas = context.canvas;
     canvas.save();
     canvas.clipRect(offset & size);
-    _paint(context, offset);
+    TerminalRenderStats.paints++;
+    if (kReleaseMode) {
+      _paint(context, offset);
+    } else {
+      // Named so it can be picked out of a `--trace-skia` timeline: everything
+      // the terminal contributes to the UI thread's frame is inside this
+      // slice. Release builds skip it - timeline slices are not free, and
+      // nothing is listening there.
+      Timeline.timeSync('RenderTerminal.paint', () => _paint(context, offset));
+    }
     canvas.restore();
     context.setWillChangeHint();
   }
 
+  /// Paints the terminal in four passes, in this order:
+  ///
+  ///  1. [_paintStaticBackgrounds] - one background run per visible line.
+  ///  2. [_paintOverlayBackgrounds] - cursor line highlight, search, custom
+  ///     highlights, selection, and the block cursor rectangle.
+  ///  3. [_paintStaticForegrounds] - the glyphs of every visible line.
+  ///  4. [_paintOverlayForegrounds] - text that overlays redraw in their own
+  ///     colors, underlines, composing text, and non-block cursors.
+  ///
+  /// The two static passes are the ones whose output depends only on the
+  /// buffer, and are what a line cache would record. They are deliberately
+  /// *not* adjacent: the overlays in pass 2 have to land on top of the
+  /// backgrounds and underneath the glyphs, so a cache cannot record a line's
+  /// background and foreground into a single replayable unit. Anything that
+  /// caches has to keep these as two separate recordings with pass 2 between
+  /// them.
   void _paint(PaintingContext context, Offset offset) {
     final canvas = context.canvas;
     _updatePainterColorState();
 
+    _paintSurface(canvas, offset);
+
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(
+      offset.dx + _padding.left,
+      offset.dy + _padding.top,
+      max(size.width - _padding.horizontal, 0),
+      _viewportHeight,
+    ));
+
+    final lines = _terminal.buffer.lines;
+
+    final (effectFirstLine, effectLastLine) = _visibleLineRange(
+      lines.length,
+      _scrollOffset,
+      _scrollOffset + _viewportHeight,
+      _painter.cellSize.height,
+    );
+
+    TerminalRenderStats.paintedLines += effectLastLine - effectFirstLine + 1;
+
+    final cursor = _resolveCursorPaintState(effectFirstLine, effectLastLine);
+    final selection = _controller.selectionFor(_terminal.buffer);
+
+    _paintStaticBackgrounds(canvas, offset, effectFirstLine, effectLastLine);
+    _paintOverlayBackgrounds(
+      canvas,
+      offset,
+      effectFirstLine,
+      effectLastLine,
+      cursor,
+      selection,
+    );
+    _paintStaticForegrounds(
+      canvas,
+      offset,
+      effectFirstLine,
+      effectLastLine,
+      cursor,
+    );
+    _paintOverlayForegrounds(
+      canvas,
+      offset,
+      effectFirstLine,
+      effectLastLine,
+      cursor,
+      selection,
+    );
+
+    canvas.restore();
+  }
+
+  /// Fills the whole render box before any cell is drawn. Outside the viewport
+  /// clip because the padding around the grid takes these colors too.
+  void _paintSurface(Canvas canvas, Offset offset) {
     final backgroundOverride = _painter.backgroundColorOverride;
     if (backgroundOverride != null) {
       final paint = _fillPaint
@@ -764,133 +847,168 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
             _painter.foregroundColor.withValues(alpha: _backgroundOpacity);
       canvas.drawRect(offset & size, paint);
     }
+  }
 
-    canvas.save();
-    canvas.clipRect(Rect.fromLTWH(
-      offset.dx + _padding.left,
-      offset.dy + _padding.top,
-      max(size.width - _padding.horizontal, 0),
-      _viewportHeight,
-    ));
+  /// Everything about the cursor that the paint passes need, resolved once.
+  ///
+  /// Each of these reads the cursor cell out of the buffer, so resolving them
+  /// per pass would repeat the same lookups three times for one frame.
+  _CursorPaintState _resolveCursorPaintState(int firstLine, int lastLine) {
+    final type = _terminal.applicationCursorType ?? _cursorType;
+    final shouldPaint = _terminal.buffer.absoluteCursorY >= firstLine &&
+        _terminal.buffer.absoluteCursorY <= lastLine &&
+        _shouldShowCursor;
+    final shouldPaintBlock =
+        shouldPaint && type == TerminalCursorType.block;
+    final column = _cursorRenderColumn();
+    final colors = _cursorColors(column);
+    final invertsCell = shouldPaintBlock && _focusNode.hasFocus;
 
-    final lines = _terminal.buffer.lines;
-    final charHeight = _painter.cellSize.height;
-
-    final firstLineOffset = _scrollOffset;
-    final lastLineOffset = _scrollOffset + _viewportHeight;
-
-    final (effectFirstLine, effectLastLine) = _visibleLineRange(
-      lines.length,
-      firstLineOffset,
-      lastLineOffset,
-      charHeight,
+    return _CursorPaintState(
+      type: type,
+      shouldPaint: shouldPaint,
+      shouldPaintBlock: shouldPaintBlock,
+      hasFocus: _focusNode.hasFocus,
+      column: column,
+      width: _cursorRenderWidth(column),
+      background: colors.background,
+      // A block cursor with focus inverts the cell under it; every other case
+      // leaves the glyph alone, and this color goes unused.
+      foreground: switch (invertsCell) {
+        true => colors.foreground,
+        false => _painter.backgroundColor,
+      },
     );
+  }
 
-    for (var i = effectFirstLine; i <= effectLastLine; i++) {
+  /// Pass 1: the background of every visible line.
+  ///
+  /// Depends only on the buffer, the palette and the cell size.
+  void _paintStaticBackgrounds(
+    Canvas canvas,
+    Offset offset,
+    int firstLine,
+    int lastLine,
+  ) {
+    final lines = _terminal.buffer.lines;
+    for (var i = firstLine; i <= lastLine; i++) {
       _painter.paintLineBackgrounds(
         canvas,
         _lineOrigin(offset, i),
         lines[i],
       );
     }
+  }
 
+  /// Pass 2: fills that sit on top of the line backgrounds and underneath the
+  /// glyphs. All of it can change without the buffer changing.
+  void _paintOverlayBackgrounds(
+    Canvas canvas,
+    Offset offset,
+    int firstLine,
+    int lastLine,
+    _CursorPaintState cursor,
+    BufferRange? selection,
+  ) {
     if (_terminal.cursorLineHighlightMode &&
-        _terminal.buffer.absoluteCursorY >= effectFirstLine &&
-        _terminal.buffer.absoluteCursorY <= effectLastLine) {
+        _terminal.buffer.absoluteCursorY >= firstLine &&
+        _terminal.buffer.absoluteCursorY <= lastLine) {
       final paint = _fillPaint..color = _painter.cursorLineHighlightColor;
       canvas.drawRect(
         Rect.fromLTWH(
           _snapToDevicePixels(offset.dx + _padding.left),
           _lineOrigin(offset, _terminal.buffer.absoluteCursorY).dy,
           max(size.width - _padding.horizontal, 0),
-          charHeight,
+          _painter.cellSize.height,
         ),
         paint,
       );
     }
 
-    _paintSearchHighlightBackgrounds(
-      canvas,
-      offset,
-      effectFirstLine,
-      effectLastLine,
-    );
+    _paintSearchHighlightBackgrounds(canvas, offset, firstLine, lastLine);
 
     _paintHighlights(
       canvas,
       offset,
       _controller.highlights,
-      effectFirstLine,
-      effectLastLine,
+      firstLine,
+      lastLine,
     );
 
-    final selection = _controller.selectionFor(_terminal.buffer);
     if (selection != null) {
-      _paintSelection(
-        canvas,
-        offset,
-        selection,
-        effectFirstLine,
-        effectLastLine,
-      );
+      _paintSelection(canvas, offset, selection, firstLine, lastLine);
     }
 
-    final cursorType = _terminal.applicationCursorType ?? _cursorType;
-    final shouldPaintCursor =
-        _terminal.buffer.absoluteCursorY >= effectFirstLine &&
-            _terminal.buffer.absoluteCursorY <= effectLastLine &&
-            _shouldShowCursor;
-    final shouldPaintBlockCursor =
-        shouldPaintCursor && cursorType == TerminalCursorType.block;
-    final cursorRenderColumn = _cursorRenderColumn();
-    final cursorRenderWidth = _cursorRenderWidth(cursorRenderColumn);
-    final cursorColors = _cursorColors(cursorRenderColumn);
-    final cursorForeground =
-        switch (shouldPaintBlockCursor && _focusNode.hasFocus) {
-      true => cursorColors.foreground,
-      false => _painter.backgroundColor,
-    };
-
-    if (shouldPaintBlockCursor && _focusNode.hasFocus) {
+    // The block cursor rectangle goes down before the glyphs so the inverted
+    // character in pass 3 lands on top of it.
+    if (cursor.invertsCell) {
       _painter.paintCursor(
         canvas,
-        _cursorRenderOffset(offset, cursorRenderColumn),
-        cursorType: cursorType,
-        cellWidth: cursorRenderWidth,
-        color: cursorColors.background,
+        _cursorRenderOffset(offset, cursor.column),
+        cursorType: cursor.type,
+        cellWidth: cursor.width,
+        color: cursor.background,
       );
     }
+  }
 
+  /// Pass 3: the glyphs of every visible line.
+  ///
+  /// Two things keep this from depending on the buffer alone, and both have to
+  /// be dealt with before a line can be cached:
+  ///  - the cell under a focused block cursor is drawn in inverted colors, so
+  ///    the cursor's row differs from what the buffer says;
+  ///  - [_textBlinkVisible] hides cells with the blink attribute for half of
+  ///    the blink cycle.
+  void _paintStaticForegrounds(
+    Canvas canvas,
+    Offset offset,
+    int firstLine,
+    int lastLine,
+    _CursorPaintState cursor,
+  ) {
+    final lines = _terminal.buffer.lines;
     var hasBlinkingText = false;
-    for (var i = effectFirstLine; i <= effectLastLine; i++) {
+
+    for (var i = firstLine; i <= lastLine; i++) {
       hasBlinkingText = _painter.paintLineForegrounds(
             canvas,
             _lineOrigin(offset, i),
             lines[i],
             blinkVisible: _textBlinkVisible,
             activeHyperlinkId: _activeHyperlinkId,
-            cursorColumn: switch (shouldPaintBlockCursor &&
-                _focusNode.hasFocus &&
+            cursorColumn: switch (cursor.invertsCell &&
                 i == _terminal.buffer.absoluteCursorY) {
-              true => cursorRenderColumn,
+              true => cursor.column,
               false => null,
             },
-            cursorForeground: cursorForeground,
+            cursorForeground: cursor.foreground,
           ) ||
           hasBlinkingText;
     }
-    _updateTextBlinking(hasBlinkingText);
 
+    // Starts or stops the blink timer for the next frame. Has to run after the
+    // whole loop: a single blinking cell anywhere keeps the timer alive.
+    _updateTextBlinking(hasBlinkingText);
+  }
+
+  /// Pass 4: text redrawn in an overlay's own colors, decorations, and the
+  /// cursors that go on top of the glyphs rather than underneath them.
+  void _paintOverlayForegrounds(
+    Canvas canvas,
+    Offset offset,
+    int firstLine,
+    int lastLine,
+    _CursorPaintState cursor,
+    BufferRange? selection,
+  ) {
     _paintSearchHighlightForegrounds(
       canvas,
       offset,
-      effectFirstLine,
-      effectLastLine,
-      cursorColumn: switch (shouldPaintBlockCursor && _focusNode.hasFocus) {
-        true => cursorRenderColumn,
-        false => null,
-      },
-      cursorForeground: cursorForeground,
+      firstLine,
+      lastLine,
+      cursorColumn: cursor.invertedColumn,
+      cursorForeground: cursor.foreground,
     );
 
     if (selection != null) {
@@ -898,14 +1016,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         canvas,
         offset,
         selection,
-        effectFirstLine,
-        effectLastLine,
+        firstLine,
+        lastLine,
         _painter.selectionForegroundColor,
-        cursorColumn: switch (shouldPaintBlockCursor && _focusNode.hasFocus) {
-          true => cursorRenderColumn,
-          false => null,
-        },
-        cursorForeground: cursorForeground,
+        cursorColumn: cursor.invertedColumn,
+        cursorForeground: cursor.foreground,
       );
     }
 
@@ -913,27 +1028,28 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       canvas,
       offset,
       _controller.underlines,
-      effectFirstLine,
-      effectLastLine,
+      firstLine,
+      lastLine,
     );
 
-    if (shouldPaintCursor) {
-      if (_isComposingText) {
-        _paintComposingText(canvas, offset, cursorOffset);
-      }
+    if (!cursor.shouldPaint) return;
 
-      if (!shouldPaintBlockCursor || !_focusNode.hasFocus) {
-        _painter.paintCursor(
-          canvas,
-          _cursorRenderOffset(offset, cursorRenderColumn),
-          cursorType: cursorType,
-          hasFocus: _focusNode.hasFocus,
-          cellWidth: cursorRenderWidth,
-          color: cursorColors.background,
-        );
-      }
+    if (_isComposingText) {
+      _paintComposingText(canvas, offset, cursorOffset);
     }
-    canvas.restore();
+
+    // The focused block cursor already went down in pass 2, underneath the
+    // glyph it inverts. Every other cursor is drawn over the text.
+    if (!cursor.invertsCell) {
+      _painter.paintCursor(
+        canvas,
+        _cursorRenderOffset(offset, cursor.column),
+        cursorType: cursor.type,
+        hasFocus: cursor.hasFocus,
+        cellWidth: cursor.width,
+        color: cursor.background,
+      );
+    }
   }
 
   void _updatePainterColorState() {
@@ -1372,4 +1488,54 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final start = segment.start ?? 0;
     return _lineOrigin(paintOffset, segment.line, column: start);
   }
+}
+
+/// The cursor state the paint passes share, resolved once per frame by
+/// [RenderTerminal._resolveCursorPaintState].
+class _CursorPaintState {
+  const _CursorPaintState({
+    required this.type,
+    required this.shouldPaint,
+    required this.shouldPaintBlock,
+    required this.hasFocus,
+    required this.column,
+    required this.width,
+    required this.background,
+    required this.foreground,
+  });
+
+  final TerminalCursorType type;
+
+  /// Whether the cursor is on a visible row and not currently hidden.
+  final bool shouldPaint;
+
+  final bool shouldPaintBlock;
+
+  final bool hasFocus;
+
+  /// The column the cursor is drawn at, which is the column to the left of
+  /// [Buffer.cursorX] when the cursor sits on the trailing half of a wide
+  /// character.
+  final int column;
+
+  /// Cursor width in cells: 2 over a wide character, 1 otherwise.
+  final int width;
+
+  final Color background;
+
+  /// The color the inverted glyph under a focused block cursor is drawn in.
+  /// Meaningless unless [invertsCell] is true.
+  final Color foreground;
+
+  /// Whether the cursor covers a cell and inverts the glyph in it.
+  ///
+  /// Only a focused block cursor does this, and it is what forces the glyph
+  /// pass to know about the cursor at all: the cursor rectangle is painted
+  /// underneath the glyphs, and that one cell is then drawn in swapped colors
+  /// on top of it.
+  bool get invertsCell => shouldPaintBlock && hasFocus;
+
+  /// [column] when a cell is being inverted, null otherwise - the shape the
+  /// painter's `cursorColumn` arguments expect.
+  int? get invertedColumn => invertsCell ? column : null;
 }
