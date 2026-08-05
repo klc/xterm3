@@ -506,6 +506,59 @@ zeroed, and clearing 3 KiB by hand costs more than asking for a fresh one.
 Anything else aimed at the scrolling cost has to reduce the *number* of lines
 allocated or their size, not try to reuse them.
 
+## Where it stands against the published package — 2026-08-06
+
+Everything above, re-measured against `8d938de` after the render and write-path
+work was done. Render: three interleaved rounds at 170x50, medians, spread
+0.1-0.2ms within a build. Write path: `bin/parse_bench.dart` compiled against
+each build, 32 MiB per workload.
+
+### Frame times, milliseconds
+
+| workload | UI p50 pub → now | raster p50 pub → now |
+|---|---|---|
+| plain | 2.1 → **1.6** | 2.3 → 2.5 |
+| sgr | 3.0 → **1.8** | 2.4 → 2.5 |
+| boxdraw | 2.8 → **2.5** | 3.5 → 3.9 |
+| fullscreen | 3.0 → 3.0 | 3.1 → 3.1 |
+| static | 5.1 → **2.7** | 8.7 → **4.5** |
+
+### Write path, MiB/s
+
+| workload | pub | now |
+|---|---|---|
+| ascii | 93 | **103** |
+| ascii-long-lines | 131 | **146** |
+| sgr | 74 | 76 |
+| utf8 (Turkish) | 16 | **57** |
+| cyrillic | 6 | **84** |
+| altscreen | 172 | 169 |
+
+### Draining 32 MiB into a 170x50 grid
+
+| | pub | now |
+|---|---|---|
+| unpaced | 596ms, 32 fps, worst UI 4.9ms | **532ms, 41 fps**, worst UI 4.0ms |
+| paced 8ms | 855ms, 75 fps, worst UI 4.2ms | **761ms**, 75 fps, worst UI **1.9ms** |
+| paced 4ms | 1563ms, 75 fps | **1068ms**, 75 fps |
+
+Unpaced is both faster to drain and smoother than the published build, which is
+the write-path work showing up. Paced is available on both builds — the harness
+provides the pacing — and the published build pays for its slower parser there
+too, taking 12% longer at an 8ms budget and 46% longer at 4ms.
+
+### What has not moved
+
+`sgr` is unchanged in every table: 74 → 76 MiB/s on the write path, and the
+parser alone caps it at 99. CSI dispatch is the ceiling and nothing here
+touched it. `altscreen` is unchanged because it neither scrolls nor allocates
+lines. `fullscreen` frame times are at parity by design — the glyph cache
+regression that had moved them was removed rather than tuned.
+
+The `boxdraw` raster gap is not a regression: it survives with the glyph cache
+compiled out, and 170 columns are 1366.8px wide on this build against 1330.8px
+on the published one, so 2.7% more pixels are rasterised per frame.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
