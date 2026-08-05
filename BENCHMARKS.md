@@ -18,11 +18,32 @@ that started this investigation were debug-mode charts.
 
 The harness lives in `example/lib/benchmark.dart`. It drives the terminal with a
 precomputed, fixed byte stream — one write per frame, no PTY, no shell — so two
-runs on the same machine do the same work. The viewport is pinned to
-1000x600 logical pixels rather than filling the window, because cell count
-drives every cost in the paint path.
+runs on the same machine do the same work.
+
+The grid is pinned to **100x37 cells**, not to a pixel size. Cell count drives
+every cost in the paint path, and cell metrics are not stable across builds:
+`fix(ui): size cells from a reference glyph, not the widest ASCII glyph` moved
+them, so the 1000x600 viewport the first tables in this file were taken at
+yields 100 columns on today's build and 102 on the published one. The harness
+therefore bisects the viewport extent at startup until the terminal reports
+exactly 100x37 and aborts the run if it cannot, rather than reporting numbers
+from two different grids as if they were comparable.
 
 Results print to the console prefixed with `[xterm2-bench]`.
+
+To compare this working tree against an older commit:
+
+```sh
+script/bench-compare.sh [baseline-ref] [rounds]   # default 8d938de, 3 rounds
+```
+
+It puts the baseline in a git worktree, copies *this* tree's harness over it so
+both sides run identical measurement code, and alternates the two builds. Runs
+must be interleaved: sequential ones drift (see the `fullscreen` note below).
+`example/lib/bench/bench_stats.dart` is the one harness file that differs
+between the sides — the baseline gets `bench_stats_stub.dart`, because
+`TerminalRenderStats` does not exist there. Frame timings come from
+`SchedulerBinding` and are unaffected.
 
 ## Workloads
 
@@ -233,6 +254,133 @@ the benchmark, so the visible lines genuinely never change. That would have
 been just as true in phases 0-2, where a frozen viewport still costs full-price
 lookups every frame and so looked normal. Until that is confirmed, treat the
 `sgr` row as measuring an unknown, in every table in this file.
+
+## Against the published package — 2026-08-05
+
+`8d938de` (head of `SoFluffyOS/xterm2` master, 2026-07-28) versus `d6f7b59`,
+73 commits later. Apple M1 Pro, macOS 26.5.1, Flutter 3.44.2 stable, profile
+mode, three interleaved rounds per build via `script/bench-compare.sh`.
+
+Both builds measured a 100x37 grid — which is the only reason the table means
+anything. At a fixed 1000x600 viewport the published build lays out **102**
+columns to this build's 100, because cell width changed from 7.86px to 8.00px.
+Comparing those two runs directly would have credited this build with a 2%
+smaller grid.
+
+Median of three rounds, milliseconds. Within-build spread was at most 0.2ms on
+every cell below, so unlike the phase tables in this file, differences of 0.3ms
+are outside the noise here.
+
+| workload | UI p50 pub → now | raster p50 pub → now |
+|---|---|---|
+| plain | 1.3 → **0.8** | 1.5 → **1.3** |
+| sgr | 2.2 → **1.4** | 1.8 → 1.6 |
+| boxdraw | 2.1 → 2.2 | 2.7 → **3.0** |
+| fullscreen | 1.2 → 1.4 | 1.4 → 1.6 |
+| static | 2.4 → **1.5** | 2.4 → 2.1 |
+
+Flood, MiB/s across the three rounds: 72.9 / 66.8 / 67.5 published,
+74.6 / 71.8 / 75.1 now. Every pairwise round favours the newer build, by around
+7%. Nothing in these 73 commits touched the parse loop, so read this as the
+write path being marginally less obstructed, not as the unbounded-parse-per-
+write problem having moved. It has not.
+
+### What moved
+
+**The cached text path got a third faster.** `plain` UI p50 1.3 → 0.8, `sgr`
+2.2 → 1.4, `static` 2.4 → 1.5. The three commits that can account for it are
+`21c8773` (no defensive listener copy per `Terminal.write`), `53ae0e3` (O(1)
+paragraph cache eviction) and `c3051b7` (cached procedural glyph rasters). All
+three are on the per-frame path these workloads sit in.
+
+**The procedural glyph path got slower to rasterise.** `boxdraw` raster
+2.7 → 3.0, `fullscreen` raster 1.4 → 1.6, and both are repeatable across all
+three rounds with no overlap between the builds. This is the opposite of what
+`c3051b7` was supposed to do, and it is the one result here worth chasing:
+replaying a cached `ui.Picture` per glyph appears to cost the raster thread
+more than re-tesselating the path cost it, even at a 97.1% hit rate. Note that
+`3e9266c` also changed how heavily box-drawing bars are stroked, so some of the
+extra raster work is extra pixels rather than extra draw calls — the two have
+not been separated.
+
+Neither direction matters to a user yet: the worst number in the table is
+3.0ms against a 16.7ms budget, and no workload put a single frame over budget
+on either build.
+
+### At a full-screen grid, where the differences are visible
+
+3700 cells is a small window. Re-run at **170x50 (8500 cells)**, the size a
+maximised terminal actually is, and the same commits look different — every
+paint-path cost scales with cell count, so both the wins and the regression
+scale with it. Same three-interleaved-rounds procedure, medians, and the
+within-build spread stayed at 0.1-0.2ms.
+
+| workload | UI p50 pub → now | raster p50 pub → now |
+|---|---|---|
+| plain | 2.1 → **1.6** | 2.4 → 2.6 |
+| sgr | 3.0 → **1.9** | 2.4 → 2.6 |
+| boxdraw | 2.9 → **2.6** | 3.6 → 3.9 |
+| fullscreen | 3.0 → 3.0 | 3.2 → 3.2 |
+| static | 5.1 → **2.7** | 8.6 → **4.5** |
+
+`static` is the headline: raster p50 halves, 8.6ms to 4.5ms, and UI drops 47%.
+At 3700 cells the same commits moved it by under a millisecond and it read as
+noise-adjacent; at 8500 it is a quarter of the frame budget on the raster
+thread. Flood is unchanged at about 55 MiB/s on both builds — the grid is
+bigger, so more of each burst goes into painting, and nothing here touched the
+parse loop anyway.
+
+The remaining `boxdraw` raster gap is **not** a regression. It survives with
+the glyph cache compiled out entirely, and it is explained by cell size: the
+same 170 columns come out 1366.8px wide on this build against 1330.9px on the
+published one, so 2.7% more pixels are rasterised per frame. 3.6 x 1.027 = 3.7.
+
+### The glyph cache defect this run found
+
+The first 170x50 run had `boxdraw` UI p50 at **4.6ms** against the published
+build's 2.9ms, and `fullscreen` raster at 3.6ms against 3.2ms. Both were
+`c3051b7`, the procedural glyph cache, and both are fixed above. Two separate
+faults:
+
+**The cache was too small to hold one screen, and a miss cost more than not
+caching.** Keys are (codepoint, cell size, colour), so `boxdraw`'s 15 glyphs
+across 256 colours reach 3840 live keys against a 512-entry cache. The hit rate
+fell from 97.1% at 3700 cells to **75.0%** at 8500, and because a miss pays for
+the recording and the insert *on top of* the drawing, the cache made the build
+1.9ms per frame slower than painting uncached. Capacity is now 4096. Measured
+at 8192 for comparison: 99.9% hit, and no further gain over 4096's key space.
+
+**Block elements should never have been cached.** `U+2580..U+259F` are one or
+two `drawRect` calls. Recording that into a `Picture` and replaying it per cell
+puts a picture boundary in the raster command stream for every cell, and Skia
+batches worse across many small pictures than across one stream — the same
+effect that sank phase 3 above. On `fullscreen`, which is entirely `U+2588` at
+a 100% hit rate, the cache cost 0.4ms of raster per frame and saved nothing on
+the UI thread. They now bypass the cache, and `fullscreen` is back to parity
+with the published build on both threads.
+
+The general lesson, and it is the second time this file records it: **a cache
+that hands the raster thread more, smaller pictures is not free, and has to be
+measured on the raster thread, not just on the UI thread.**
+
+### Correctness, which is where most of the 73 commits went
+
+Running this build's test suite against the published library:
+
+| | published `8d938de` | now `d6f7b59` |
+|---|---|---|
+| tests run | 391 | 809 |
+| failures | 20 | 0 |
+
+Five of those 20 are whole files that do not compile against the published
+library — `painter_test`, `render_test`, `render_stats_test`,
+`android_ime_input_test` and `terminal_test` — so the tests inside them never
+ran, and 391 is an undercount rather than a comparable total. The 15 that ran
+and failed are the regressions the commits since then fixed: wide-char
+lead/placeholder corruption (five, from the fuzz harness), Kitty keyboard
+release and modifier reporting (three), mobile IME double-insertion and
+backspace-at-zero (two), `TerminalView.textScaler` (two), default pointer
+input reporting, box-drawing stroke weight, and a colour golden.
 
 ## Adding a workload
 

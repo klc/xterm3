@@ -477,7 +477,7 @@ bool paintProceduralGlyph(
     return false;
   }
 
-  if (cache == null) {
+  if (cache == null || _isCheapProceduralGlyph(codePoint)) {
     canvas.save();
     canvas.clipRect(offset & cellSize, doAntiAlias: false);
     final painted = _paintProceduralGlyph(
@@ -1910,6 +1910,23 @@ bool _paintProceduralGlyph(
 }
 
 @pragma('vm:prefer-inline')
+/// Whether [codePoint] is drawn with so few canvas operations that caching a
+/// rasterised [Picture] of it costs more than it saves.
+///
+/// The block elements are one or two `drawRect` calls. Recording those into a
+/// Picture and replaying it per cell adds a picture boundary to the raster
+/// thread's command stream for every cell, and Skia batches worse across many
+/// small pictures than it does across one stream - the same effect that sank
+/// the line picture cache in BENCHMARKS.md phase 3. Measured on the
+/// `fullscreen` workload, which is all `U+2588`, caching cost 0.4ms of raster
+/// per frame at a 100% hit rate and saved nothing on the UI thread.
+///
+/// Everything outside this range - junctions, dashes, rounded corners,
+/// diagonals, Braille, Powerline - builds real geometry and keeps the cache.
+bool _isCheapProceduralGlyph(int codePoint) {
+  return codePoint >= 0x2580 && codePoint <= 0x259f;
+}
+
 bool _isProceduralGlyph(int codePoint) {
   if (_isTerminalSymbolGlyph(codePoint)) {
     return true;

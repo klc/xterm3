@@ -1,5 +1,15 @@
 ## Unreleased
 
+* Stop the procedural glyph cache from making large terminals slower than no cache
+  at all. Its keys are (codepoint, cell size, colour), so a screen drawing box lines
+  in many colours can reference thousands of distinct keys, and at the old 512-entry
+  capacity a full-screen grid thrashed it — a miss pays for the recording and the
+  insert on top of the drawing, so the cache cost 1.9ms of UI time per frame *over*
+  painting uncached. Capacity is now 4096. Block elements (`U+2580..U+259F`), which
+  are one or two `drawRect` calls, now bypass the cache entirely: replaying a
+  recorded picture per cell put a picture boundary in the raster command stream for
+  every cell and cost 0.4ms of raster per frame at a 100% hit rate, for no saving on
+  the UI thread.
 * Fix wide characters corrupting the cell grid. `BufferLine.setCell` now repairs the
   width-2 lead / width-0 placeholder pairing itself, so no caller can leave half a
   wide character behind — a filler cell written when a wide character does not fit
