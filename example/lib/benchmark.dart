@@ -18,6 +18,13 @@
 // The `boxdraw` and `fullscreen` workloads run mostly through the procedural
 // glyph path, which bypasses the paragraph cache entirely. `plain` and `sgr`
 // are the cache-friendly text paths.
+//
+// `static` is the odd one out and the most important number for damage
+// tracking work: a full screen is drawn once, then exactly one cell changes
+// per frame. The paint path still walks every visible line, so `lines/paint`
+// stays at the viewport height and the UI time is almost entirely work that a
+// damage-tracking renderer would skip. Any change that claims to add partial
+// repaint has to move this row and leave the others alone.
 
 import 'dart:async';
 
@@ -122,6 +129,12 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
       _fullscreenFrames(total, rows, cols),
       enterAltScreen: true,
     );
+    await _runWorkload(
+      'static',
+      _staticFrames(total, rows, cols),
+      enterAltScreen: true,
+      setup: _staticSetup(rows, cols),
+    );
 
     _printReport();
     await _runFlood();
@@ -182,6 +195,7 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     String name,
     List<String> frames, {
     bool enterAltScreen = false,
+    String? setup,
   }) async {
     setState(() => _status = 'running $name');
 
@@ -189,6 +203,9 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     // terminal state regardless of what ran before it.
     _terminal.write('\x1b[0m\x1b[2J\x1b[3J\x1b[H');
     if (enterAltScreen) _terminal.write('\x1b[?1049h');
+    // Screen content the per-frame writes are meant to sit on top of, written
+    // once so it does not count as per-frame work.
+    if (setup != null) _terminal.write(setup);
     await _idle(5);
 
     for (var i = 0; i < _warmupFrames; i++) {
@@ -198,14 +215,21 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
 
     await _idle(5);
     _collected.clear();
+    // Reset after warm-up so the cache ratios describe the steady state, not
+    // the compulsory misses of the first frames.
+    TerminalRenderStats.reset();
 
     for (var i = _warmupFrames; i < frames.length; i++) {
       _terminal.write(frames[i]);
       await SchedulerBinding.instance.endOfFrame;
     }
 
+    // Snapshot the counters before flushing: `_idle` schedules extra frames,
+    // and those repaints would otherwise be attributed to the workload.
+    final stats = _StatsSnapshot.capture();
+
     await _idle(10);
-    _results.add(_Result(name, List.of(_collected)));
+    _results.add(_Result(name, List.of(_collected), stats));
     _collected.clear();
 
     if (enterAltScreen) _terminal.write('\x1b[?1049l');
@@ -229,6 +253,17 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     for (final result in _results) {
       _report(result.format());
     }
+    _report('');
+    _report('workload    paints | l/pnt | para%  look/f | glyf%  look/f');
+    for (final result in _results) {
+      _report(result.stats.format(result.name));
+    }
+    _report('');
+    _report('l/pnt = lines visited per paint. With no damage tracking this is '
+        'the viewport height on every workload, `static` included - that gap '
+        'is what a partial-repaint renderer has to close.');
+    _report('look/f = cache lookups per paint. para = shaped text, '
+        'glyf = procedural (box drawing, Powerline, Braille).');
     _report('');
     setState(() => _status = 'done - see console');
   }
@@ -269,11 +304,64 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
   }
 }
 
+/// The paint-path counters as they stood at the end of a measurement window.
+///
+/// [TerminalRenderStats] is a set of process-wide mutable statics, so a
+/// workload's numbers have to be copied out before the next one starts.
+class _StatsSnapshot {
+  _StatsSnapshot({
+    required this.paints,
+    required this.paintedLines,
+    required this.paragraphHits,
+    required this.paragraphLookups,
+    required this.glyphHits,
+    required this.glyphLookups,
+  });
+
+  factory _StatsSnapshot.capture() {
+    return _StatsSnapshot(
+      paints: TerminalRenderStats.paints,
+      paintedLines: TerminalRenderStats.paintedLines,
+      paragraphHits: TerminalRenderStats.paragraphCacheHits,
+      paragraphLookups: TerminalRenderStats.paragraphCacheHits +
+          TerminalRenderStats.paragraphCacheMisses,
+      glyphHits: TerminalRenderStats.glyphCacheHits,
+      glyphLookups: TerminalRenderStats.glyphCacheHits +
+          TerminalRenderStats.glyphCacheMisses,
+    );
+  }
+
+  final int paints;
+  final int paintedLines;
+  final int paragraphHits;
+  final int paragraphLookups;
+  final int glyphHits;
+  final int glyphLookups;
+
+  String format(String name) {
+    String ratio(int hits, int lookups) {
+      if (lookups == 0) return '    -';
+      return '${(hits * 100 / lookups).toStringAsFixed(1).padLeft(4)}%';
+    }
+
+    final linesPerPaint =
+        paints == 0 ? '    -' : (paintedLines / paints).toStringAsFixed(1).padLeft(5);
+
+    return '${name.padRight(11)} ${paints.toString().padLeft(6)} | '
+        '$linesPerPaint | '
+        '${ratio(paragraphHits, paragraphLookups)} '
+        '${(paragraphLookups ~/ (paints == 0 ? 1 : paints)).toString().padLeft(6)} | '
+        '${ratio(glyphHits, glyphLookups)} '
+        '${(glyphLookups ~/ (paints == 0 ? 1 : paints)).toString().padLeft(6)}';
+  }
+}
+
 class _Result {
-  _Result(this.name, this.timings);
+  _Result(this.name, this.timings, this.stats);
 
   final String name;
   final List<FrameTiming> timings;
+  final _StatsSnapshot stats;
 
   String format() {
     final ui = timings
@@ -354,6 +442,39 @@ List<String> _boxFrames(int count) {
       buffer.write('\x1b[0m\r\n');
     }
     return buffer.toString();
+  }, growable: false);
+}
+
+/// The screen the `static` workload leaves untouched: a full viewport of
+/// ordinary colored text, written once before measurement starts.
+String _staticSetup(int rows, int columns) {
+  final buffer = StringBuffer();
+  for (var row = 0; row < rows; row++) {
+    buffer.write('\x1b[${row + 1};1H');
+    buffer.write('\x1b[38;5;${(row * 11) % 256}m');
+    final line = StringBuffer();
+    var word = 0;
+    while (line.length < columns) {
+      line.write('field_${(row * 17 + word) % 89}.value=${(row * 7919 + word) % 10000} ');
+      word++;
+    }
+    buffer.write(line.toString().substring(0, columns));
+    buffer.write('\x1b[0m');
+  }
+  return buffer.toString();
+}
+
+/// A screen that is entirely static except for one spinning cell in the
+/// bottom-right corner - the minimum amount of damage a frame can carry.
+///
+/// Everything the paint path does beyond redrawing that single cell is waste
+/// that damage tracking is supposed to remove, so the gap between this
+/// workload and `fullscreen` is the size of the prize.
+const _spinner = '|/-\\';
+
+List<String> _staticFrames(int count, int rows, int columns) {
+  return List.generate(count, (frame) {
+    return '\x1b[$rows;${columns - 1}H${_spinner[frame % _spinner.length]}';
   }, growable: false);
 }
 

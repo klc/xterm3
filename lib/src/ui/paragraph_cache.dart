@@ -2,6 +2,8 @@ import 'dart:ui';
 
 import 'package:flutter/widgets.dart';
 
+import 'render_stats.dart';
+
 /// A cache of laid out [Paragraph]s. This is used to avoid laying out the same
 /// text multiple times, which is expensive.
 class ParagraphCache {
@@ -40,7 +42,11 @@ class ParagraphCache {
   /// key argument to [performAndCacheLayout].
   Paragraph? getLayoutFromCache(Object key) {
     final entry = _cache[key];
-    if (entry == null) return null;
+    if (entry == null) {
+      TerminalRenderStats.paragraphCacheMisses++;
+      return null;
+    }
+    TerminalRenderStats.paragraphCacheHits++;
     entry.lastUsed = ++_clock;
     return entry.paragraph;
   }

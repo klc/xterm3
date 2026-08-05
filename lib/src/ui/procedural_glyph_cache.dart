@@ -1,5 +1,7 @@
 import 'dart:ui';
 
+import 'render_stats.dart';
+
 /// A cache of rasterised procedural glyphs (box-drawing, Powerline, Braille,
 /// etc). These are drawn as vector paths rather than shaped from a font, so
 /// without this cache the same vector path would be rebuilt and rasterised on
@@ -41,7 +43,11 @@ class ProceduralGlyphCache {
   /// Returns the cached [Picture] for [key], if any, bumping its recency.
   Picture? getFromCache(Object key) {
     final entry = _cache[key];
-    if (entry == null) return null;
+    if (entry == null) {
+      TerminalRenderStats.glyphCacheMisses++;
+      return null;
+    }
+    TerminalRenderStats.glyphCacheHits++;
     entry.lastUsed = ++_clock;
     return entry.picture;
   }
