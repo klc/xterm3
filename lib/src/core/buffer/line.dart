@@ -723,23 +723,20 @@ class BufferLine with IndexedItem {
     }
   }
 
+  /// Cells to allocate storage for, for a line of [length] cells.
+  ///
+  /// The slack exists so that a terminal resize can usually widen a line
+  /// without reallocating. It is charged on every line ever created, though,
+  /// and scrolling creates one per line of output - so the cheapest thing this
+  /// function can do for throughput is not round up very far. Doubling from 64
+  /// used to take a 170-column line to 256 cells, half of it never addressed;
+  /// rounding to 32 takes it to 192, and measured 12% more `ascii` throughput
+  /// and 16% more on long lines in `bin/parse_bench.dart`.
   static int _calcCapacity(int length) {
     assert(length >= 0);
 
-    var capacity = 64;
-
-    if (length < 256) {
-      while (capacity < length) {
-        capacity *= 2;
-      }
-    } else {
-      capacity = 256;
-      while (capacity < length) {
-        capacity += 32;
-      }
-    }
-
-    return capacity;
+    if (length <= 64) return 64;
+    return (length + 31) & ~31;
   }
 
   String getText([int? from, int? to]) {

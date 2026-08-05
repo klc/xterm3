@@ -398,12 +398,12 @@ in 8 KiB chunks, 170x50 grid, Apple M1 Pro.
 
 | workload | full | parser | buffer% | no scrollback | no graphemes |
 |---|---|---|---|---|---|
-| ascii | 92 | 440 | 79% | 164 | 93 |
-| ascii-long-lines | 129 | 825 | 84% | 207 | 129 |
-| sgr | 74 | 94 | 21% | 85 | 73 |
-| utf8 | 54 | 264 | 80% | 82 | 60 |
-| cyrillic | 73 | 269 | 73% | 128 | 71 |
-| altscreen | 172 | 231 | 25% | 172 | 173 |
+| ascii | 103 | 428 | 76% | 173 | 105 |
+| ascii-long-lines | 149 | 828 | 82% | 226 | 144 |
+| sgr | 76 | 99 | 23% | 87 | 76 |
+| utf8 | 58 | 266 | 78% | 86 | 68 |
+| cyrillic | 85 | 293 | 71% | 141 | 83 |
+| altscreen | 171 | 233 | 27% | 173 | 173 |
 
 MiB/s. `full` is `Terminal.write`; `parser` is the same bytes through
 `EscapeParser` with a handler that does nothing; the other two columns turn off
@@ -415,10 +415,14 @@ does per token. `sgr` is the exception: 96 MiB/s through the parser alone means
 CSI dispatch itself is the ceiling there, and no amount of buffer work will
 move it.
 
-**Scrolling costs about 44%.** `ascii` at 92 against 162 with scrollback
-disabled, and `altscreen` — which never scrolls — runs at 171. A line of
-output allocates a `BufferLine`, and its cell storage is a 3 KiB `Uint32List`
-at this width.
+**Scrolling costs about 40%.** `ascii` at 103 against 173 with scrollback
+disabled, and `altscreen` — which never scrolls — runs at 171. A line of output
+allocates a `BufferLine`, and its cell storage is a `Uint32List` of three
+kilobytes at this width. Capacity rounding was the cheap part of that bill:
+`_calcCapacity` doubled from 64, so a 170-column line reserved 256 cells and
+addressed 170. Rounding to 32 instead took `ascii` from 92 to 103 MiB/s and
+long lines from 129 to 149. The rest is the allocation itself, and recycling
+the storage does not work — see below.
 
 **Non-ASCII text used to run at a sixth of ASCII speed.** Both causes are
 fixed below; the table above is after those fixes.

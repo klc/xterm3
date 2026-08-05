@@ -1,5 +1,11 @@
 ## Unreleased
 
+* Allocate less slack per buffer line. Line storage rounded its capacity up by
+  doubling from 64, so a 170-column line reserved 256 cells and never addressed half
+  of them. Scrolling allocates one line per line of output, so that slack was charged
+  on the hottest path in the terminal. Capacity now rounds up to a multiple of 32,
+  which still absorbs the small widenings a resize does: 12% more throughput on
+  ordinary output and 16% on long lines.
 * Batch writes for alphabets other than English. The parser wrote a run of printable
   ASCII into cells in one go and handed everything else to the per-code-point path,
   so the first accented letter ended the run and a language written entirely in
