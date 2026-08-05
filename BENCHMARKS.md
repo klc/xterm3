@@ -468,6 +468,32 @@ the em dashes and other punctuation the ranges leave out. CJK is deliberately
 not in this set: it is width 2 and needs the path that allocates a lead cell
 and a placeholder.
 
+### Pacing the write path — measured, offered as opt-in
+
+`flood` writes chunks as fast as the event loop takes them, which is what a PTY
+stream listener does. At 170x50 that drains 32 MiB in 566ms and produces 37
+frames per second while it does — the burst spends about 89% of its time
+parsing and 11% painting, so frames happen in whatever gaps parsing leaves.
+
+The harness now also measures a paced variant: parse until a budget is spent,
+hand the thread back, repeat.
+
+| mode | drain | throughput | frames | worst UI frame |
+|---|---|---|---|---|
+| unpaced | 566ms | 58.3 MiB/s | 37.1 fps | 3.2ms |
+| paced, 8ms budget | 854ms | 38.6 MiB/s | **74.9 fps** | 1.9ms |
+| paced, 4ms budget | 1068ms | 30.9 MiB/s | 74.9 fps | 1.4ms |
+
+Pacing doubles the frame rate to the display's full refresh rate, and costs
+about 50% in drain time. 4ms buys no more frames than 8ms and only drains more
+slowly, so 8ms is the default in `PacedTerminalWriter`, which is the opt-in
+this measurement produced. Nothing in the package uses it by default: which
+side of that trade an application wants is not the package's call.
+
+Note what this is not: the unpaced case was never freezing. Its worst UI frame
+during the burst is 3.2ms. The frame rate is low because parsing owns the
+thread between frames, not because any single frame is slow.
+
 ### Recycling evicted lines — measured, rejected
 
 The obvious answer to the scrolling cost is to blank the line that just fell

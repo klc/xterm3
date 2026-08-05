@@ -289,6 +289,21 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
 
     _printReport();
     await _runFlood();
+    await _runFlood(frameBudgetMs: 8);
+    await _runFlood(frameBudgetMs: 4);
+    _report('');
+    _report('flood      = chunks written as fast as the event loop takes them');
+    _report('flood-paced = chunks written until the frame budget is spent, '
+        'then the thread is handed back. Trades drain time for frames.');
+    _report('');
+
+    setState(() => _status = 'done - see console');
+
+    if (_exitWhenDone) {
+      // Give the console output a frame to flush before the process goes.
+      await _idle(2);
+      exit(0);
+    }
   }
 
   /// The `cat bigfile` case. The four workloads above deliberately write once
@@ -297,8 +312,11 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
   /// as fast as the event loop will take them, exactly as a PTY stream
   /// listener does, and the interesting number is how many frames the UI still
   /// manages to produce while that is going on.
-  Future<void> _runFlood() async {
-    setState(() => _status = 'running flood');
+  Future<void> _runFlood({double? frameBudgetMs}) async {
+    final label = frameBudgetMs == null
+        ? 'flood'
+        : 'flood-paced(${frameBudgetMs.toStringAsFixed(0)}ms)';
+    setState(() => _status = 'running $label');
 
     _terminal.write('\x1b[0m\x1b[2J\x1b[3J\x1b[H');
     await _idle(5);
@@ -310,11 +328,28 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     _collected.clear();
     final framesBefore = _frameCount;
     final stopwatch = Stopwatch()..start();
-    for (var i = 0; i < chunkCount; i++) {
-      _terminal.write(chunk);
-      // Yield the way a stream listener does, so frames get a chance to run
-      // between chunks if the pipeline is not starved.
-      await Future<void>.delayed(Duration.zero);
+    if (frameBudgetMs == null) {
+      for (var i = 0; i < chunkCount; i++) {
+        _terminal.write(chunk);
+        // Yield the way a stream listener does, so frames get a chance to run
+        // between chunks if the pipeline is not starved.
+        await Future<void>.delayed(Duration.zero);
+      }
+    } else {
+      // What a paced consumer would do: parse until the frame's share of the
+      // budget is gone, then hand the thread back and let the frame happen.
+      // Total drain time gets worse; the question is what it buys in frames.
+      final budgetMicroseconds = (frameBudgetMs * 1000).round();
+      var written = 0;
+      while (written < chunkCount) {
+        final slice = Stopwatch()..start();
+        while (written < chunkCount &&
+            slice.elapsedMicroseconds < budgetMicroseconds) {
+          _terminal.write(chunk);
+          written++;
+        }
+        await SchedulerBinding.instance.endOfFrame;
+      }
     }
     stopwatch.stop();
     final elapsedMs = stopwatch.elapsedMicroseconds / 1000;
@@ -329,23 +364,12 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
             .map((t) => t.buildDuration.inMicroseconds / 1000)
             .reduce((a, b) => a > b ? a : b);
 
-    _report('flood: ${(bytes / 1024 / 1024).toStringAsFixed(1)} MiB in '
+    _report('$label: ${(bytes / 1024 / 1024).toStringAsFixed(1)} MiB in '
         '${elapsedMs.toStringAsFixed(0)}ms '
-        '(${(bytes / 1024 / elapsedMs).toStringAsFixed(1)} MiB/s)');
-    _report('flood: $framesDuringFlood frames rendered during the write burst '
+        '(${(bytes / 1024 / elapsedMs).toStringAsFixed(1)} MiB/s), '
+        '$framesDuringFlood frames '
         '(${(framesDuringFlood * 1000 / elapsedMs).toStringAsFixed(1)} fps), '
-        'worst UI frame ${worstUi.toStringAsFixed(1)}ms (burst + flush)');
-    _report('flood: fps far below 60 here means output starves the frame '
-        'pipeline - the unbounded-parse-per-write problem, not the paint path');
-    _report('');
-
-    setState(() => _status = 'done - see console');
-
-    if (_exitWhenDone) {
-      // Give the console output a frame to flush before the process goes.
-      await _idle(2);
-      exit(0);
-    }
+        'worst UI frame ${worstUi.toStringAsFixed(1)}ms');
   }
 
   Future<void> _runWorkload(

@@ -1,5 +1,11 @@
 ## Unreleased
 
+* Add `PacedTerminalWriter`, an opt-in way to feed PTY output to a terminal a frame's
+  worth at a time. Writing every chunk as it arrives lets a burst own the UI thread
+  between frames: 32 MiB of `cat`-style output on a 170x50 grid drains in 566ms at 37
+  frames per second. Through the writer with its default 8ms budget, the same burst
+  takes 854ms and holds 75 frames per second. It is a trade — around 50% slower to
+  drain, smooth while it drains — so nothing uses it by default.
 * Allocate less slack per buffer line. Line storage rounded its capacity up by
   doubling from 64, so a 170-column line reserved 256 cells and never addressed half
   of them. Scrolling allocates one line per line of output, so that slack was charged

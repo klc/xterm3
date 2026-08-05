@@ -2,6 +2,7 @@ export 'src/terminal_view.dart';
 export 'src/ui/controller.dart';
 export 'src/ui/cursor_type.dart';
 export 'src/ui/keyboard_visibility.dart';
+export 'src/ui/paced_writer.dart';
 export 'src/ui/pointer_input.dart';
 export 'src/ui/render_stats.dart';
 export 'src/ui/selection_mode.dart';
