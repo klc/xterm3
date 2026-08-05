@@ -1,5 +1,13 @@
 ## Unreleased
 
+* Batch writes for alphabets other than English. The parser wrote a run of printable
+  ASCII into cells in one go and handed everything else to the per-code-point path,
+  so the first accented letter ended the run and a language written entirely in
+  non-ASCII letters never batched at all — Cyrillic ran at 6 MiB/s, a fifteenth of
+  ASCII. Runs are now defined by `isSingleCellPrintable`: ASCII, Latin-1, Latin
+  Extended-A and B, IPA, spacing modifiers, Greek, Cyrillic and Armenian, each of
+  which is width 1 and cannot continue a grapheme cluster. Cyrillic 6 to 73 MiB/s,
+  Turkish 32 to 54.
 * Roughly double the throughput of non-ASCII text. Grapheme cluster detection had a
   fast path only for the case where both the previous cell and the incoming code
   point are ASCII, so a single accented letter — `ö` in Turkish, any Latin-1 word —

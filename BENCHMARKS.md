@@ -398,11 +398,12 @@ in 8 KiB chunks, 170x50 grid, Apple M1 Pro.
 
 | workload | full | parser | buffer% | no scrollback | no graphemes |
 |---|---|---|---|---|---|
-| ascii | 92 | 435 | 79% | 162 | 91 |
-| ascii-long-lines | 126 | 819 | 85% | 202 | 124 |
-| sgr | 73 | 96 | 24% | 84 | 73 |
-| utf8 | 32 | 102 | 69% | 38 | 35 |
-| altscreen | 171 | 232 | 26% | 172 | 171 |
+| ascii | 92 | 440 | 79% | 164 | 93 |
+| ascii-long-lines | 129 | 825 | 84% | 207 | 129 |
+| sgr | 74 | 94 | 21% | 85 | 73 |
+| utf8 | 54 | 264 | 80% | 82 | 60 |
+| cyrillic | 73 | 269 | 73% | 128 | 71 |
+| altscreen | 172 | 231 | 25% | 172 | 173 |
 
 MiB/s. `full` is `Terminal.write`; `parser` is the same bytes through
 `EscapeParser` with a handler that does nothing; the other two columns turn off
@@ -419,10 +420,8 @@ disabled, and `altscreen` — which never scrolls — runs at 171. A line of
 output allocates a `BufferLine`, and its cell storage is a 3 KiB `Uint32List`
 at this width.
 
-**Non-ASCII text runs at a third of ASCII speed.** 32 MiB/s against 92. Part of
-that is per-code-point dispatch: the parser batches printable ASCII into one
-`writeText` call per run, and every non-ASCII character breaks the run. The
-rest was grapheme cluster detection, which is now fixed — see below.
+**Non-ASCII text used to run at a sixth of ASCII speed.** Both causes are
+fixed below; the table above is after those fixes.
 
 ### Grapheme clustering no longer costs Latin text anything
 
@@ -441,8 +440,29 @@ ZWJ, regional indicators, emoji modifiers, Hangul V and T) sits higher — so th
 cut is now made on the code point, and Latin text never reaches the segmenter.
 The same cut lets `writeChar` skip both cluster checks outright.
 
-15 → 32 MiB/s, against a 35 MiB/s ceiling. What is left is the per-code-point
-path, not clustering.
+15 → 32 MiB/s, against a 35 MiB/s ceiling. What was left is the per-code-point
+path, dealt with next.
+
+### Batched writes for alphabets other than English
+
+The parser batches a run of printable ASCII into one `writeText` call and hands
+everything else to `writeChar`, one code point at a time. So the first accented
+letter ended the run, and every letter after it started a run of its own — an
+alphabet that is *entirely* non-ASCII never batched at all. Cyrillic measured
+**6 MiB/s**, a fifteenth of ASCII.
+
+`isSingleCellPrintable` now defines the run: ASCII, Latin-1, Latin Extended-A
+and B, IPA, spacing modifiers, Greek, Cyrillic and Armenian, minus the two
+combining blocks inside that span and U+00AD. Every code point in it is width 1
+and cannot continue a grapheme cluster, which is exactly what a batched write
+needs in order to skip the width table and the cluster rules. The same
+predicate replaces the U+0300 cut in `writeChar`, so a single such character
+outside a run is just as cheap.
+
+Cyrillic 6 → 73 MiB/s. Turkish 32 → 54, where the rest of the gap to ASCII is
+the em dashes and other punctuation the ranges leave out. CJK is deliberately
+not in this set: it is width 2 and needs the path that allocates a lead cell
+and a placeholder.
 
 ### Recycling evicted lines — measured, rejected
 

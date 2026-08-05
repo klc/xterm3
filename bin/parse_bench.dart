@@ -28,6 +28,7 @@ void main(List<String> args) {
     'ascii-long-lines': _longLineChunk,
     'sgr': _sgrChunk,
     'utf8': _utf8Chunk,
+    'cyrillic': _cyrillicChunk,
     'altscreen': _altScreenChunk,
   };
 
@@ -172,6 +173,18 @@ String _utf8Chunk(int seed) {
   while (buffer.length < _chunkSize) {
     buffer.write('satır $line — ölçüm değeri ${line * 7919 % 100000} '
         'açıklama_metni_$line şüpheli\r\n');
+    line++;
+  }
+  return buffer.toString();
+}
+
+/// Cyrillic, which sits in the second range the single-cell run scan covers.
+String _cyrillicChunk(int seed) {
+  final buffer = StringBuffer();
+  var line = seed * 1000;
+  while (buffer.length < _chunkSize) {
+    buffer.write('строка $line значение измерения ${line * 7919 % 100000} '
+        'описание_текста_$line подозрительно\r\n');
     line++;
   }
   return buffer.toString();

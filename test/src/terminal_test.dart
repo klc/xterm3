@@ -644,6 +644,44 @@ void main() {
     expect(line.getCodePoint(1), 0x78);
   });
 
+  test('Terminal writes Cyrillic runs one code point per cell', () {
+    // Cyrillic goes through the batched single-cell run path, which writes
+    // code units straight into cells without consulting the width table.
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('строка');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x0441);
+    expect(line.getCodePoint(5), 0x0430);
+    expect(line.getWidth(0), 1);
+    expect(line.getCodePoint(6), 0);
+  });
+
+  test('Terminal attaches a combining mark after a batched run', () {
+    // The run ends at the mark, which then has to join the last cell the run
+    // wrote rather than landing in a cell of its own.
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('строка\u{0301}x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCombiningCharacters(5), '\u{0301}');
+    expect(line.getCodePoint(6), 0x78);
+  });
+
+  test('Terminal keeps a wide character out of the batched run path', () {
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('aö\u{4E00}b');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(1), 0x00F6);
+    expect(line.getWidth(2), 2);
+    expect(line.getWidth(3), 0);
+    expect(line.getCodePoint(4), 0x62);
+  });
+
   test('Terminal keeps Latin-1 letters in separate cells', () {
     final terminal = Terminal()..resize(10, 2);
 
@@ -5134,7 +5172,8 @@ void main() {
     expect(terminal.hyperlinkAt(const CellOffset(1, 0)), isNull);
   });
 
-  test('Terminal line feed scrolls a partial region without shifting rows '
+  test(
+      'Terminal line feed scrolls a partial region without shifting rows '
       'below the bottom margin', () {
     final terminal = Terminal()..resize(10, 8);
 

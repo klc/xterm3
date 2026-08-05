@@ -7,6 +7,7 @@ import 'package:xterm2/src/core/buffer/cell_offset.dart';
 import 'package:xterm2/src/core/cell.dart';
 import 'package:xterm2/src/core/cursor.dart';
 import 'package:xterm2/src/utils/circular_buffer.dart';
+import 'package:xterm2/src/utils/single_cell_text.dart';
 import 'package:xterm2/src/utils/unicode_v11.dart';
 
 const _cellSize = 4;
@@ -247,7 +248,10 @@ class BufferLine with IndexedItem {
     for (var offset = 0; offset < count; offset++) {
       final cellOffset = (start + offset) * _cellSize;
       final codeUnit = text.codeUnitAt(textStart + offset);
-      assert(codeUnit >= 0x20 && codeUnit <= 0x7e);
+      // Callers must have established that every unit occupies exactly one
+      // cell - see `ByteConsumer.printableTextRunLength`, which is where the
+      // run this writes comes from.
+      assert(isSingleCellPrintable(codeUnit));
       _data[cellOffset + _cellForeground] = foreground;
       _data[cellOffset + _cellBackground] = background;
       _data[cellOffset + _cellAttributes] = attributes;
