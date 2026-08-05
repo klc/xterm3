@@ -547,6 +547,57 @@ bool _paintProceduralGlyph(
 
   void fill(Rect rect) => canvas.drawRect(rect.inflate(overlap), fillPaint);
 
+  /// Fills a box-drawing bar (an arm of `─ │ ┼ ═ …`).
+  ///
+  /// Unlike [fill] this only bleeds along the bar's own axis. [overlap] exists
+  /// so that block elements tiled across neighbouring cells leave no seam at
+  /// the cell boundary, and for a bar that boundary is only ever the one its
+  /// long axis runs into - inflating the short axis too would make a nominally
+  /// `thin`-wide rule render `thin + 1` device-independent pixels wide, i.e.
+  /// roughly twice its intended weight at terminal font sizes. Reference
+  /// terminals (Ghostty, SwiftTerm) extend the long axis only for the same
+  /// reason.
+  ///
+  /// The short axis is additionally snapped to whole logical pixels: the
+  /// thickness is rounded first, then laid out symmetrically around the bar's
+  /// requested centre line. The bar is painted without antialiasing, so an edge
+  /// landing mid-pixel is resolved by coverage rounding, and the same rule can
+  /// then come out one pixel wide in one cell and two in the next depending on
+  /// where the cell origin fell. Snapping here makes the width identical in
+  /// every cell while keeping the bar on the centre line the caller asked for,
+  /// which is what makes arms of a junction meet.
+  ///
+  /// [alongX] is the bar's long axis. It is passed in rather than inferred from
+  /// the rect: a dash segment of `┄` can be shorter than the rule is thick, so
+  /// comparing width against height would classify it as a vertical bar.
+  void fillBar(Rect rect, {required bool alongX}) {
+    if (alongX) {
+      final thickness = max(1.0, rect.height.roundToDouble());
+      final top = (rect.center.dy - thickness / 2).roundToDouble();
+      canvas.drawRect(
+        Rect.fromLTRB(
+          rect.left - overlap,
+          top,
+          rect.right + overlap,
+          top + thickness,
+        ),
+        fillPaint,
+      );
+      return;
+    }
+    final thickness = max(1.0, rect.width.roundToDouble());
+    final left = (rect.center.dx - thickness / 2).roundToDouble();
+    canvas.drawRect(
+      Rect.fromLTRB(
+        left,
+        rect.top - overlap,
+        left + thickness,
+        rect.bottom + overlap,
+      ),
+      fillPaint,
+    );
+  }
+
   if (codePoint == 0x2588) {
     fill(Rect.fromLTWH(x, y, width, height));
     return true;
@@ -1023,10 +1074,16 @@ bool _paintProceduralGlyph(
   if (codePoint == 0x1fbaf) {
     final light = max(1.0, width * 0.12);
     final heavy = max(2.0, width * 0.22);
-    fill(Rect.fromLTRB(
-        x, y + height / 2 - light / 2, x + width, y + height / 2 + light / 2));
-    fill(Rect.fromLTRB(
-        x + width / 2 - heavy / 2, y, x + width / 2 + heavy / 2, y + height));
+    fillBar(
+      Rect.fromLTRB(
+          x, y + height / 2 - light / 2, x + width, y + height / 2 + light / 2),
+      alongX: true,
+    );
+    fillBar(
+      Rect.fromLTRB(
+          x + width / 2 - heavy / 2, y, x + width / 2 + heavy / 2, y + height),
+      alongX: false,
+    );
     return true;
   }
 
@@ -1079,7 +1136,17 @@ bool _paintProceduralGlyph(
   }
 
   final thin = max(1.0, width * 0.12);
-  final heavy = max(2.0, width * 0.30);
+
+  /// The pixel width [fillBar] actually paints a `thin` bar at. Weights derived
+  /// from `thin` have to be expressed in these terms, not in unrounded ones, or
+  /// rounding breaks the ratio between them: at a 12px cell `thin` rounds down
+  /// (1.44 -> 1) while an independently computed heavy weight rounds up
+  /// (3.6 -> 4), and `━` renders four times `─` instead of twice.
+  final thinStroke = max(1.0, thin.roundToDouble());
+
+  /// Heavy box lines are exactly twice the light weight, as they read in every
+  /// reference terminal.
+  final heavy = thinStroke * 2;
   final centerX = x + width / 2;
   final centerY = y + height / 2;
 
@@ -1383,8 +1450,11 @@ bool _paintProceduralGlyph(
   }
 
   void horizontal(double start, double end, double thickness) {
-    fill(Rect.fromLTRB(
-        start, centerY - thickness / 2, end, centerY + thickness / 2));
+    fillBar(
+      Rect.fromLTRB(
+          start, centerY - thickness / 2, end, centerY + thickness / 2),
+      alongX: true,
+    );
   }
 
   void horizontalAt(
@@ -1393,17 +1463,23 @@ bool _paintProceduralGlyph(
     double lineY,
     double thickness,
   ) {
-    fill(Rect.fromLTRB(
-      start,
-      lineY - thickness / 2,
-      end,
-      lineY + thickness / 2,
-    ));
+    fillBar(
+      Rect.fromLTRB(
+        start,
+        lineY - thickness / 2,
+        end,
+        lineY + thickness / 2,
+      ),
+      alongX: true,
+    );
   }
 
   void vertical(double start, double end, double thickness) {
-    fill(Rect.fromLTRB(
-        centerX - thickness / 2, start, centerX + thickness / 2, end));
+    fillBar(
+      Rect.fromLTRB(
+          centerX - thickness / 2, start, centerX + thickness / 2, end),
+      alongX: false,
+    );
   }
 
   void verticalAt(
@@ -1412,12 +1488,15 @@ bool _paintProceduralGlyph(
     double lineX,
     double thickness,
   ) {
-    fill(Rect.fromLTRB(
-      lineX - thickness / 2,
-      start,
-      lineX + thickness / 2,
-      end,
-    ));
+    fillBar(
+      Rect.fromLTRB(
+        lineX - thickness / 2,
+        start,
+        lineX + thickness / 2,
+        end,
+      ),
+      alongX: false,
+    );
   }
 
   void dashedHorizontal(int gaps, double thickness) {
@@ -1469,7 +1548,14 @@ bool _paintProceduralGlyph(
 
   if (codePoint >= 0x2550 && codePoint <= 0x256c) {
     final arms = _doubleLineBoxArms[codePoint - 0x2550];
-    final doubleOffset = thin + overlap * 2;
+    // Distance from the cell centre to the centre of each rail of a double
+    // line. One painted rail width puts a gap of exactly one rail between the
+    // two, which is how the glyphs are meant to read. It has to be the snapped
+    // width: separating the rails by the unrounded `thin` leaves a gap that
+    // rounds to a different number of pixels than the rails themselves. It used
+    // to be derived from `overlap`, back when every bar was inflated on all
+    // four sides and the rails had to be pushed apart to stay separate.
+    final doubleOffset = thinStroke;
 
     void horizontalArm(double start, double end, int shift) {
       final style = (arms >> shift) & 3;
@@ -1743,7 +1829,7 @@ bool _paintProceduralGlyph(
         arcPath,
         Paint()
           ..color = paint.color
-          ..strokeWidth = thin + overlap * 2
+          ..strokeWidth = thinStroke
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.butt
           ..strokeJoin = StrokeJoin.round
@@ -1759,7 +1845,7 @@ bool _paintProceduralGlyph(
       final overshootY = slopeY / 2;
       final strokePaint = Paint()
         ..color = paint.color
-        ..strokeWidth = thin + overlap * 2
+        ..strokeWidth = thinStroke
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.butt
         ..isAntiAlias = true;

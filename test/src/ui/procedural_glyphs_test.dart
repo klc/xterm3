@@ -183,6 +183,53 @@ void main() {
     }
   });
 
+  test('light box lines are one stroke wide, not two', () async {
+    // Bars used to be inflated on all four sides to close the seam between
+    // tiled block elements, which also widened them across their short axis:
+    // a rule specified as 0.12 of the cell rendered a whole pixel wider than
+    // that, i.e. roughly double weight at terminal font sizes, and read as
+    // visibly coarser than the same glyph in a reference terminal. The
+    // fractional cell sizes here are what real font metrics produce.
+    const sizes = [Size(8, 16), Size(8.86, 18.2), Size(10.4, 21), Size(20, 40)];
+    const glyphs = [(0x2500, true), (0x2502, false)];
+
+    for (final size in sizes) {
+      for (final (codePoint, isHorizontal) in glyphs) {
+        final recorder = PictureRecorder();
+        final canvas = Canvas(recorder);
+        final paint = Paint()..color = const Color(0xffffffff);
+        paintProceduralGlyph(canvas, Offset.zero, size, codePoint, paint);
+
+        final picture = recorder.endRecording();
+        final imageWidth = size.width.round();
+        final imageHeight = size.height.round();
+        final image = await picture.toImage(imageWidth, imageHeight);
+        final bytes = await image.toByteData(format: ImageByteFormat.rawRgba);
+        if (bytes == null) {
+          fail('Expected light-line image bytes');
+        }
+
+        final runs = switch (isHorizontal) {
+          true => _alphaRunsInColumn(
+              bytes,
+              imageWidth,
+              imageHeight,
+              imageWidth ~/ 2,
+            ),
+          false => _alphaRunsInRow(bytes, imageWidth, imageHeight ~/ 2),
+        };
+        final expected = max(1.0, size.width * 0.12).round();
+        final glyph = 'U+${codePoint.toRadixString(16)}';
+        final dimensions = '${size.width}x${size.height}';
+        expect(runs, hasLength(1), reason: '$glyph at $dimensions');
+        expect(runs.single, expected, reason: '$glyph at $dimensions');
+
+        image.dispose();
+        picture.dispose();
+      }
+    }
+  });
+
   test('double box lines use equal strokes and spacing', () async {
     const sizes = [Size(8, 16), Size(10, 20), Size(12, 24), Size(20, 40)];
     const scales = [1.0, 2.0, 3.0];
