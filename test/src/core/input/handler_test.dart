@@ -477,8 +477,15 @@ void main() {
         ctrl: true,
         type: TerminalKeyEventType.repeat,
       );
+      // Unmodified "a" produces text, so its press is plain UTF-8 and it has no
+      // release event at this flag level. Ctrl+A is an escape code, so it does.
       terminal.keyInput(
         TerminalKey.keyA,
+        type: TerminalKeyEventType.release,
+      );
+      terminal.keyInput(
+        TerminalKey.keyA,
+        ctrl: true,
         type: TerminalKeyEventType.release,
       );
       terminal.keyInput(
@@ -486,7 +493,7 @@ void main() {
         type: TerminalKeyEventType.release,
       );
 
-      expect(output, ['\x1b[97;5:2u', '\x1b[97;1:3u', '\x1b[1;1:3A']);
+      expect(output, ['\x1b[97;5:2u', '\x1b[97;5:3u', '\x1b[1;1:3A']);
     });
 
     test('does not emit key releases outside Kitty event reporting', () {
@@ -500,6 +507,57 @@ void main() {
 
       expect(handled, isFalse);
       expect(output, isEmpty);
+    });
+
+    test('reports modifier keys only when all keys are escape codes', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      // Disambiguate + report event types: the modifier keys stay silent.
+      terminal.write('\x1b[=3u');
+      terminal.keyInput(TerminalKey.altLeft, alt: true);
+      terminal.keyInput(
+        TerminalKey.altLeft,
+        alt: true,
+        type: TerminalKeyEventType.release,
+      );
+      expect(output, isEmpty);
+
+      terminal.write('\x1b[=11u');
+      terminal.keyInput(TerminalKey.altLeft, alt: true);
+      expect(output, ['\x1b[57443;3u']);
+    });
+
+    test('keeps macOS Option-composed text out of Kitty encoding', () {
+      final output = <String>[];
+      // Turkish Q types "@" with Option+Q. Reporting alt+q would drop the "@".
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.macos,
+      );
+
+      terminal.write('\x1b[=5u');
+      final handled = terminal.keyInput(
+        TerminalKey.keyQ,
+        alt: true,
+        text: '@',
+      );
+
+      expect(handled, isFalse, reason: 'falls through to the text handlers');
+      expect(output, isEmpty);
+    });
+
+    test('still encodes macOS Option chords that compose no text', () {
+      final output = <String>[];
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.macos,
+      );
+
+      terminal.write('\x1b[=5u');
+      terminal.keyInput(TerminalKey.keyQ, alt: true);
+
+      expect(output, ['\x1b[113;3u']);
     });
 
     test('reports associated text codepoints', () {

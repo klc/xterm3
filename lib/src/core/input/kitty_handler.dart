@@ -1,5 +1,6 @@
 import 'package:xterm2/src/core/input/event.dart';
 import 'package:xterm2/src/core/input/keys.dart';
+import 'package:xterm2/src/core/platform.dart';
 
 /// Translates key presses using Kitty's progressive keyboard protocol.
 ///
@@ -28,13 +29,30 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       return null;
     }
 
+    if (_isComposedTextEvent(event, mode)) {
+      return null;
+    }
+
+    // "Additionally, with this mode, events for pressing modifier keys are
+    // reported" — the modifier keys themselves are reported only under report
+    // all keys, never under disambiguate alone.
     final specialCode = _specialKeyCode(event.key);
     if (specialCode != null) {
+      if (_isModifierKey(event.key) &&
+          mode & _reportAllKeysAsEscapeCodes == 0) {
+        return null;
+      }
+      if (!_reportsRelease(event, mode)) {
+        return null;
+      }
       return _sequence(specialCode, event);
     }
 
     final numpadCode = _numpadKeyCode(event.key);
     if (numpadCode != null) {
+      if (!_reportsRelease(event, mode)) {
+        return null;
+      }
       return _sequence(numpadCode, event);
     }
 
@@ -72,19 +90,31 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
     return _sequence(payload, event);
   }
 
+  /// Whether a key event may be reported at all given its type.
+  ///
+  /// A release is only ever reported when the client asked for event types.
+  /// Sending one otherwise makes a single keystroke look like two presses to
+  /// clients that parse `CSI ... u` without inspecting the event-type
+  /// parameter they never requested.
+  bool _reportsRelease(TerminalKeyboardEvent event, int mode) {
+    if (event.type != TerminalKeyEventType.release) {
+      return true;
+    }
+    return mode & _reportEventTypes != 0;
+  }
+
   bool _shouldEncodeControlKey(TerminalKeyboardEvent event, int mode) {
+    if (!_reportsRelease(event, mode)) {
+      return false;
+    }
     if (mode & _reportAllKeysAsEscapeCodes != 0) {
       return true;
     }
+    // Enter, Tab and Backspace keep their legacy control code unless every key
+    // is reported, so they only produce a release event once a modifier makes
+    // the press itself an escape code.
     if (event.key == TerminalKey.escape) {
       return mode & (_disambiguateEscapeCodes | _reportEventTypes) != 0;
-    }
-    if (event.type == TerminalKeyEventType.release &&
-        mode & _reportEventTypes != 0) {
-      if (mode & _reportAllKeysAsEscapeCodes != 0) {
-        return true;
-      }
-      return event.ctrl || event.alt || event.shift || event.superKey;
     }
     if (mode & _disambiguateEscapeCodes == 0) {
       return false;
@@ -93,17 +123,47 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
   }
 
   bool _shouldEncodeCharacter(TerminalKeyboardEvent event, int mode) {
-    if (mode & _reportAllKeysAsEscapeCodes != 0) {
-      return true;
+    if (!_reportsRelease(event, mode)) {
+      return false;
     }
-    if (event.type == TerminalKeyEventType.release &&
-        mode & _reportEventTypes != 0) {
+    if (mode & _reportAllKeysAsEscapeCodes != 0) {
       return true;
     }
     if (mode & _disambiguateEscapeCodes == 0) {
       return false;
     }
+    // Keys that generate text stay plain UTF-8 under "disambiguate", so their
+    // releases are not reported either — the press was never an escape code.
     return event.ctrl || event.alt || event.superKey;
+  }
+
+  /// Whether the platform composed a character out of a modified key press, so
+  /// the modifier is part of the layout rather than a modifier to report.
+  ///
+  /// macOS composes with Option unless the app opts into option-as-meta: on a
+  /// Turkish Q layout Option+Q is how `@` is typed. Reporting that as
+  /// `CSI 113;3u` (alt+q) loses the `@` entirely. A client that asked for all
+  /// keys as escape codes wants the raw key regardless.
+  bool _isComposedTextEvent(TerminalKeyboardEvent event, int mode) {
+    if (mode & _reportAllKeysAsEscapeCodes != 0) {
+      return false;
+    }
+    if (event.platform != TerminalTargetPlatform.macos) {
+      return false;
+    }
+    if (!event.alt || event.ctrl || event.superKey) {
+      return false;
+    }
+    final text = event.text;
+    if (text == null || text.runes.length != 1) {
+      return false;
+    }
+    final composed = text.runes.first;
+    if (_isControlCodepoint(composed)) {
+      return false;
+    }
+    final base = _layoutCharacterCode(event.key);
+    return base != null && base != composed;
   }
 
   bool _shouldUseLegacyControlCode(TerminalKeyboardEvent event, int mode) {
@@ -183,7 +243,26 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
   }
 
   int? _characterKeyCode(TerminalKeyboardEvent event) {
-    final key = event.key;
+    final mappedCode = _layoutCharacterCode(event.key);
+    if (mappedCode != null) {
+      return mappedCode;
+    }
+
+    final text = event.text;
+    if (text == null || text.runes.isEmpty) {
+      return null;
+    }
+    final character = String.fromCharCode(text.runes.first);
+    final unshiftedCharacter = switch (event.shift) {
+      true => character.toLowerCase(),
+      false => character,
+    };
+    return unshiftedCharacter.runes.first;
+  }
+
+  /// The code point a key carries on a US layout, independent of the text the
+  /// platform produced for this event.
+  int? _layoutCharacterCode(TerminalKey key) {
     if (key.index >= TerminalKey.keyA.index &&
         key.index <= TerminalKey.keyZ.index) {
       return key.index - TerminalKey.keyA.index + 97;
@@ -192,7 +271,7 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
         key.index <= TerminalKey.digit9.index) {
       return key.index - TerminalKey.digit1.index + 49;
     }
-    final mappedCode = switch (key) {
+    return switch (key) {
       TerminalKey.digit0 => 48,
       TerminalKey.space => 32,
       TerminalKey.minus => 45,
@@ -208,20 +287,6 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       TerminalKey.slash => 47,
       _ => null,
     };
-    if (mappedCode != null) {
-      return mappedCode;
-    }
-
-    final text = event.text;
-    if (text == null || text.runes.isEmpty) {
-      return null;
-    }
-    final character = String.fromCharCode(text.runes.first);
-    final unshiftedCharacter = switch (event.shift) {
-      true => character.toLowerCase(),
-      false => character,
-    };
-    return unshiftedCharacter.runes.first;
   }
 
   int? _alternateCharacterCode(
@@ -319,6 +384,21 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       TerminalKey.space => 32,
       TerminalKey.backspace => 127,
       _ => null,
+    };
+  }
+
+  bool _isModifierKey(TerminalKey key) {
+    return switch (key) {
+      TerminalKey.shiftLeft ||
+      TerminalKey.controlLeft ||
+      TerminalKey.altLeft ||
+      TerminalKey.metaLeft ||
+      TerminalKey.shiftRight ||
+      TerminalKey.controlRight ||
+      TerminalKey.altRight ||
+      TerminalKey.metaRight =>
+        true,
+      _ => false,
     };
   }
 
