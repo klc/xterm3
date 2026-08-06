@@ -1,3 +1,12 @@
+## [6.0.1] - 2026-08-06
+
+* No library changes. The published archive drops from 5 MB to 377 KB: 6.0.0
+  shipped the example app's 4 MB suggestion corpus, the benchmark inputs under
+  `script/`, a bundled font and the README screenshots, none of which anyone
+  depending on the package has a use for. The README still renders its images
+  on pub.dev, which links them from raw.githubusercontent.
+* Move `docs/` to `doc/`, the directory name pub's layout conventions expect.
+
 ## [6.0.0] - 2026-08-06
 
 * **Renamed the package from `xterm2` to `xterm3`.** The code has diverged far
