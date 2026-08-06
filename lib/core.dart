@@ -23,3 +23,4 @@ export 'src/core/platform.dart';
 export 'src/core/state.dart';
 export 'src/terminal.dart';
 export 'src/terminal_search.dart';
+export 'src/terminal_url_detection.dart';

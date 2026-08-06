@@ -1,5 +1,14 @@
 ## Unreleased
 
+* Make plain-text `http(s)://` and `www.` URLs clickable, not just OSC 8
+  hyperlinks. `Terminal.urlAt(CellOffset)` detects a URL in buffer text
+  (soft-wrap aware, joined the same way `Terminal.search` joins wrapped rows)
+  and `TerminalView.onHyperlinkTap` now fires for it too. On desktop this
+  follows the existing OSC 8 convention — hold Cmd (macOS) or Ctrl and click,
+  with a hover underline — while touch has no modifier to hold, so a direct
+  tap opens the link. `Terminal.search` and the new detector now share one
+  logical-line/cell-mapping implementation (`terminal_logical_line.dart`)
+  instead of duplicating it.
 * Add `PacedTerminalWriter`, an opt-in way to feed PTY output to a terminal a frame's
   worth at a time. Writing every chunk as it arrives lets a burst own the UI thread
   between frames: 32 MiB of `cat`-style output on a 170x50 grid drains in 566ms at 37

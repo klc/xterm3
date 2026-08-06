@@ -375,7 +375,9 @@ void main() {
     final state = tester.state<TerminalViewState>(find.byType(TerminalView));
     final position = state.renderTerminal.localToGlobal(const Offset(2, 2));
 
-    await tester.tapAt(position);
+    // A mouse click without the modifier held must not activate the link —
+    // that's reserved for touch, which has no modifier key to hold.
+    await tester.tapAt(position, kind: PointerDeviceKind.mouse);
     await tester.pump();
 
     expect(activatedUri, isNull);
@@ -392,7 +394,7 @@ void main() {
 
     expect(state.renderTerminal.activeHyperlinkId, isNotNull);
 
-    await tester.tapAt(position);
+    await tester.tapAt(position, kind: PointerDeviceKind.mouse);
     await tester.pump();
 
     expect(activatedUri, 'https://example.com');
@@ -401,6 +403,60 @@ void main() {
     await tester.pump();
 
     expect(state.renderTerminal.activeHyperlinkId, isNull);
+  });
+
+  testWidgets('TerminalView activates OSC 8 hyperlinks on touch tap', (
+    tester,
+  ) async {
+    final terminal = Terminal()
+      ..write('\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\');
+    String? activatedUri;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TerminalView(
+          terminal,
+          onHyperlinkTap: (uri) => activatedUri = uri,
+        ),
+      ),
+    );
+
+    final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+    final position = state.renderTerminal.localToGlobal(const Offset(2, 2));
+
+    // Touch has no modifier key to hold, so tapping a link opens it directly.
+    await tester.tapAt(position, kind: PointerDeviceKind.touch);
+    await tester.pump();
+
+    expect(activatedUri, 'https://example.com');
+  });
+
+  testWidgets('TerminalView activates plain-text URLs on touch tap', (
+    tester,
+  ) async {
+    final terminal = Terminal()..write('see https://example.com/foo now');
+    String? activatedUri;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TerminalView(
+          terminal,
+          onHyperlinkTap: (uri) => activatedUri = uri,
+        ),
+      ),
+    );
+
+    final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+    final cellSize = state.renderTerminal.cellSize;
+    // Column 4 lands inside "https://example.com/foo" ("see " is 4 columns).
+    final position = state.renderTerminal.localToGlobal(
+      Offset(cellSize.width * 4.5, cellSize.height * 0.5),
+    );
+
+    await tester.tapAt(position, kind: PointerDeviceKind.touch);
+    await tester.pump();
+
+    expect(activatedUri, 'https://example.com/foo');
   });
 
   testWidgets(

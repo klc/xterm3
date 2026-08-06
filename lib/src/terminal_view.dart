@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,8 @@ import 'package:xterm2/src/core/input/event.dart';
 import 'package:xterm2/src/core/input/keys.dart';
 import 'package:xterm2/src/core/platform.dart';
 import 'package:xterm2/src/terminal.dart';
+import 'package:xterm2/src/terminal_search.dart';
+import 'package:xterm2/src/terminal_url_detection.dart';
 import 'package:xterm2/src/ui/controller.dart';
 import 'package:xterm2/src/ui/cursor_type.dart';
 import 'package:xterm2/src/ui/custom_text_edit.dart';
@@ -170,7 +173,10 @@ class TerminalView extends StatefulWidget {
   /// Callback for when a mouse pointer exits the terminal.
   final void Function(PointerExitEvent)? onExit;
 
-  /// Called when a cell containing an OSC 8 hyperlink is tapped.
+  /// Called when a link is tapped — either a cell carrying an OSC 8
+  /// hyperlink, or a plain-text `http(s)://`/`www.` URL detected in the
+  /// buffer. On desktop this requires the hyperlink modifier to be held
+  /// (Cmd on macOS, Ctrl elsewhere); on touch a direct tap is enough.
   final void Function(String uri)? onHyperlinkTap;
 
   /// Function called when the user taps on the terminal with a secondary
@@ -245,6 +251,10 @@ class TerminalViewState extends State<TerminalView> {
   String? _composingText;
 
   int? _hoveredHyperlinkId;
+
+  TerminalSearchMatch? _hoveredUrlMatch;
+
+  TerminalUnderline? _hoveredUrlUnderline;
 
   var _hyperlinkModifierPressed = false;
 
@@ -332,6 +342,7 @@ class TerminalViewState extends State<TerminalView> {
     _removeColorQuery(widget.terminal);
     _removeColorSchemeQuery(widget.terminal);
     _removeClipboardHandlers(widget.terminal);
+    _hoveredUrlUnderline?.dispose();
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _focusNode.removeListener(_reportFocusChange);
     if (widget.focusNode == null) {
@@ -540,9 +551,9 @@ class TerminalViewState extends State<TerminalView> {
     );
 
     child = MouseRegion(
-      cursor: switch (_activeHyperlinkId) {
-        null => widget.mouseCursor,
-        _ => SystemMouseCursors.click,
+      cursor: switch (_hasActiveLink) {
+        false => widget.mouseCursor,
+        true => SystemMouseCursors.click,
       },
       onHover: _onPointerHover,
       onExit: _onPointerExit,
@@ -586,17 +597,28 @@ class TerminalViewState extends State<TerminalView> {
   void _onTapUp(TapUpDetails details) {
     _updateHyperlinkModifierState();
     final offset = renderTerminal.getCellOffset(details.localPosition);
-    final hyperlink = switch (_hyperlinkModifierPressed) {
-      true => widget.terminal.hyperlinkAt(offset),
+    // Touch has no modifier key to hold, so a tap opens a link directly.
+    // Mouse/trackpad follow the desktop terminal convention (Cmd on macOS,
+    // Ctrl elsewhere) so a plain click can still be used for text selection.
+    final canOpenLink =
+        details.kind == PointerDeviceKind.touch || _hyperlinkModifierPressed;
+    final link = switch (canOpenLink) {
+      true => widget.terminal.hyperlinkAt(offset) ??
+          widget.terminal.urlAt(offset)?.text,
       false => null,
     };
-    if (hyperlink != null) widget.onHyperlinkTap?.call(hyperlink);
+    if (link != null) widget.onHyperlinkTap?.call(link);
     widget.onTapUp?.call(details, offset);
   }
 
   int? get _activeHyperlinkId {
     if (!_hyperlinkModifierPressed) return null;
     return _hoveredHyperlinkId;
+  }
+
+  bool get _hasActiveLink {
+    if (!_hyperlinkModifierPressed) return false;
+    return _hoveredHyperlinkId != null || _hoveredUrlMatch != null;
   }
 
   void _onPointerHover(PointerHoverEvent event) {
@@ -607,17 +629,44 @@ class TerminalViewState extends State<TerminalView> {
       0 => null,
       _ => hyperlinkId,
     });
+    _setHoveredUrlMatch(switch (hyperlinkId) {
+      // An OSC 8 hyperlink cell takes precedence over plain-text detection.
+      0 => widget.terminal.urlAt(offset),
+      _ => null,
+    });
     widget.onHover?.call(event, offset);
   }
 
   void _onPointerExit(PointerExitEvent event) {
     _setHoveredHyperlinkId(null);
+    _setHoveredUrlMatch(null);
     widget.onExit?.call(event);
   }
 
   void _setHoveredHyperlinkId(int? hyperlinkId) {
     if (_hoveredHyperlinkId == hyperlinkId) return;
     setState(() => _hoveredHyperlinkId = hyperlinkId);
+  }
+
+  void _setHoveredUrlMatch(TerminalSearchMatch? match) {
+    if (_hoveredUrlMatch?.range == match?.range) return;
+    _hoveredUrlMatch = match;
+    _syncHoveredUrlUnderline();
+  }
+
+  void _syncHoveredUrlUnderline() {
+    _hoveredUrlUnderline?.dispose();
+    _hoveredUrlUnderline = null;
+
+    final match = _hoveredUrlMatch;
+    if (match == null || !_hyperlinkModifierPressed) return;
+
+    final buffer = widget.terminal.buffer;
+    _hoveredUrlUnderline = _controller.underline(
+      p1: buffer.createAnchorFromOffset(match.range.begin),
+      p2: buffer.createAnchorFromOffset(match.range.end),
+      color: widget.theme.foreground,
+    );
   }
 
   void _updateHyperlinkModifierState() {
@@ -627,6 +676,7 @@ class TerminalViewState extends State<TerminalView> {
     };
     if (_hyperlinkModifierPressed == pressed) return;
     setState(() => _hyperlinkModifierPressed = pressed);
+    _syncHoveredUrlUnderline();
   }
 
   bool _handleGlobalKeyEvent(KeyEvent event) {

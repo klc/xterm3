@@ -1,10 +1,7 @@
-import 'dart:typed_data';
-
-import 'package:xterm2/src/core/buffer/buffer.dart';
 import 'package:xterm2/src/core/buffer/cell_offset.dart';
-import 'package:xterm2/src/core/buffer/line.dart';
 import 'package:xterm2/src/core/buffer/range_line.dart';
 import 'package:xterm2/src/terminal.dart';
+import 'package:xterm2/src/terminal_logical_line.dart';
 
 const _defaultSearchResultLimit = 1000;
 
@@ -57,15 +54,15 @@ extension TerminalSearch on Terminal {
     final results = <TerminalSearchMatch>[];
     final buffer = this.buffer;
     final textBuffer = StringBuffer();
-    final searchCells = _SearchCells();
+    final logicalLineCells = LogicalLineCells();
     var lineIndex = 0;
 
     while (lineIndex < buffer.lines.length && results.length < maxResults) {
-      final logicalLine = _buildLogicalLine(
+      final logicalLine = buildLogicalLine(
         buffer,
         lineIndex,
         textBuffer,
-        searchCells,
+        logicalLineCells,
       );
       lineIndex = logicalLine.nextLineIndex;
       if (logicalLine.text.isEmpty || logicalLine.cells.isEmpty) continue;
@@ -92,162 +89,6 @@ extension TerminalSearch on Terminal {
     }
 
     return results;
-  }
-}
-
-final class _LogicalLine {
-  const _LogicalLine({
-    required this.text,
-    required this.cells,
-    required this.nextLineIndex,
-  });
-
-  final String text;
-  final _SearchCells cells;
-  final int nextLineIndex;
-}
-
-final class _SearchCell {
-  const _SearchCell({
-    required this.x,
-    required this.y,
-    required this.width,
-  });
-
-  final int x;
-  final int y;
-  final int width;
-}
-
-final class _SearchCells {
-  var _textStarts = Int32List(256);
-  var _columns = Int32List(256);
-  var _lines = Int32List(256);
-  var length = 0;
-
-  bool get isEmpty => length == 0;
-
-  void clear() {
-    length = 0;
-  }
-
-  void add({
-    required int textStart,
-    required int column,
-    required int line,
-  }) {
-    if (length == _textStarts.length) {
-      final nextLength = _textStarts.length * 2;
-      _textStarts = _grow(_textStarts, nextLength);
-      _columns = _grow(_columns, nextLength);
-      _lines = _grow(_lines, nextLength);
-    }
-    _textStarts[length] = textStart;
-    _columns[length] = column;
-    _lines[length] = line;
-    length++;
-  }
-
-  _SearchCell? cellAt(Buffer buffer, int textOffset) {
-    var low = 0;
-    var high = length - 1;
-    while (low <= high) {
-      final middle = low + ((high - low) >> 1);
-      if (_textStarts[middle] <= textOffset) {
-        low = middle + 1;
-        continue;
-      }
-      high = middle - 1;
-    }
-    if (high < 0) return null;
-
-    final x = _columns[high];
-    final y = _lines[high];
-    final width = buffer.lines[y].getWidth(x);
-    return _SearchCell(
-      x: x,
-      y: y,
-      width: switch (width) {
-        0 => 1,
-        _ => width,
-      },
-    );
-  }
-
-  Int32List _grow(Int32List source, int length) {
-    final result = Int32List(length);
-    result.setRange(0, source.length, source);
-    return result;
-  }
-}
-
-_LogicalLine _buildLogicalLine(
-  Buffer buffer,
-  int firstLineIndex,
-  StringBuffer text,
-  _SearchCells cells,
-) {
-  text.clear();
-  cells.clear();
-  var lineIndex = firstLineIndex;
-
-  while (lineIndex < buffer.lines.length) {
-    final line = buffer.lines[lineIndex];
-    final nextLineIndex = lineIndex + 1;
-    final continuesToNext = nextLineIndex < buffer.lines.length &&
-        buffer.lines[nextLineIndex].isWrapped;
-    _appendSearchableLine(
-      text,
-      cells,
-      line,
-      lineIndex,
-      includeFullWidth: continuesToNext,
-      viewWidth: buffer.viewWidth,
-    );
-    lineIndex = nextLineIndex;
-    if (!continuesToNext) break;
-  }
-
-  return _LogicalLine(
-    text: text.toString(),
-    cells: cells,
-    nextLineIndex: lineIndex,
-  );
-}
-
-void _appendSearchableLine(
-  StringBuffer text,
-  _SearchCells cells,
-  BufferLine line,
-  int lineIndex, {
-  required bool includeFullWidth,
-  required int viewWidth,
-}) {
-  final end = switch (includeFullWidth) {
-    true => viewWidth,
-    false => line.getTrimmedLength(viewWidth),
-  };
-  for (var column = 0; column < end; column++) {
-    final codePoint = line.getCodePoint(column);
-    final width = line.getWidth(column);
-    final isWideSpacer =
-        width == 0 && column > 0 && line.getWidth(column - 1) == 2;
-    if (isWideSpacer) continue;
-
-    final textStart = text.length;
-    text.writeCharCode(switch (codePoint) {
-      0 => 0x20,
-      _ => codePoint,
-    });
-    final combiningCharacters = line.getCombiningCharacters(column);
-    if (combiningCharacters != null) {
-      text.write(combiningCharacters);
-    }
-    cells.add(
-      textStart: textStart,
-      column: column,
-      line: lineIndex,
-    );
   }
 }
 
