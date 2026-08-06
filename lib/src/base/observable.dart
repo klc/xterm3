@@ -12,6 +12,12 @@ mixin Observable {
   // callback while notifyListeners() is mid-iteration.
   final _listeners = <void Function()?>[];
 
+  // Tracks reentrant notifyListeners() calls so _compactIfNeeded() can defer
+  // shrinking the list while notify is mid-iteration - compacting in place
+  // would invalidate the index the outer notifyListeners() loop is reading.
+  var _notifyDepth = 0;
+  var _compactionPending = false;
+
   /// Read-only view of the currently registered listeners (removed/tombstoned
   /// slots are excluded).
   Iterable<void Function()> get listeners =>
@@ -34,11 +40,21 @@ mixin Observable {
   }
 
   void notifyListeners() {
-    // Snapshot only the length, not the contents: this is the hot path (hit
-    // on every Terminal.write()) and must not allocate in the steady state.
-    final length = _listeners.length;
-    for (var i = 0; i < length; i++) {
-      _listeners[i]?.call();
+    _notifyDepth++;
+    try {
+      // Snapshot only the length, not the contents: this is the hot path
+      // (hit on every Terminal.write()) and must not allocate in the steady
+      // state.
+      final length = _listeners.length;
+      for (var i = 0; i < length; i++) {
+        _listeners[i]?.call();
+      }
+    } finally {
+      _notifyDepth--;
+      if (_notifyDepth == 0 && _compactionPending) {
+        _compactionPending = false;
+        _compactIfNeeded();
+      }
     }
   }
 
@@ -47,6 +63,10 @@ mixin Observable {
   /// frequent add/remove churn (e.g. widgets attaching/detaching listeners
   /// on every rebuild) don't grow the list unboundedly.
   void _compactIfNeeded() {
+    if (_notifyDepth > 0) {
+      _compactionPending = true;
+      return;
+    }
     if (_listeners.length < _compactionThreshold) return;
 
     final liveCount = _listeners.where((l) => l != null).length;

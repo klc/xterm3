@@ -72,6 +72,29 @@ void main() {
       expect(calls, ['mutating', 'added']);
     },
   );
+
+  test(
+    'Observable does not crash when addListener triggers compaction '
+    'from inside notifyListeners',
+    () {
+      // Repro from CODE_REVIEW_2026-08-06.md Bulgu 1: an add from within a
+      // notification round can push the listener list over the compaction
+      // threshold. Compacting in place while notifyListeners() is still
+      // walking by index used to throw a RangeError.
+      final observable = _TestObservable();
+
+      observable.addListener(() {
+        observable.addListener(() {});
+      });
+      final removable = List.generate(20, (_) => () {});
+      removable.forEach(observable.addListener);
+      for (var i = 0; i < 14; i++) {
+        observable.removeListener(removable[i]);
+      }
+
+      expect(observable.notifyListeners, returnsNormally);
+    },
+  );
 }
 
 class _TestObservable with Observable {}
