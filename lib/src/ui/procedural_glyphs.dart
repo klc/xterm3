@@ -1813,18 +1813,32 @@ bool _paintProceduralGlyph(
       };
       final radius = min(width, height) / 2;
       const controlPointScale = 0.25;
+
+      // The straight tails have to land on the same device pixels as the `│`
+      // and `─` they continue into, and those go through [fillBar], which
+      // rounds the bar's near edge onto the pixel grid. A stroke centred on the
+      // raw cell centre lands half a pixel off whenever `centreOfCell -
+      // thinStroke / 2` isn't already integral, which antialiases the tail
+      // across one extra pixel column and steps it sideways from the line
+      // below it. Snapping the stroke's centre by the same rule keeps the arc
+      // exactly on top of the arms it joins.
+      double snapStrokeCentre(double centre) =>
+          (centre - thinStroke / 2).roundToDouble() + thinStroke / 2;
+      final strokeX = snapStrokeCentre(centerX);
+      final strokeY = snapStrokeCentre(centerY);
+
       final arcPath = Path()
-        ..moveTo(centerX, verticalY)
-        ..lineTo(centerX, centerY + verticalDirection * radius)
+        ..moveTo(strokeX, verticalY)
+        ..lineTo(strokeX, strokeY + verticalDirection * radius)
         ..cubicTo(
-          centerX,
-          centerY + verticalDirection * controlPointScale * radius,
-          centerX + horizontalDirection * controlPointScale * radius,
-          centerY,
-          centerX + horizontalDirection * radius,
-          centerY,
+          strokeX,
+          strokeY + verticalDirection * controlPointScale * radius,
+          strokeX + horizontalDirection * controlPointScale * radius,
+          strokeY,
+          strokeX + horizontalDirection * radius,
+          strokeY,
         )
-        ..lineTo(horizontalX, centerY);
+        ..lineTo(horizontalX, strokeY);
       canvas.drawPath(
         arcPath,
         Paint()

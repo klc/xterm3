@@ -92,6 +92,89 @@ void main() {
     picture.dispose();
   });
 
+  test('rounded corner tails land on the same pixels as their arms', () async {
+    // The corner arc is stroked, the `│`/`─` it continues into are filled bars
+    // snapped onto the pixel grid. A stroke centred on the raw cell centre
+    // lands half a pixel off that grid at these fractional cell sizes, which
+    // antialiases the tail one pixel wider than the arm and steps it sideways
+    // where the two meet - a visible notch at every box corner.
+    const scale = 2.0;
+    const sizes = [Size(8.5, 17.5), Size(9.3, 18.6), Size(10.4, 21)];
+    // (corner, horizontal arm column, vertical arm row) around a centre cell.
+    const corners = [
+      (0x256d, 2, 2),
+      (0x256e, 0, 2),
+      (0x256f, 0, 0),
+      (0x2570, 2, 0),
+    ];
+
+    for (final size in sizes) {
+      for (final (codePoint, armColumn, armRow) in corners) {
+        final recorder = PictureRecorder();
+        final canvas = Canvas(recorder)..scale(scale);
+        final paint = Paint()..color = const Color(0xffffffff);
+
+        void put(int column, int row, int glyph) => paintProceduralGlyph(
+              canvas,
+              Offset(column * size.width, row * size.height),
+              size,
+              glyph,
+              paint,
+            );
+        put(1, 1, codePoint);
+        put(armColumn, 1, 0x2500);
+        put(1, armRow, 0x2502);
+
+        final picture = recorder.endRecording();
+        final imageWidth = (size.width * 3 * scale).ceil();
+        final imageHeight = (size.height * 3 * scale).ceil();
+        final image = await picture.toImage(imageWidth, imageHeight);
+        final bytes = await image.toByteData(format: ImageByteFormat.rawRgba);
+        if (bytes == null) {
+          fail('Expected rounded-corner image bytes');
+        }
+
+        final cellWidth = size.width * scale;
+        final cellHeight = size.height * scale;
+        final glyph = 'U+${codePoint.toRadixString(16)}';
+        final dimensions = '${size.width}x${size.height} at ${scale}x';
+
+        // Sampled on the cell boundary the arm continues across: at terminal
+        // cell sizes the arc's radius eats most of the corner cell, so the
+        // straight tail is only reliably straight right at the edge.
+        final tailRow = switch (armRow) {
+          0 => cellHeight.round(),
+          _ => (cellHeight * 2).round() - 1,
+        };
+        final armSampleRow = (cellHeight * (armRow + 0.5)).round();
+        expect(
+          _coveredPixels(_alphaProfileInRow(
+              bytes, imageWidth, tailRow, cellWidth.round(),
+              cellWidth.round())),
+          _coveredPixels(_alphaProfileInRow(bytes, imageWidth, armSampleRow,
+              cellWidth.round(), cellWidth.round())),
+          reason: 'vertical tail of $glyph at $dimensions',
+        );
+
+        final tailColumn = switch (armColumn) {
+          0 => cellWidth.round(),
+          _ => (cellWidth * 2).round() - 1,
+        };
+        final armSampleColumn = (cellWidth * (armColumn + 0.5)).round();
+        expect(
+          _coveredPixels(_alphaProfileInColumn(bytes, imageWidth, tailColumn,
+              cellHeight.round(), cellHeight.round())),
+          _coveredPixels(_alphaProfileInColumn(bytes, imageWidth,
+              armSampleColumn, cellHeight.round(), cellHeight.round())),
+          reason: 'horizontal tail of $glyph at $dimensions',
+        );
+
+        image.dispose();
+        picture.dispose();
+      }
+    }
+  });
+
   test('diagonal box lines match straight line weight', () async {
     final recorder = PictureRecorder();
     final canvas = Canvas(recorder);
@@ -1103,6 +1186,47 @@ int _alphaInRow(ByteData bytes, int imageWidth, int y, int x, int width) {
     alpha += bytes.getUint8((y * imageWidth + column) * 4 + 3);
   }
   return alpha;
+}
+
+/// The pixels a stroke actually reads as, i.e. those it covers more than half
+/// of. A stroke sitting half a pixel off the grid covers one pixel more than
+/// its own width; one on the grid covers exactly the pixels it spans, so two
+/// strokes of the same weight on the same centre line give the same indices.
+List<int> _coveredPixels(List<int> profile) {
+  return [
+    for (var index = 0; index < profile.length; index++)
+      if (profile[index] > 127) index,
+  ];
+}
+
+/// The per-pixel alpha of one row across the cell starting at [x], as painted
+/// relative to that cell. Two glyphs whose strokes sit on the same pixels
+/// produce identical profiles.
+List<int> _alphaProfileInRow(
+  ByteData bytes,
+  int imageWidth,
+  int y,
+  int x,
+  int width,
+) {
+  return [
+    for (var column = x; column < x + width; column++)
+      bytes.getUint8((y * imageWidth + column) * 4 + 3),
+  ];
+}
+
+/// Column counterpart of [_alphaProfileInRow], sampled down one cell from [y].
+List<int> _alphaProfileInColumn(
+  ByteData bytes,
+  int imageWidth,
+  int x,
+  int y,
+  int height,
+) {
+  return [
+    for (var row = y; row < y + height; row++)
+      bytes.getUint8((row * imageWidth + x) * 4 + 3),
+  ];
 }
 
 int _alphaInRegion(
