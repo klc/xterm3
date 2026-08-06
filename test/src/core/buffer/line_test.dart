@@ -123,6 +123,22 @@ void main() {
       expect(line.getTrimmedLength(1000), equals(text.length));
     });
 
+    test('ignores stale cells left behind by a shrinking resize', () {
+      final line = BufferLine(10);
+
+      final text = 'ABCDEF';
+      for (var i = 0; i < text.length; i++) {
+        line.setCodePoint(i, text.codeUnitAt(i));
+      }
+
+      // resize() shrinking a line keeps the cell data beyond the new length
+      // around (it's revived if the line grows back). getTrimmedLength()
+      // must not report those stale cells as content.
+      line.resize(3);
+
+      expect(line.getTrimmedLength(), equals(3));
+    });
+
     test('can handle negative start', () {
       final line = BufferLine(10);
 
@@ -133,6 +149,45 @@ void main() {
       }
 
       expect(line.getTrimmedLength(-1000), equals(0));
+    });
+  });
+
+  group('BufferLine.eraseRange()', () {
+    test('clears the placeholder half of a wide char cut at the boundary',
+        () {
+      final line = BufferLine(6);
+      final wideStyle = CursorStyle(background: 42);
+      // Wide char lead at 2 (width 2), placeholder at 3 (width 0) - mirrors
+      // what a real write leaves behind, including on the placeholder cell.
+      line.setCell(2, 0x1F600, 2, wideStyle);
+      line.setCell(3, 0, 0, wideStyle);
+
+      // end == 3 lands exactly on the placeholder: the lead at end - 1 is
+      // inside the erased range and gets cleared, so the placeholder must
+      // be cleared too or it's left behind as an orphan still carrying the
+      // wide char's background.
+      line.eraseRange(0, 3, CursorStyle());
+
+      expect(line.getWidth(3), 0);
+      expect(line.getBackground(3), 0,
+          reason: 'placeholder must not keep the erased lead\'s background');
+    });
+
+    test('leaves an intact wide pair alone on an empty range at its '
+        'placeholder', () {
+      final line = BufferLine(6);
+      final wideStyle = CursorStyle(background: 42);
+      line.setCell(2, 0x1F600, 2, wideStyle);
+      line.setCell(3, 0, 0, wideStyle);
+
+      // start == end == 3: nothing in [start, end) so the lead at 2 is
+      // never touched - the placeholder at 3 must be left alone too,
+      // or the lead is left dangling with no placeholder.
+      line.eraseRange(3, 3, CursorStyle());
+
+      expect(line.getWidth(2), 2, reason: 'lead must still be intact');
+      expect(line.getBackground(3), 42,
+          reason: 'placeholder must not be erased when its lead was not');
     });
   });
 

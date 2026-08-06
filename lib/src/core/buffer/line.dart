@@ -181,8 +181,8 @@ class BufferLine with IndexedItem {
     setContent(index, char | (width << CellContent.widthShift));
   }
 
-  void setCell(int index, int char, int witdh, CursorStyle style) {
-    _repairWideCellPairing(index, witdh, style);
+  void setCell(int index, int char, int width, CursorStyle style) {
+    _repairWideCellPairing(index, width, style);
 
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
@@ -190,7 +190,7 @@ class BufferLine with IndexedItem {
     _data[offset + _cellAttributes] = style.attrs |
         (style.hyperlinkId << CellAttr.hyperlinkShift) |
         style.semanticAttrs;
-    _data[offset + _cellContent] = char | (witdh << CellContent.widthShift);
+    _data[offset + _cellContent] = char | (width << CellContent.widthShift);
     _setUnderlineColor(index, style.underlineColor);
     _combiningCharacters?.remove(index);
   }
@@ -211,14 +211,14 @@ class BufferLine with IndexedItem {
   ///    holds an unrelated stale wide lead - it would become an invalid
   ///    "placeholder" for the new pair, so erase it (and its own
   ///    placeholder) first.
-  void _repairWideCellPairing(int index, int witdh, CursorStyle style) {
-    if (witdh != 0 &&
+  void _repairWideCellPairing(int index, int width, CursorStyle style) {
+    if (width != 0 &&
         index > 0 &&
         getWidth(index) == 0 &&
         getWidth(index - 1) == 2) {
       eraseCell(index - 1, style);
     }
-    if (witdh == 2 && index + 1 < _length && getWidth(index + 1) == 2) {
+    if (width == 2 && index + 1 < _length && getWidth(index + 1) == 2) {
       eraseCell(index + 1, style);
       if (index + 2 < _length) {
         eraseCell(index + 2, style);
@@ -343,18 +343,29 @@ class BufferLine with IndexedItem {
     CursorStyle style, {
     bool respectProtected = false,
   }) {
-    // reset cell one to the left if start is second cell of a wide char
+    // reset cell one to the left if start is second cell of a wide char.
+    // Guarded by start < end (a non-empty range): if nothing is erased at
+    // start, its lead must be left alone too, or an intact wide pair gets
+    // torn apart by an empty-range call.
     if (start > 0 &&
+        start < end &&
         getWidth(start - 1) == 2 &&
         _canErase(start - 1, respectProtected)) {
       eraseCell(start - 1, style);
     }
 
-    // reset cell one to the right if end is second cell of a wide char
-    if (end < _length &&
+    // If end lands on the placeholder half of a wide char whose lead (at
+    // end - 1) is inside the erased range, erase the placeholder too -
+    // otherwise the lead below gets cleared and this placeholder is left
+    // behind as an orphaned width-0 cell with no lead. end - 1 >= start
+    // guards an empty range (start == end): the lead isn't erased below in
+    // that case, so the placeholder must be left alone too.
+    if (end > 0 &&
+        end < _length &&
+        end - 1 >= start &&
         getWidth(end - 1) == 2 &&
-        _canErase(end - 1, respectProtected)) {
-      eraseCell(end - 1, style);
+        _canErase(end, respectProtected)) {
+      eraseCell(end, style);
     }
 
     end = min(end, _length);
@@ -627,7 +638,10 @@ class BufferLine with IndexedItem {
   /// Returns the offset of the last cell that has content from the start of
   /// the line.
   int getTrimmedLength([int? cols]) {
-    final maxCols = _data.length ~/ _cellSize;
+    // Clamp to _length, not capacity: resize() shrinking a line keeps the
+    // cell data beyond _length around, so scanning past it would count
+    // stale content that's no longer part of the line.
+    final maxCols = _length;
 
     if (cols == null || cols > maxCols) {
       cols = maxCols;
