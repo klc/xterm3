@@ -125,7 +125,16 @@ Contributions are always welcome!
 
 ## License
 
-This project is licensed under an MIT license.
+`xterm3` is licensed under the [GNU Affero General Public License v3.0 or
+later](LICENSE) (AGPL-3.0-or-later). Linking it into an application makes that
+application a work covered by the AGPL: if you distribute it, or let users
+interact with it over a network, you must offer them its complete corresponding
+source under the same license.
+
+The `xterm` and `xterm2` work this package is derived from is MIT licensed and
+stays available under those terms; that notice is kept in [LICENSE.MIT](LICENSE.MIT)
+and [NOTICE](NOTICE). Versions up to `xterm2` 5.3.0 are unaffected by this
+change — the AGPL applies from `xterm3` 6.0.0 onward.
 
 [dartssh2]: https://pub.dev/packages/dartssh2
 [TerminalStudio/xterm.dart]: https://github.com/TerminalStudio/xterm.dart

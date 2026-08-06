@@ -10,6 +10,13 @@
     point keeps its name: `import 'package:xterm3/xterm.dart';`.
   * `XTERM2_FUZZ_ROUNDS` becomes `XTERM3_FUZZ_ROUNDS`.
 
+* **Relicensed from MIT to AGPL-3.0-or-later.** From this release on, an
+  application that links `xterm3` is a covered work: distributing it, or
+  letting users interact with it over a network, requires offering the
+  complete corresponding source under the AGPL. The MIT-licensed `xterm` /
+  `xterm2` work this package derives from keeps its terms — the notice is in
+  `LICENSE.MIT` and `NOTICE` — and `xterm2` 5.3.0 and earlier remain MIT.
+
 * Make plain-text `http(s)://` and `www.` URLs clickable, not just OSC 8
   hyperlinks. `Terminal.urlAt(CellOffset)` detects a URL in buffer text
   (soft-wrap aware, joined the same way `Terminal.search` joins wrapped rows)
