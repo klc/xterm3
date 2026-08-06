@@ -58,6 +58,10 @@ class ProceduralGlyphCache {
   /// [key] must not already be present in the cache - callers should check
   /// [getFromCache] first.
   void insert(Object key, Picture picture) {
+    // Guards against a native Picture leak (and a stale duplicate node in
+    // _recencyHeap) if a caller ever inserts over a key that's already
+    // cached, in violation of the contract above.
+    _cache.remove(key)?.picture.dispose();
     if (_cache.length >= maximumSize) {
       _evictLeastRecentlyUsed();
     }
