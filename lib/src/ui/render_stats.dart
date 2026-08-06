@@ -46,7 +46,8 @@ abstract final class TerminalRenderStats {
 
   /// Average number of lines repainted per frame, or `null` if nothing has
   /// been painted.
-  static double? get linesPerPaint => paints == 0 ? null : paintedLines / paints;
+  static double? get linesPerPaint =>
+      paints == 0 ? null : paintedLines / paints;
 
   static double? _ratio(int hits, int misses) {
     final total = hits + misses;

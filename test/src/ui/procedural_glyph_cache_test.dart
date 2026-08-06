@@ -13,8 +13,7 @@ Picture _dummyPicture() {
 }
 
 void main() {
-  test('insert disposes the old Picture when overwriting an existing key',
-      () {
+  test('insert disposes the old Picture when overwriting an existing key', () {
     final cache = ProceduralGlyphCache(4);
     final first = _dummyPicture();
 

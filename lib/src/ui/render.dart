@@ -858,8 +858,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final shouldPaint = _terminal.buffer.absoluteCursorY >= firstLine &&
         _terminal.buffer.absoluteCursorY <= lastLine &&
         _shouldShowCursor;
-    final shouldPaintBlock =
-        shouldPaint && type == TerminalCursorType.block;
+    final shouldPaintBlock = shouldPaint && type == TerminalCursorType.block;
     final column = _cursorRenderColumn();
     final colors = _cursorColors(column);
     final invertsCell = shouldPaintBlock && _focusNode.hasFocus;
@@ -977,8 +976,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
             lines[i],
             blinkVisible: _textBlinkVisible,
             activeHyperlinkId: _activeHyperlinkId,
-            cursorColumn: switch (cursor.invertsCell &&
-                i == _terminal.buffer.absoluteCursorY) {
+            cursorColumn: switch (
+                cursor.invertsCell && i == _terminal.buffer.absoluteCursorY) {
               true => cursor.column,
               false => null,
             },

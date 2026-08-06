@@ -68,8 +68,8 @@ extension TerminalUrlDetection on Terminal {
 
 int _trimTrailingPunctuation(String text, int start, int end) {
   var trimmedEnd = end;
-  while (trimmedEnd > start &&
-      _trimmableTrailing.contains(text[trimmedEnd - 1])) {
+  while (
+      trimmedEnd > start && _trimmableTrailing.contains(text[trimmedEnd - 1])) {
     trimmedEnd--;
   }
   // A trailing ')' is kept when it closes an earlier '(' inside the match

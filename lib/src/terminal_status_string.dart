@@ -39,7 +39,8 @@ mixin _StatusStringReports {
       '|' => '${_settings.transmitTerminationCharacter}|',
       "'s" => "${_settings.lineTransmitTerminationCharacter}'s",
       '}' => '${_settings.protectedFieldsAttribute}}',
-      '"p' => '${_settings.conformanceLevel};${_settings.conformanceControls}"p',
+      '"p' =>
+        '${_settings.conformanceLevel};${_settings.conformanceControls}"p',
       '"q' => '${switch (_cursorStyle.isProtected) {
           true => 1,
           false => 0,
@@ -122,6 +123,7 @@ mixin _StatusStringReports {
     if (!_modes._leftRightMarginMode) return null;
     return '${_buffer.marginLeft + 1};${_buffer.marginRight + 1}s';
   }
+
   int _cursorShapeStatus() {
     return switch ((_modes._applicationCursorType, _modes._cursorBlinkMode)) {
       (TerminalCursorType.block || null, true) => 1,

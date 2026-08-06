@@ -28,9 +28,50 @@ const _csiPrefixes = ['', '?', '>', '=', r'$'];
 // A representative slice of CSI final bytes (letters plus a few punctuation
 // finals actually used by the parser, e.g. '@', '`', '~').
 const _csiFinals = [
-  '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'P',
-  'S', 'T', 'X', 'Z', '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'l',
-  'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '~',
+  '@',
+  'A',
+  'B',
+  'C',
+  'D',
+  'E',
+  'F',
+  'G',
+  'H',
+  'I',
+  'J',
+  'K',
+  'L',
+  'M',
+  'P',
+  'S',
+  'T',
+  'X',
+  'Z',
+  '`',
+  'a',
+  'b',
+  'c',
+  'd',
+  'e',
+  'f',
+  'g',
+  'h',
+  'i',
+  'l',
+  'm',
+  'n',
+  'p',
+  'q',
+  'r',
+  's',
+  't',
+  'u',
+  'v',
+  'w',
+  'x',
+  'y',
+  'z',
+  '~',
 ];
 
 const _wideChars = [0x4e2d, 0x56fd, 0x65e5, 0x672c]; // CJK, width 2
@@ -138,7 +179,8 @@ String _randomOsc(Random random, {required bool terminated}) {
 String _randomDcs(Random random, {required bool oversized}) {
   final params = _randomParams(random);
   final finalByte = String.fromCharCode(0x40 + random.nextInt(0x3f));
-  final payloadLength = oversized ? 20000 + random.nextInt(5000) : random.nextInt(16);
+  final payloadLength =
+      oversized ? 20000 + random.nextInt(5000) : random.nextInt(16);
   final payload = _randomOscPayload(random, length: payloadLength);
   return '\x1bP$params$finalByte$payload\x1b\\';
 }

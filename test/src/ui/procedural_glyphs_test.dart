@@ -148,9 +148,8 @@ void main() {
         };
         final armSampleRow = (cellHeight * (armRow + 0.5)).round();
         expect(
-          _coveredPixels(_alphaProfileInRow(
-              bytes, imageWidth, tailRow, cellWidth.round(),
-              cellWidth.round())),
+          _coveredPixels(_alphaProfileInRow(bytes, imageWidth, tailRow,
+              cellWidth.round(), cellWidth.round())),
           _coveredPixels(_alphaProfileInRow(bytes, imageWidth, armSampleRow,
               cellWidth.round(), cellWidth.round())),
           reason: 'vertical tail of $glyph at $dimensions',

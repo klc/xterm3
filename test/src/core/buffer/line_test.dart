@@ -153,8 +153,7 @@ void main() {
   });
 
   group('BufferLine.eraseRange()', () {
-    test('clears the placeholder half of a wide char cut at the boundary',
-        () {
+    test('clears the placeholder half of a wide char cut at the boundary', () {
       final line = BufferLine(6);
       final wideStyle = CursorStyle(background: 42);
       // Wide char lead at 2 (width 2), placeholder at 3 (width 0) - mirrors
@@ -173,7 +172,8 @@ void main() {
           reason: 'placeholder must not keep the erased lead\'s background');
     });
 
-    test('leaves an intact wide pair alone on an empty range at its '
+    test(
+        'leaves an intact wide pair alone on an empty range at its '
         'placeholder', () {
       final line = BufferLine(6);
       final wideStyle = CursorStyle(background: 42);

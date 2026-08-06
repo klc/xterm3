@@ -1924,6 +1924,7 @@ bool _paintProceduralGlyph(
 }
 
 @pragma('vm:prefer-inline')
+
 /// Whether [codePoint] is drawn with so few canvas operations that caching a
 /// rasterised [Picture] of it costs more than it saves.
 ///

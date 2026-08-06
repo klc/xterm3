@@ -47,7 +47,8 @@ void main() {
       'wiki https://en.wikipedia.org/wiki/Dart_(programming_language) end',
     );
     final wiki = terminal.urlAt(const CellOffset(10, 0));
-    expect(wiki!.text, 'https://en.wikipedia.org/wiki/Dart_(programming_language)');
+    expect(wiki!.text,
+        'https://en.wikipedia.org/wiki/Dart_(programming_language)');
 
     final wrapped = Terminal()..resize(60, 2);
     wrapped.write('(see https://example.com/foo) end');

@@ -187,8 +187,8 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     // Report the size the view was laid out at, not the size it was asked
     // for. They differ when the window is smaller than the request, and the
     // laid-out one is what the cell metrics have to be read against.
-    final actual = (_viewKey.currentContext?.findRenderObject() as RenderBox?)
-        ?.size;
+    final actual =
+        (_viewKey.currentContext?.findRenderObject() as RenderBox?)?.size;
     final effective = actual ?? Size(width, height);
     if (actual != null &&
         ((actual.width - width).abs() > 0.5 ||
@@ -500,8 +500,9 @@ extension _StatsReport on BenchStats {
       return '${(hits * 100 / lookups).toStringAsFixed(1).padLeft(4)}%';
     }
 
-    final linesPerPaint =
-        paints == 0 ? '    -' : (paintedLines / paints).toStringAsFixed(1).padLeft(5);
+    final linesPerPaint = paints == 0
+        ? '    -'
+        : (paintedLines / paints).toStringAsFixed(1).padLeft(5);
 
     return '${name.padRight(11)} ${paints.toString().padLeft(6)} | '
         '$linesPerPaint | '
@@ -611,7 +612,8 @@ String _staticSetup(int rows, int columns) {
     final line = StringBuffer();
     var word = 0;
     while (line.length < columns) {
-      line.write('field_${(row * 17 + word) % 89}.value=${(row * 7919 + word) % 10000} ');
+      line.write(
+          'field_${(row * 17 + word) % 89}.value=${(row * 7919 + word) % 10000} ');
       word++;
     }
     buffer.write(line.toString().substring(0, columns));

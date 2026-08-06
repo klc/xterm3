@@ -32,9 +32,7 @@ class _SteppedStopwatch implements Stopwatch {
   @override
   Duration get elapsed {
     _reads++;
-    return _reads > chunksPerPass
-        ? const Duration(seconds: 1)
-        : Duration.zero;
+    return _reads > chunksPerPass ? const Duration(seconds: 1) : Duration.zero;
   }
 }
 

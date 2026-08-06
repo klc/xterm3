@@ -47,11 +47,7 @@ enum _ProtectionMode { off, iso, dec }
 /// translating user input into escape sequences that the application can
 /// understand.
 class Terminal
-    with
-        Observable,
-        _SgrHandlers,
-        _ContextSignalHandlers,
-        _StatusStringReports
+    with Observable, _SgrHandlers, _ContextSignalHandlers, _StatusStringReports
     implements TerminalState, EscapeHandler, EscapeTextHandler {
   static const _maxHyperlinks = 4096;
   static const _maxHyperlinkId =
@@ -382,7 +378,8 @@ class Terminal
   @override
   final _modes = _TerminalModes();
 
-  TerminalCursorType? get applicationCursorType => _modes._applicationCursorType;
+  TerminalCursorType? get applicationCursorType =>
+      _modes._applicationCursorType;
 
   bool _focused = true;
 
@@ -763,7 +760,9 @@ class Terminal
         nextCellPixelWidth == _cellPixelWidth &&
         nextCellPixelHeight == _cellPixelHeight) {
       if (wasSynchronizedUpdateMode) notifyListeners();
-      if (_modes._inBandSizeReportMode && pixelWidth != null && pixelHeight != null) {
+      if (_modes._inBandSizeReportMode &&
+          pixelWidth != null &&
+          pixelHeight != null) {
         _sendInBandSizeReport();
       }
       return;
@@ -1737,7 +1736,8 @@ class Terminal
       96 => 1,
       _ => 0,
     };
-    onOutput?.call('\x1bP$size!u${_settings.preferredSupplementalSetFinal}\x1b\\');
+    onOutput
+        ?.call('\x1bP$size!u${_settings.preferredSupplementalSetFinal}\x1b\\');
   }
 
   @override
@@ -2101,7 +2101,8 @@ class Terminal
       1006 => _reportedState(_modes._mouseReportMode == MouseReportMode.sgr),
       1007 => _reportedState(_modes._altBufferMouseScrollMode),
       1015 => _reportedState(_modes._mouseReportMode == MouseReportMode.urxvt),
-      1016 => _reportedState(_modes._mouseReportMode == MouseReportMode.sgrPixels),
+      1016 =>
+        _reportedState(_modes._mouseReportMode == MouseReportMode.sgrPixels),
       1035 => _reportedState(_modes._ignoreKeypadWithNumLockMode),
       1036 => _reportedState(_modes._altEscPrefixMode),
       1039 => _reportedState(_modes._altSendsEscapeMode),
@@ -2280,7 +2281,8 @@ class Terminal
 
   @override
   void reportKittyKeyboardMode() {
-    onOutput?.call('\x1b[?${_modes._kittyKeyboardMode & _kittyKeyboardModeMask}u');
+    onOutput
+        ?.call('\x1b[?${_modes._kittyKeyboardMode & _kittyKeyboardModeMask}u');
   }
 
   @override
@@ -2295,7 +2297,8 @@ class Terminal
 
   @override
   void pushKittyKeyboardMode(int mode) {
-    if (_modes._kittyKeyboardModeStack.length >= _maxKittyKeyboardModeStackDepth) {
+    if (_modes._kittyKeyboardModeStack.length >=
+        _maxKittyKeyboardModeStackDepth) {
       _modes._kittyKeyboardModeStack.removeAt(0);
     }
 
@@ -2709,7 +2712,8 @@ class Terminal
       return;
     }
     if (index < 0 || index > 255) return;
-    final color = _colors._indexedColorOverrides[index] ?? onColorQuery?.call(4, index);
+    final color =
+        _colors._indexedColorOverrides[index] ?? onColorQuery?.call(4, index);
     if (color == null) return;
     onOutput?.call('\x1b]4;$index;${_formatOscColor(color)}\x1b\\');
   }
@@ -2727,8 +2731,8 @@ class Terminal
     for (final index in indices) {
       final specialIndex = _specialColorIndexFromPaletteIndex(index);
       if (specialIndex != null) {
-        changed =
-            _colors._specialColorOverrides.remove(specialIndex) != null || changed;
+        changed = _colors._specialColorOverrides.remove(specialIndex) != null ||
+            changed;
         continue;
       }
       changed = _colors._indexedColorOverrides.remove(index) != null || changed;
@@ -2860,7 +2864,9 @@ class Terminal
       case 15:
       case 16:
       case 18:
-        if (_colors._auxiliaryDynamicColorOverrides.remove(code) == null) return;
+        if (_colors._auxiliaryDynamicColorOverrides.remove(code) == null) {
+          return;
+        }
         break;
       case 17:
         if (_colors._selectionColorOverride == null) return;
@@ -3001,8 +3007,7 @@ class Terminal
 
   void _semanticPromptLineFeed() {
     if (!_semanticPrompt.inputTerminatesAtLineFeed) return;
-    if (_semanticPrompt.state.content !=
-        TerminalSemanticPromptContent.input) {
+    if (_semanticPrompt.state.content != TerminalSemanticPromptContent.input) {
       _semanticPrompt.inputTerminatesAtLineFeed = false;
       return;
     }
@@ -3110,8 +3115,7 @@ class Terminal
 
   ({int rowsAboveCursor, int column})? _activeSemanticPromptOffset() {
     if (!identical(_buffer, _mainBuffer)) return null;
-    if (_semanticPrompt.state.content ==
-        TerminalSemanticPromptContent.output) {
+    if (_semanticPrompt.state.content == TerminalSemanticPromptContent.output) {
       return null;
     }
 
@@ -3139,7 +3143,6 @@ class Terminal
     final column = prompt.column.clamp(0, _mainBuffer.viewWidth - 1);
     _semanticPromptAnchors.add(_mainBuffer.createAnchor(column, line));
   }
-
 }
 
 String? _resolveClipboardSelector(String selector) {

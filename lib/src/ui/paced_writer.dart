@@ -117,9 +117,8 @@ class PacedTerminalWriter {
         final slice = _createStopwatch()..start();
         do {
           terminal.write(_pending.removeFirst());
-        } while (_pending.isNotEmpty &&
-            slice.elapsed < frameBudget &&
-            !_disposed);
+        } while (
+            _pending.isNotEmpty && slice.elapsed < frameBudget && !_disposed);
 
         if (_pending.isEmpty || _disposed) return;
         await _waitForFrame();
