@@ -5,7 +5,21 @@
     <a href="https://pub.dev/packages/xterm3">
       <img alt="Package version" src="https://img.shields.io/pub/v/xterm3?color=blue&include_prereleases">
     </a>
+    <a href="https://pub.dev/packages/xterm3/score">
+      <img alt="Pub points" src="https://img.shields.io/pub/points/xterm3?color=blue">
+    </a>
+    <a href="https://pub.dev/packages/xterm3/publisher">
+      <img alt="Pub likes" src="https://img.shields.io/pub/likes/xterm3?color=blue">
+    </a>
+    <a href="LICENSE">
+      <img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue">
+    </a>
 </p>
+
+**[pub.dev/packages/xterm3](https://pub.dev/packages/xterm3)** ·
+[API reference](https://pub.dev/documentation/xterm3/latest/) ·
+[Changelog](https://pub.dev/packages/xterm3/changelog) ·
+[Source](https://github.com/klc/xterm3)
 
 `xterm3` continues the line that started with
 [`xterm`](https://pub.dev/packages/xterm) from
@@ -63,12 +77,18 @@ dependency and the package in imports; the public API is unchanged.
 
 ## Getting Started
 
-**1.** Add this to your package's pubspec.yaml file:
+**1.** Add the [package from pub.dev](https://pub.dev/packages/xterm3):
+
+```sh
+flutter pub add xterm3
+```
+
+or add it to your package's pubspec.yaml file by hand:
 
 ```yml
 dependencies:
   ...
-  xterm3: ^5.1.0
+  xterm3: ^6.0.1
 ```
 
 **2.** Create the terminal:
