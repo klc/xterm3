@@ -34,7 +34,9 @@ class PacedTerminalWriter {
     this.terminal, {
     this.frameBudget = const Duration(milliseconds: 8),
     Future<void> Function()? waitForFrame,
-  })  : _waitForFrame = waitForFrame ?? _endOfFrame {
+    Stopwatch Function()? createStopwatch,
+  })  : _waitForFrame = waitForFrame ?? _endOfFrame,
+        _createStopwatch = createStopwatch ?? Stopwatch.new {
     if (frameBudget <= Duration.zero) {
       throw ArgumentError.value(frameBudget, 'frameBudget', 'must be positive');
     }
@@ -54,6 +56,10 @@ class PacedTerminalWriter {
   /// Injectable so this can be tested without a running frame pipeline.
   final Future<void> Function() _waitForFrame;
 
+  /// Injectable so pass sizes can be tested deterministically instead of
+  /// racing wall-clock resolution.
+  final Stopwatch Function() _createStopwatch;
+
   final _pending = Queue<String>();
 
   var _draining = false;
@@ -68,14 +74,18 @@ class PacedTerminalWriter {
 
   /// Queues [data] to be written to the terminal.
   ///
-  /// Returns immediately. The data reaches the terminal within the next few
-  /// frames, sooner if there is little of it.
+  /// Returns immediately - genuinely so, unlike calling [_drain] inline
+  /// would: starting the drain on a microtask instead lets a burst of
+  /// synchronous write() calls (a tight producer loop, or a sync
+  /// StreamController delivering several chunks in one native callback) all
+  /// land in the queue before the first pass looks at it, instead of each
+  /// call racing its own one-chunk drain to completion.
   void write(String data) {
     if (_disposed || data.isEmpty) return;
     _pending.addLast(data);
     if (!_draining) {
       _draining = true;
-      unawaited(_drain());
+      scheduleMicrotask(() => unawaited(_drain()));
     }
   }
 
@@ -101,12 +111,15 @@ class PacedTerminalWriter {
       while (_pending.isNotEmpty) {
         if (_disposed) return;
 
-        final slice = Stopwatch()..start();
-        while (_pending.isNotEmpty &&
-            slice.elapsed < frameBudget &&
-            !_disposed) {
+        // do-while: a pass always writes at least one chunk before checking
+        // the budget, so drain still makes progress when frameBudget is
+        // close to clock resolution (elapsed can read zero for a while).
+        final slice = _createStopwatch()..start();
+        do {
           terminal.write(_pending.removeFirst());
-        }
+        } while (_pending.isNotEmpty &&
+            slice.elapsed < frameBudget &&
+            !_disposed);
 
         if (_pending.isEmpty || _disposed) return;
         await _waitForFrame();
