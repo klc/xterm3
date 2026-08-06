@@ -77,7 +77,7 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// reallocated.
   set maxLength(int value) {
     if (value <= 0) {
-      throw ArgumentError.value(value, 'value', "maxLength can't be negative!");
+      throw ArgumentError.value(value, 'value', 'maxLength must be positive');
     }
 
     if (value == _array.length) return;
@@ -176,7 +176,9 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// Removes and returns the last value on the list, throws if the list is
   /// empty.
   T pop() {
-    assert(_length > 0, 'Cannot pop from an empty list');
+    if (_length == 0) {
+      throw StateError('Cannot pop from an empty list');
+    }
     final result = _getChild(_length - 1);
     _dropChild(_length - 1);
     _length--;
@@ -283,6 +285,7 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// Replaces the element at [index] with [value] and returns the replaced
   /// item.
   T swap(int index, T value) {
+    RangeError.checkValueInInterval(index, 0, length - 1, 'index');
     final result = _getChild(index);
     _adoptChild(index, value);
     return result!;
