@@ -3,11 +3,11 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/painting.dart';
 
-import 'package:xterm2/src/ui/palette_builder.dart';
-import 'package:xterm2/src/ui/paragraph_cache.dart';
-import 'package:xterm2/src/ui/procedural_glyph_cache.dart';
-import 'package:xterm2/src/ui/procedural_glyphs.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/src/ui/palette_builder.dart';
+import 'package:xterm3/src/ui/paragraph_cache.dart';
+import 'package:xterm3/src/ui/procedural_glyph_cache.dart';
+import 'package:xterm3/src/ui/procedural_glyphs.dart';
+import 'package:xterm3/xterm.dart';
 
 const _dimColorFactor = 0.66;
 const _specialBoldColor = 0;

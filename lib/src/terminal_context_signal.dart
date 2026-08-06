@@ -40,7 +40,7 @@ final class TerminalContextSignal {
   /// The printable ASCII context identifier.
   final String id;
 
-  /// All well-formed metadata fields, including fields unknown to xterm2.
+  /// All well-formed metadata fields, including fields unknown to xterm3.
   Map<String, String> get metadata {
     final existing = _metadata;
     if (existing != null) return existing;

@@ -1,7 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 import '../_support/terminal_invariants.dart';
 

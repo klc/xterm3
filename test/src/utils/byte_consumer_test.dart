@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm2/src/utils/byte_consumer.dart';
+import 'package:xterm3/src/utils/byte_consumer.dart';
 
 void main() {
   test('consumes fragmented ASCII without changing offsets', () {

@@ -1,5 +1,5 @@
 import 'dart:collection';
-import 'package:xterm2/src/utils/single_cell_text.dart';
+import 'package:xterm3/src/utils/single_cell_text.dart';
 
 class ByteConsumer {
   final _queue = ListQueue<_StringBlock>();

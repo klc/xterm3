@@ -3,12 +3,12 @@ import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
-import 'package:xterm2/src/core/buffer/cell_offset.dart';
-import 'package:xterm2/src/core/cell.dart';
-import 'package:xterm2/src/core/cursor.dart';
-import 'package:xterm2/src/utils/circular_buffer.dart';
-import 'package:xterm2/src/utils/single_cell_text.dart';
-import 'package:xterm2/src/utils/unicode_v11.dart';
+import 'package:xterm3/src/core/buffer/cell_offset.dart';
+import 'package:xterm3/src/core/cell.dart';
+import 'package:xterm3/src/core/cursor.dart';
+import 'package:xterm3/src/utils/circular_buffer.dart';
+import 'package:xterm3/src/utils/single_cell_text.dart';
+import 'package:xterm3/src/utils/unicode_v11.dart';
 
 const _cellSize = 4;
 

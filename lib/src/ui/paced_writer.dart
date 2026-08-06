@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/scheduler.dart';
-import 'package:xterm2/src/terminal.dart';
+import 'package:xterm3/src/terminal.dart';
 
 /// Writes PTY output into a [Terminal] a frame's worth at a time, so a burst
 /// of output cannot hold the UI thread for longer than [frameBudget].

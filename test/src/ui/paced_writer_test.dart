@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 /// Deterministic stand-in for [Stopwatch]: reports zero elapsed for the
 /// first [chunksPerPass] reads of `elapsed`, then reports far past any

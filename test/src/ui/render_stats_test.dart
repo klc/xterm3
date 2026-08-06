@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/src/ui/paragraph_cache.dart';
-import 'package:xterm2/src/ui/render_stats.dart';
+import 'package:xterm3/src/ui/paragraph_cache.dart';
+import 'package:xterm3/src/ui/render_stats.dart';
 
 void main() {
   setUp(TerminalRenderStats.reset);

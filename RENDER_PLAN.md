@@ -1,7 +1,7 @@
-# xterm2 — Render pipeline planı
+# xterm3 — Render pipeline planı
 
 **Tarih:** 2026-08-05 · **Taban:** `master` @ `ccb2ce4`
-**Kaynak:** `chatgpt_xterm2_conversation.md` incelemesi + kod doğrulaması
+**Kaynak:** `chatgpt_xterm3_conversation.md` incelemesi + kod doğrulaması
 
 Bu plan, ChatGPT konuşmasındaki önerilerin kodla doğrulanmış hâlidir. Konuşmadaki
 "renderer'ı baştan yaz / `drawAtlas`'a geç" önerisi **kabul edilmedi** (gerekçe aşağıda).

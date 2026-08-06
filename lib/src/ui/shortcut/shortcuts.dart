@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:xterm2/src/ui/shortcut/actions.dart';
+import 'package:xterm3/src/ui/shortcut/actions.dart';
 
 Map<ShortcutActivator, Intent> get defaultTerminalShortcuts {
   switch (defaultTargetPlatform) {

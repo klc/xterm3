@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 void main() {
   runApp(MyApp());
@@ -19,7 +19,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'xterm2 demo',
+      title: 'xterm3 demo',
       debugShowCheckedModeBanner: false,
       home: MyHomePage(),
     );
@@ -66,7 +66,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
 class MockRepl {
   MockRepl(this.onOutput) {
-    onOutput('Welcome to xterm2!\r\n');
+    onOutput('Welcome to xterm3!\r\n');
     onOutput('Type "help" for more information.\r\n');
     onOutput('\n');
     onOutput('\$ ');

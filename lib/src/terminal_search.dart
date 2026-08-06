@@ -1,7 +1,7 @@
-import 'package:xterm2/src/core/buffer/cell_offset.dart';
-import 'package:xterm2/src/core/buffer/range_line.dart';
-import 'package:xterm2/src/terminal.dart';
-import 'package:xterm2/src/terminal_logical_line.dart';
+import 'package:xterm3/src/core/buffer/cell_offset.dart';
+import 'package:xterm3/src/core/buffer/range_line.dart';
+import 'package:xterm3/src/terminal.dart';
+import 'package:xterm3/src/terminal_logical_line.dart';
 
 const _defaultSearchResultLimit = 1000;
 

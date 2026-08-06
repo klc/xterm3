@@ -1,7 +1,7 @@
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 /// Checks a set of structural invariants that must hold for [terminal] no
 /// matter what byte soup it has been fed.

@@ -1,19 +1,19 @@
 import 'dart:math' show max, min;
 
 import 'package:characters/characters.dart';
-import 'package:xterm2/src/core/buffer/cell_offset.dart';
-import 'package:xterm2/src/core/buffer/line.dart';
-import 'package:xterm2/src/core/buffer/range.dart';
-import 'package:xterm2/src/core/buffer/range_block.dart';
-import 'package:xterm2/src/core/buffer/range_line.dart';
-import 'package:xterm2/src/core/charset.dart';
-import 'package:xterm2/src/core/cell.dart';
-import 'package:xterm2/src/core/cursor.dart';
-import 'package:xterm2/src/core/reflow.dart';
-import 'package:xterm2/src/core/state.dart';
-import 'package:xterm2/src/utils/circular_buffer.dart';
-import 'package:xterm2/src/utils/single_cell_text.dart';
-import 'package:xterm2/src/utils/unicode_v11.dart';
+import 'package:xterm3/src/core/buffer/cell_offset.dart';
+import 'package:xterm3/src/core/buffer/line.dart';
+import 'package:xterm3/src/core/buffer/range.dart';
+import 'package:xterm3/src/core/buffer/range_block.dart';
+import 'package:xterm3/src/core/buffer/range_line.dart';
+import 'package:xterm3/src/core/charset.dart';
+import 'package:xterm3/src/core/cell.dart';
+import 'package:xterm3/src/core/cursor.dart';
+import 'package:xterm3/src/core/reflow.dart';
+import 'package:xterm3/src/core/state.dart';
+import 'package:xterm3/src/utils/circular_buffer.dart';
+import 'package:xterm3/src/utils/single_cell_text.dart';
+import 'package:xterm3/src/utils/unicode_v11.dart';
 
 class Buffer {
   final TerminalState terminal;

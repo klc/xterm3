@@ -13,9 +13,9 @@
 // Every workload is fed in 8 KiB chunks, the size a PTY read hands over, and
 // the terminal is sized to the same 170x50 grid the render comparison uses.
 
-import 'package:xterm2/src/core/escape/handler.dart';
-import 'package:xterm2/src/core/escape/parser.dart';
-import 'package:xterm2/src/terminal.dart';
+import 'package:xterm3/src/core/escape/handler.dart';
+import 'package:xterm3/src/core/escape/parser.dart';
+import 'package:xterm3/src/terminal.dart';
 
 const _columns = 170;
 const _rows = 50;

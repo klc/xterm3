@@ -1,16 +1,16 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:xterm2/src/core/mouse/button.dart';
-import 'package:xterm2/src/core/mouse/button_state.dart';
-import 'package:xterm2/src/core/mouse/mode.dart';
-import 'package:xterm2/src/core/mouse/modifiers.dart';
-import 'package:xterm2/src/terminal_view.dart';
-import 'package:xterm2/src/ui/controller.dart';
-import 'package:xterm2/src/ui/gesture/gesture_detector.dart';
-import 'package:xterm2/src/ui/pointer_input.dart';
-import 'package:xterm2/src/ui/render.dart';
-import 'package:xterm2/src/ui/selection_mode.dart';
+import 'package:xterm3/src/core/mouse/button.dart';
+import 'package:xterm3/src/core/mouse/button_state.dart';
+import 'package:xterm3/src/core/mouse/mode.dart';
+import 'package:xterm3/src/core/mouse/modifiers.dart';
+import 'package:xterm3/src/terminal_view.dart';
+import 'package:xterm3/src/ui/controller.dart';
+import 'package:xterm3/src/ui/gesture/gesture_detector.dart';
+import 'package:xterm3/src/ui/pointer_input.dart';
+import 'package:xterm3/src/ui/render.dart';
+import 'package:xterm3/src/ui/selection_mode.dart';
 
 class TerminalGestureHandler extends StatefulWidget {
   const TerminalGestureHandler({

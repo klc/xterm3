@@ -6,12 +6,12 @@
 // state after each burst of adversarial input.
 //
 // Run harder locally with, e.g.:
-//   XTERM2_FUZZ_ROUNDS=20000 flutter test test/src/core/escape/parser_fuzz_test.dart
+//   XTERM3_FUZZ_ROUNDS=20000 flutter test test/src/core/escape/parser_fuzz_test.dart
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 import '../../../_support/terminal_invariants.dart';
 
@@ -215,9 +215,9 @@ void main() {
   ];
 
   // Allow a much longer local run via an env var, e.g.:
-  //   XTERM2_FUZZ_ROUNDS=20000 flutter test test/src/core/escape/parser_fuzz_test.dart
+  //   XTERM3_FUZZ_ROUNDS=20000 flutter test test/src/core/escape/parser_fuzz_test.dart
   final roundsPerSeed =
-      int.tryParse(Platform.environment['XTERM2_FUZZ_ROUNDS'] ?? '') ?? 400;
+      int.tryParse(Platform.environment['XTERM3_FUZZ_ROUNDS'] ?? '') ?? 400;
 
   for (final seed in seeds) {
     test(
@@ -234,7 +234,7 @@ void main() {
     // exact same deterministic token/resize stream that _runFuzzSeed
     // produces for the given seed, for exactly as many rounds as it takes to
     // hit the bug. They were found by running this suite with
-    // XTERM2_FUZZ_ROUNDS=5000 (the default of 400 rounds is too short to
+    // XTERM3_FUZZ_ROUNDS=5000 (the default of 400 rounds is too short to
     // reach either one, which is why the tests above stay green in normal
     // CI runs). Do not "fix" these by weakening the assertion - the buffer
     // corruption is real; see the invariant helper in
@@ -325,7 +325,7 @@ void main() {
         // Expected behaviour: a width-2 cell must always be immediately
         // followed by a width-0 placeholder cell with code point 0.
         //
-        // Root cause (found via XTERM2_FUZZ_ROUNDS=5000; the default
+        // Root cause (found via XTERM3_FUZZ_ROUNDS=5000; the default
         // 400-round CI run is too short to reach it): unrelated to the ESC
         // ESC token that happens to be the last token processed before this
         // round's invariant check runs. The actual corruption is introduced
@@ -358,7 +358,7 @@ void main() {
         // Expected behaviour: a width-2 cell must always be immediately
         // followed by a width-0 placeholder cell with code point 0.
         //
-        // Observed (found via XTERM2_FUZZ_ROUNDS=20000; 400 and 5000 rounds
+        // Observed (found via XTERM3_FUZZ_ROUNDS=20000; 400 and 5000 rounds
         // are both too short to reach this): the periodic invariant sampler
         // in checkTerminalInvariants only inspects one random line every 25
         // rounds, so it doesn't report this until round 6200, well after the

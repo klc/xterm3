@@ -29,7 +29,7 @@ therefore bisects the viewport extent at startup until the terminal reports
 exactly 100x37 and aborts the run if it cannot, rather than reporting numbers
 from two different grids as if they were comparable.
 
-Results print to the console prefixed with `[xterm2-bench]`.
+Results print to the console prefixed with `[xterm3-bench]`.
 
 To compare this working tree against an older commit:
 
@@ -257,7 +257,7 @@ lookups every frame and so looked normal. Until that is confirmed, treat the
 
 ## Against the published package — 2026-08-05
 
-`8d938de` (head of `SoFluffyOS/xterm2` master, 2026-07-28) versus `d6f7b59`,
+`8d938de` (head of `klc/xterm3` master, 2026-07-28) versus `d6f7b59`,
 73 commits later. Apple M1 Pro, macOS 26.5.1, Flutter 3.44.2 stable, profile
 mode, three interleaved rounds per build via `script/bench-compare.sh`.
 

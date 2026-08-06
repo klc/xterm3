@@ -1,5 +1,5 @@
-import 'package:xterm2/src/terminal.dart';
-import 'package:xterm2/src/terminal_search.dart';
+import 'package:xterm3/src/terminal.dart';
+import 'package:xterm3/src/terminal_search.dart';
 
 void main(List<String> args) async {
   final lines = 1000;

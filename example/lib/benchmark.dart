@@ -1,4 +1,4 @@
-// A deterministic render benchmark for A/B comparing two builds of xterm2.
+// A deterministic render benchmark for A/B comparing two builds of xterm3.
 //
 // Run it in profile mode on both builds, with nothing else on screen:
 //
@@ -32,7 +32,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 import 'bench/bench_stats.dart';
 
@@ -458,7 +458,7 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
 
   void _report(String line) {
     // ignore: avoid_print
-    print('[xterm2-bench] $line');
+    print('[xterm3-bench] $line');
   }
 
   @override

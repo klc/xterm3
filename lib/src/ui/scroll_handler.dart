@@ -1,10 +1,10 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:xterm2/core.dart';
-import 'package:xterm2/src/ui/controller.dart';
-import 'package:xterm2/src/ui/infinite_scroll_view.dart';
-import 'package:xterm2/src/ui/pointer_input.dart';
+import 'package:xterm3/core.dart';
+import 'package:xterm3/src/ui/controller.dart';
+import 'package:xterm3/src/ui/infinite_scroll_view.dart';
+import 'package:xterm3/src/ui/pointer_input.dart';
 
 typedef TerminalMouseEventCallback = bool Function(
   TerminalMouseButton button,

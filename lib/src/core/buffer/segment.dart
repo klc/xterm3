@@ -1,5 +1,5 @@
-import 'package:xterm2/src/core/buffer/cell_offset.dart';
-import 'package:xterm2/src/core/buffer/range.dart';
+import 'package:xterm3/src/core/buffer/cell_offset.dart';
+import 'package:xterm3/src/core/buffer/range.dart';
 
 /// A BufferSegment represents a range within a line.
 class BufferSegment {

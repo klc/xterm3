@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
-import 'package:xterm2/src/core/buffer/buffer.dart';
-import 'package:xterm2/src/core/buffer/line.dart';
+import 'package:xterm3/src/core/buffer/buffer.dart';
+import 'package:xterm3/src/core/buffer/line.dart';
 
 /// A logical (soft-wrap joined) line of terminal text, with a mapping back
 /// to the cells that produced each character. Shared by [terminal_search]

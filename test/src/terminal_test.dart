@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:test/test.dart';
-import 'package:xterm2/core.dart';
+import 'package:xterm3/core.dart';
 
 void main() {
   test('Terminal batches printable ASCII parser runs', () {
@@ -3189,7 +3189,7 @@ void main() {
     terminal.write('\x1b[>0q');
 
     expect(output, [
-      '\x1bP>|xterm2 5.3.0\x1b\\',
+      '\x1bP>|xterm3 5.3.0\x1b\\',
       '\x1bP>|lumide-term 1.0\x1b\\',
     ]);
   });

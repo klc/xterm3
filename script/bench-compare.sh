@@ -4,7 +4,7 @@
 #
 #   script/bench-compare.sh [baseline-ref] [rounds]
 #
-# Default baseline is 8d938de, the head of SoFluffyOS/xterm2 master - so the
+# Default baseline is 8d938de, the head of klc/xterm3 master - so the
 # default run answers "what did the commits since the published repo do".
 #
 # The baseline is checked out into a git worktree and driven by *this* tree's
@@ -94,7 +94,7 @@ run_bench() {
     return 1
   }
 
-  if ! grep -q 'xterm2-bench.*flood:' "$out"; then
+  if ! grep -q 'xterm3-bench.*flood:' "$out"; then
     echo "    RUN INCOMPLETE (no flood line) - see $out" >&2
     return 1
   fi
@@ -116,7 +116,7 @@ echo "==> collected output"
 for log in "$RESULTS"/*.log; do
   echo
   echo "--- $(basename "$log") ---"
-  grep '\[xterm2-bench\]' "$log" | sed 's/^.*\[xterm2-bench\] //'
+  grep '\[xterm3-bench\]' "$log" | sed 's/^.*\[xterm3-bench\] //'
 done
 
 echo

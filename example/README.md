@@ -1,3 +1,3 @@
-# xterm2 demo
+# xterm3 demo
 
-This package contains minimalistic xterm2 examples.
+This package contains minimalistic xterm3 examples.

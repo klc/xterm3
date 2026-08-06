@@ -1,4 +1,14 @@
-## Unreleased
+## [6.0.0] - 2026-08-06
+
+* **Renamed the package from `xterm2` to `xterm3`.** The code has diverged far
+  enough from the `xterm2` line — renderer, buffer and reflow, input and search —
+  that it continues under its own name at
+  [`klc/xterm3`](https://github.com/klc/xterm3). The public API is unchanged, so
+  migration is mechanical:
+  * `xterm2: ^5.3.0` becomes `xterm3: ^6.0.0` in `pubspec.yaml`.
+  * `package:xterm2/...` becomes `package:xterm3/...` in imports. The entry
+    point keeps its name: `import 'package:xterm3/xterm.dart';`.
+  * `XTERM2_FUZZ_ROUNDS` becomes `XTERM3_FUZZ_ROUNDS`.
 
 * Make plain-text `http(s)://` and `www.` URLs clickable, not just OSC 8
   hyperlinks. `Terminal.urlAt(CellOffset)` detects a URL in buffer text
@@ -128,7 +138,7 @@
 * Report back and forward mouse buttons through extended mouse protocols.
 * Ignore unsupported highlight tracking without disrupting active mouse input.
 * Respond to legacy DECID terminal identification requests.
-* Report the current xterm2 version to terminal applications.
+* Report the current xterm3 version to terminal applications.
 * Preserve complete semicolon-rich OSC titles, paths, and cursor names.
 * Render the British national replacement character set.
 * Render text decorations consistently across blank cells.
@@ -175,7 +185,7 @@
 
 ## [5.0.0] - 2026-07-11
 
-* Rename package to `xterm2` for the maintained fork.
+* Rename package to `xterm3` for the maintained fork.
 * Support DEC synchronized updates with Alacritty-compatible timeout recovery.
 * Report terminal view focus changes for DEC focus tracking mode.
 * Render application-selected DECSCUSR cursor shapes.

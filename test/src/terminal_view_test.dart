@@ -7,8 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
-import 'package:xterm2/src/ui/shortcut/actions.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/src/ui/shortcut/actions.dart';
+import 'package:xterm3/xterm.dart';
 
 import '../_fixture/_fixture.dart';
 

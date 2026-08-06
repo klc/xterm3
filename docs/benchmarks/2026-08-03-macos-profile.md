@@ -56,6 +56,6 @@ kötü UI frame 4.2 ms. Aynı şekilde parser'ı Isolate'e taşıma önerisinin 
 
 ## Sınır
 
-Bu ölçüm **macOS masaüstünde**. xterm2'nin ayırt edici özelliği mobil destek ve mobil
+Bu ölçüm **macOS masaüstünde**. xterm3'nin ayırt edici özelliği mobil destek ve mobil
 donanım belirgin şekilde yavaş. #15/#16 kesin olarak kapatılmadan önce gerçek bir
 Android/iOS cihazda aynı benchmark çalıştırılmalı. Masaüstü için karar nettir.

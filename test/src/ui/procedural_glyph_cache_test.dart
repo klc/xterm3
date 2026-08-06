@@ -1,7 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/src/ui/procedural_glyph_cache.dart';
+import 'package:xterm3/src/ui/procedural_glyph_cache.dart';
 
 Picture _dummyPicture() {
   final recorder = PictureRecorder();

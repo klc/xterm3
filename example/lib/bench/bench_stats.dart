@@ -8,7 +8,7 @@
 // baseline worktree; everything else about the harness stays byte-identical
 // between the two runs.
 
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 /// The paint-path counters as they stood at the end of a measurement window.
 ///

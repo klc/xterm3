@@ -1,8 +1,8 @@
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
-import 'package:xterm2/src/terminal.dart';
-import 'package:xterm2/src/ui/controller.dart';
-import 'package:xterm2/src/ui/selection_mode.dart';
+import 'package:xterm3/src/terminal.dart';
+import 'package:xterm3/src/ui/controller.dart';
+import 'package:xterm3/src/ui/selection_mode.dart';
 
 enum TerminalScrollTarget {
   top,

@@ -1,19 +1,22 @@
 
-## xterm2
+## xterm3
 
 <p>
-    <a href="https://pub.dev/packages/xterm2">
-      <img alt="Package version" src="https://img.shields.io/pub/v/xterm2?color=blue&include_prereleases">
+    <a href="https://pub.dev/packages/xterm3">
+      <img alt="Package version" src="https://img.shields.io/pub/v/xterm3?color=blue&include_prereleases">
     </a>
 </p>
 
-`xterm2` is a maintained fork of the original
-[`xterm`](https://pub.dev/packages/xterm) package from
-[`TerminalStudio/xterm.dart`](https://github.com/TerminalStudio/xterm.dart).
-The original package is no longer maintained, so this fork continues the package
-under a new pub package name.
+`xterm3` continues the line that started with
+[`xterm`](https://pub.dev/packages/xterm) from
+[`TerminalStudio/xterm.dart`](https://github.com/TerminalStudio/xterm.dart) and
+was kept alive as [`xterm2`](https://pub.dev/packages/xterm2). The original
+package is unmaintained, and `xterm2` has since diverged far enough — rewritten
+renderer, reworked buffer and reflow, new input and search paths — that it
+continues here under its own name. `xterm2` users migrate by changing the
+dependency and the package in imports; the public API is unchanged.
 
-**xterm2** is a fast and fully-featured terminal emulator for Flutter applications, with support for mobile and desktop platforms.
+**xterm3** is a fast and fully-featured terminal emulator for Flutter applications, with support for mobile and desktop platforms.
 
 > This package requires Flutter version >=3.19.0
 
@@ -22,18 +25,18 @@ under a new pub package name.
 <table>
   <tr>
     <td>
-		<img width="200px" src="https://raw.githubusercontent.com/SoFluffyOS/xterm2/master/media/demo-shell.png">
+		<img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-shell.png">
     </td>
     <td>
-       <img width="200px" src="https://raw.githubusercontent.com/SoFluffyOS/xterm2/master/media/demo-vim.png">
+       <img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-vim.png">
     </td>
   <tr>
   </tr>
     <td>
-       <img width="200px" src="https://raw.githubusercontent.com/SoFluffyOS/xterm2/master/media/demo-htop.png">
+       <img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-htop.png">
     </td>
     <td>
-       <img width="200px" src="https://raw.githubusercontent.com/SoFluffyOS/xterm2/master/media/demo-dialog.png">
+       <img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-dialog.png">
     </td>
   </tr>
 </table>
@@ -65,13 +68,13 @@ under a new pub package name.
 ```yml
 dependencies:
   ...
-  xterm2: ^5.1.0
+  xterm3: ^5.1.0
 ```
 
 **2.** Create the terminal:
 
 ```dart
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 ...
 terminal = Terminal();
 ```
@@ -89,7 +92,7 @@ terminal.onOutput = (output) {
 **3.** Create the view, attach the terminal to the view:
 
 ```dart
-import 'package:xterm2/flutter.dart';
+import 'package:xterm3/flutter.dart';
 ...
 child: TerminalView(terminal),
 ```
@@ -105,18 +108,18 @@ terminal.write('Hello, world!');
 ## More examples
 
 - Write a simple terminal in ~100 lines of code:
-  https://github.com/SoFluffyOS/xterm2/blob/master/example/lib/main.dart
+  https://github.com/klc/xterm3/blob/master/example/lib/main.dart
 
 - Write a SSH client in ~100 lines of code with [dartssh2]:
-  https://github.com/SoFluffyOS/xterm2/blob/master/example/lib/ssh.dart
+  https://github.com/klc/xterm3/blob/master/example/lib/ssh.dart
   
-  <img width="400px" src="https://raw.githubusercontent.com/SoFluffyOS/xterm2/master/media/example-ssh.png">
+  <img width="400px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/example-ssh.png">
 
 For the original package history, see [TerminalStudio/xterm.dart].
 
 ## Features and bugs
 
-Please file feature requests and bugs at the [issue tracker](https://github.com/SoFluffyOS/xterm2/issues).
+Please file feature requests and bugs at the [issue tracker](https://github.com/klc/xterm3/issues).
 
 Contributions are always welcome!
 

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm3/xterm.dart';
 
 /// Regression tests for the mobile soft-keyboard input layer
 /// (lib/src/ui/custom_text_edit.dart).

@@ -1,8 +1,8 @@
-import 'package:xterm2/src/core/buffer/cell_offset.dart';
-import 'package:xterm2/src/core/buffer/range_line.dart';
-import 'package:xterm2/src/terminal.dart';
-import 'package:xterm2/src/terminal_logical_line.dart';
-import 'package:xterm2/src/terminal_search.dart';
+import 'package:xterm3/src/core/buffer/cell_offset.dart';
+import 'package:xterm3/src/core/buffer/range_line.dart';
+import 'package:xterm3/src/terminal.dart';
+import 'package:xterm3/src/terminal_logical_line.dart';
+import 'package:xterm3/src/terminal_search.dart';
 
 /// Matches `http(s)://` and bare `www.` URLs in plain terminal output (as
 /// opposed to OSC 8 hyperlinks, which carry their own explicit URI and are

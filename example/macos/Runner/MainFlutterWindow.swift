@@ -31,6 +31,6 @@ class MainFlutterWindow: NSWindow {
         y: visible.origin.y + (visible.size.height - benchFrame.size.height) / 2)
     }
     self.setFrame(benchFrame, display: true)
-    NSLog("[xterm2-bench] window frame set to %@", NSStringFromRect(self.frame))
+    NSLog("[xterm3-bench] window frame set to %@", NSStringFromRect(self.frame))
   }
 }
