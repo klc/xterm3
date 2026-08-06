@@ -1,0 +1,84 @@
+# What stays out of the published archive.
+#
+# Note that pub uses this file *instead of* .gitignore, not in addition to it,
+# so everything .gitignore excludes has to be repeated here. The first section
+# mirrors .gitignore; the second is what is tracked in git but has no business
+# being downloaded by a consumer of the package.
+
+# --- mirrors .gitignore ---
+
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# Android related
+**/android/**/gradle-wrapper.jar
+**/android/.gradle
+**/android/captures/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/local.properties
+**/android/**/GeneratedPluginRegistrant.java
+
+# iOS/XCode related
+**/ios/**/Pods/
+**/ios/**/.symlinks/
+**/ios/**/xcuserdata
+**/ios/.generated/
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/flutter_assets/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Runner/GeneratedPluginRegistrant.*
+
+.vscode/
+coverage/
+example2/
+test/src/failures/
+/graphify-out
+
+# --- tracked in git, but not worth publishing ---
+
+# Screenshots: the README links them from raw.githubusercontent, so pub.dev
+# renders them without a copy in the archive.
+media/
+
+# Benchmark inputs and scratch scripts.
+script/
+
+# Example app: pub.dev shows lib/ and pubspec.yaml on the example tab; the
+# per-platform scaffolding, the 4 MB suggestion corpus and the bundled font
+# only matter to someone who cloned the repo.
+example/assets/
+example/fonts/
+example/android/
+example/ios/
+example/linux/
+example/macos/
+example/web/
+example/windows/
+example/test/
