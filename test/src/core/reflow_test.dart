@@ -53,6 +53,29 @@ void main() {
     expect(terminal.buffer.lines[2].isWrapped, isTrue);
   });
 
+  test(
+    'reflow() moves an anchor sitting exactly on a wrap boundary to the '
+    'line its cell moves to, not the line before it',
+    () {
+      final terminal = Terminal();
+
+      terminal.write('1234567890abcdefg');
+      // Reflowing to width 5 keeps '12345' on the original line (a
+      // resize(), not _addPart()) and hands '67890abcdefg' to _addPart(),
+      // which then wraps it into 'lines[1]'..'lines[3]'. Column 10 is the
+      // boundary _addPart() itself creates between 'lines[1]' ('67890')
+      // and 'lines[2]' ('abcde') - it must follow the 'a' it names onto
+      // 'lines[2]', not stay attached past the '0' on 'lines[1]'.
+      final anchor = terminal.buffer.lines[0].createAnchor(10);
+
+      terminal.resize(5, 10);
+
+      expect(anchor.attached, isTrue);
+      expect(anchor.line, same(terminal.buffer.lines[2]));
+      expect(anchor.x, 0);
+    },
+  );
+
   test('reflow() can reflow wide characters', () {
     final terminal = Terminal();
 
