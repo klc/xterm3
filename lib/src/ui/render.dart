@@ -45,6 +45,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     int? activeHyperlinkId,
     EditableRectCallback? onEditableRect,
     String? composingText,
+    String? predictionText,
   })  : _terminal = terminal,
         _controller = controller,
         _offset = offset,
@@ -57,6 +58,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _activeHyperlinkId = activeHyperlinkId,
         _onEditableRect = onEditableRect,
         _composingText = composingText,
+        _predictionText = predictionText,
         _painter = TerminalPainter(
           theme: theme,
           textStyle: textStyle,
@@ -180,6 +182,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set composingText(String? value) {
     if (value == _composingText) return;
     _composingText = value;
+    markNeedsPaint();
+  }
+
+  String? _predictionText;
+  set predictionText(String? value) {
+    if (value == _predictionText) return;
+    _predictionText = value;
     markNeedsPaint();
   }
 
@@ -674,6 +683,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     return false;
   }
 
+  /// Whether the caller-supplied [_predictionText] should be painted.
+  ///
+  /// IME composition always wins: a user actively composing a character must
+  /// not also see a speculative prediction drawn at the same spot.
+  bool get _isShowingPrediction {
+    if (_isComposingText) return false;
+    if (_predictionText case final predictionText?) {
+      return predictionText.isNotEmpty;
+    }
+    return false;
+  }
+
   bool get _shouldShowCursor {
     if (_alwaysShowCursor || _isComposingText) return true;
     if (!_terminal.cursorVisibleMode) return false;
@@ -855,9 +876,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// per pass would repeat the same lookups three times for one frame.
   _CursorPaintState _resolveCursorPaintState(int firstLine, int lastLine) {
     final type = _terminal.applicationCursorType ?? _cursorType;
-    final shouldPaint = _terminal.buffer.absoluteCursorY >= firstLine &&
-        _terminal.buffer.absoluteCursorY <= lastLine &&
-        _shouldShowCursor;
+    final isRowVisible = _terminal.buffer.absoluteCursorY >= firstLine &&
+        _terminal.buffer.absoluteCursorY <= lastLine;
+    final shouldPaint = isRowVisible && _shouldShowCursor;
     final shouldPaintBlock = shouldPaint && type == TerminalCursorType.block;
     final column = _cursorRenderColumn();
     final colors = _cursorColors(column);
@@ -865,6 +886,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     return _CursorPaintState(
       type: type,
+      isRowVisible: isRowVisible,
       shouldPaint: shouldPaint,
       shouldPaintBlock: shouldPaintBlock,
       hasFocus: _focusNode.hasFocus,
@@ -1031,10 +1053,20 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       lastLine,
     );
 
+    // Predicted text is anchored to the cursor but is not part of it: it has
+    // to stay readable while the cursor blinks off, and while an application
+    // has hidden the cursor entirely. So it is gated on the row being visible
+    // rather than on the cursor being painted.
+    if (_isShowingPrediction && cursor.isRowVisible) {
+      _paintCursorText(canvas, offset, cursorOffset, _predictionText);
+    }
+
     if (!cursor.shouldPaint) return;
 
+    // Composing text keeps the cursor forced visible (see _shouldShowCursor),
+    // so it can stay behind that guard.
     if (_isComposingText) {
-      _paintComposingText(canvas, offset, cursorOffset);
+      _paintCursorText(canvas, offset, cursorOffset, _composingText);
     }
 
     // The focused block cursor already went down in pass 2, underneath the
@@ -1085,6 +1117,24 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   double debugComposingTextStart(double cursorX, double textWidth) {
     return _composingTextStart(cursorX, textWidth);
   }
+
+  /// Whether [predictionText] is currently taking the paint path - i.e. it is
+  /// non-empty and IME composition is not active. Painted pixels aren't
+  /// practical to assert on in widget tests, so this exposes the same
+  /// decision the paint method makes.
+  @visibleForTesting
+  bool get debugIsShowingPrediction => _isShowingPrediction;
+
+  int _debugCursorTextPaints = 0;
+
+  /// How many times cursor-anchored text has actually been drawn.
+  ///
+  /// Counted inside the paint helper itself rather than recomputed from the
+  /// same conditions, so a test can pin that a prediction really is drawn on a
+  /// frame where the cursor is not — checking a mirrored copy of the gate
+  /// would keep passing if the gate in the paint pass changed.
+  @visibleForTesting
+  int get debugCursorTextPaints => _debugCursorTextPaints;
 
   (int, int) _visibleLineRange(
     int lineCount,
@@ -1160,15 +1210,20 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     return max(contentLeft, min(cursorX, latestStart));
   }
 
-  void _paintComposingText(
+  /// Paints [text] at the cursor, underlined, in the same style used for both
+  /// IME composing text and caller-supplied prediction text. Neither ever
+  /// touches the terminal buffer - this only draws over the cursor position.
+  void _paintCursorText(
     Canvas canvas,
     Offset paintOffset,
     Offset cursorOffset,
+    String? text,
   ) {
-    final composingText = _composingText;
-    if (composingText == null) {
+    if (text == null || text.isEmpty) {
       return;
     }
+
+    _debugCursorTextPaints++;
 
     final style = _painter.textStyle.toTextStyle(
       color: switch (_terminal.reverseDisplayMode) {
@@ -1186,7 +1241,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     builder.pushStyle(
       style.getTextStyle(textScaler: _painter.textScaler),
     );
-    builder.addText(composingText);
+    builder.addText(text);
 
     final paragraph = builder.build();
     paragraph.layout(const ParagraphConstraints(width: double.infinity));
@@ -1494,6 +1549,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 class _CursorPaintState {
   const _CursorPaintState({
     required this.type,
+    required this.isRowVisible,
     required this.shouldPaint,
     required this.shouldPaintBlock,
     required this.hasFocus,
@@ -1504,6 +1560,12 @@ class _CursorPaintState {
   });
 
   final TerminalCursorType type;
+
+  /// Whether the cursor's row is inside the viewport, regardless of whether
+  /// the cursor itself is being drawn this frame. Text anchored to the cursor
+  /// that is not part of it — a prediction — is gated on this instead of on
+  /// [shouldPaint], so it stays legible while the cursor blinks.
+  final bool isRowVisible;
 
   /// Whether the cursor is on a visible row and not currently hidden.
   final bool shouldPaint;

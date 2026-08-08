@@ -128,6 +128,7 @@ class TerminalView extends StatefulWidget {
     this.readOnly = false,
     this.hardwareKeyboardOnly = false,
     this.simulateScroll = true,
+    this.predictionText,
   });
 
   /// The underlying terminal that this widget renders.
@@ -232,6 +233,21 @@ class TerminalView extends StatefulWidget {
   /// keys to the application. This is standard behavior for most terminal
   /// emulators. True by default.
   final bool simulateScroll;
+
+  /// Text to display at the cursor, supplied by the caller, drawn underlined
+  /// in the same style as IME composing text.
+  ///
+  /// This is purely a rendering hook: the text is never written into the
+  /// terminal buffer, so it has no effect on the terminal's state or on what
+  /// the host process sees. It exists for callers that predict input locally
+  /// (for example to keep a high-latency connection feeling responsive) and
+  /// want to show that guess at the cursor until it is confirmed or
+  /// discarded, without risking a stale prediction ever becoming permanent
+  /// screen content.
+  ///
+  /// Suppressed while IME composition is active, since the two would
+  /// otherwise be drawn in the same place.
+  final String? predictionText;
 
   @override
   State<TerminalView> createState() => TerminalViewState();
@@ -463,6 +479,7 @@ class TerminalViewState extends State<TerminalView> {
           activeHyperlinkId: _activeHyperlinkId,
           onEditableRect: _onEditableRect,
           composingText: _composingText,
+          predictionText: widget.predictionText,
         );
       },
     );
@@ -935,6 +952,7 @@ class _TerminalView extends LeafRenderObjectWidget {
     this.activeHyperlinkId,
     this.onEditableRect,
     this.composingText,
+    this.predictionText,
   });
 
   final Terminal terminal;
@@ -969,6 +987,8 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final String? composingText;
 
+  final String? predictionText;
+
   @override
   RenderTerminal createRenderObject(BuildContext context) {
     return RenderTerminal(
@@ -988,6 +1008,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       activeHyperlinkId: activeHyperlinkId,
       onEditableRect: onEditableRect,
       composingText: composingText,
+      predictionText: predictionText,
     );
   }
 
@@ -1009,6 +1030,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..alwaysShowCursor = alwaysShowCursor
       ..activeHyperlinkId = activeHyperlinkId
       ..onEditableRect = onEditableRect
-      ..composingText = composingText;
+      ..composingText = composingText
+      ..predictionText = predictionText;
   }
 }

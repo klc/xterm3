@@ -495,6 +495,110 @@ void main() {
     setup.focusNode.dispose();
   });
 
+  test('prediction text takes the paint path when set', () {
+    final setup = _createRenderTerminal(predictionText: 'foo');
+    final render = setup.render;
+    final owner = PipelineOwner();
+
+    render.attach(owner);
+    render.layout(BoxConstraints.tight(Size(
+      render.cellSize.width * 10,
+      render.cellSize.height * 5,
+    )));
+
+    expect(render.debugIsShowingPrediction, isTrue);
+    // Painting must not raise even though prediction text is being drawn.
+    expect(
+      () => render.paint(
+        PaintingContext(ContainerLayer(), Offset.zero & render.size),
+        Offset.zero,
+      ),
+      returnsNormally,
+    );
+
+    render.detach();
+    setup.focusNode.dispose();
+  });
+
+  test('prediction text is suppressed while IME composition is active', () {
+    final setup = _createRenderTerminal(
+      composingText: 'compose',
+      predictionText: 'predict',
+    );
+    final render = setup.render;
+
+    expect(render.debugIsShowingPrediction, isFalse);
+
+    setup.focusNode.dispose();
+  });
+
+  test('null and empty prediction text show nothing', () {
+    final nullSetup = _createRenderTerminal();
+    expect(nullSetup.render.debugIsShowingPrediction, isFalse);
+    nullSetup.focusNode.dispose();
+
+    final emptySetup = _createRenderTerminal(predictionText: '');
+    expect(emptySetup.render.debugIsShowingPrediction, isFalse);
+    emptySetup.focusNode.dispose();
+  });
+
+  test('a prediction is still drawn on frames where the cursor is not', () {
+    // Predicted text is anchored to the cursor but is not part of it. Gating
+    // it on the cursor being painted would make it blink along with the cursor
+    // and vanish whenever an application hides the cursor, which is the whole
+    // reason it hangs off isRowVisible instead of shouldPaint.
+    final setup = _createRenderTerminal(predictionText: 'abc');
+    final render = setup.render;
+    final owner = PipelineOwner();
+
+    render.attach(owner);
+    render.layout(BoxConstraints.tight(Size(
+      render.cellSize.width * 10,
+      render.cellSize.height * 5,
+    )));
+
+    // DECTCEM off: the application has hidden the cursor outright.
+    setup.terminal.write('\x1b[?25l');
+    expect(setup.terminal.cursorVisibleMode, isFalse);
+
+    final before = render.debugCursorTextPaints;
+    render.paint(
+      PaintingContext(ContainerLayer(), Offset.zero & render.size),
+      Offset.zero,
+    );
+
+    expect(render.debugCursorTextPaints, greaterThan(before));
+
+    render.detach();
+    setup.focusNode.dispose();
+  });
+
+  test('predictionText setter updates state and requests a repaint', () {
+    final setup = _createRenderTerminal();
+    final render = setup.render;
+    final owner = PipelineOwner();
+
+    render.attach(owner);
+    render.layout(BoxConstraints.tight(Size(
+      render.cellSize.width * 10,
+      render.cellSize.height * 5,
+    )));
+
+    expect(render.debugIsShowingPrediction, isFalse);
+
+    render.predictionText = 'y';
+
+    expect(render.debugIsShowingPrediction, isTrue);
+    expect(render.debugNeedsPaint, isTrue);
+
+    render.predictionText = null;
+
+    expect(render.debugIsShowingPrediction, isFalse);
+
+    render.detach();
+    setup.focusNode.dispose();
+  });
+
   test('OSC background override honors configured background opacity', () {
     final setup = _createRenderTerminal(backgroundOpacity: 0.5);
     final render = setup.render;
@@ -610,6 +714,8 @@ void main() {
   double backgroundOpacity = 1,
   ViewportOffset? offset,
   void Function(String)? onOutput,
+  String? composingText,
+  String? predictionText,
 }) {
   final terminal = Terminal(onOutput: onOutput)..resize(10, 5);
   final controller = TerminalController();
@@ -628,6 +734,8 @@ void main() {
     focusNode: focusNode,
     cursorType: TerminalCursorType.block,
     alwaysShowCursor: false,
+    composingText: composingText,
+    predictionText: predictionText,
   );
   return (
     render: render,
