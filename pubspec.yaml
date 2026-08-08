@@ -1,6 +1,6 @@
 name: xterm3
 description: Maintained Flutter terminal emulator package with fast rendering and broad VT/xterm compatibility.
-version: 6.0.1
+version: 6.1.0
 homepage: https://github.com/klc/xterm3
 repository: https://github.com/klc/xterm3
 issue_tracker: https://github.com/klc/xterm3/issues

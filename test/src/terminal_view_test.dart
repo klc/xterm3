@@ -173,6 +173,75 @@ void main() {
     skip: !Platform.isMacOS,
   );
 
+  group('TerminalView.predictionText', () {
+    testWidgets('renders without error and takes the prediction paint path', (
+      tester,
+    ) async {
+      final terminal = Terminal();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TerminalView(terminal, predictionText: 'ls'),
+        ),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      expect(state.renderTerminal.debugIsShowingPrediction, isTrue);
+    });
+
+    testWidgets('null and empty strings draw nothing', (tester) async {
+      final terminal = Terminal();
+
+      await tester.pumpWidget(
+        MaterialApp(home: TerminalView(terminal)),
+      );
+      await tester.pump();
+
+      var state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      expect(state.renderTerminal.debugIsShowingPrediction, isFalse);
+
+      await tester.pumpWidget(
+        MaterialApp(home: TerminalView(terminal, predictionText: '')),
+      );
+      await tester.pump();
+
+      state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      expect(state.renderTerminal.debugIsShowingPrediction, isFalse);
+    });
+
+    testWidgets(
+      'changing predictionText on a mounted widget updates the render object',
+      (tester) async {
+        final terminal = Terminal();
+
+        await tester.pumpWidget(
+          MaterialApp(home: TerminalView(terminal)),
+        );
+        await tester.pump();
+
+        final state =
+            tester.state<TerminalViewState>(find.byType(TerminalView));
+        expect(state.renderTerminal.debugIsShowingPrediction, isFalse);
+
+        await tester.pumpWidget(
+          MaterialApp(home: TerminalView(terminal, predictionText: 'ls -al')),
+        );
+        await tester.pump();
+
+        expect(state.renderTerminal.debugIsShowingPrediction, isTrue);
+
+        await tester.pumpWidget(
+          MaterialApp(home: TerminalView(terminal)),
+        );
+        await tester.pump();
+
+        expect(state.renderTerminal.debugIsShowingPrediction, isFalse);
+      },
+    );
+  });
+
   group('TerminalView.readOnly', () {
     testWidgets('works', (tester) async {
       final terminalOutput = <String>[];

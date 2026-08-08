@@ -1,3 +1,18 @@
+## [6.1.0] - 2026-08-08
+
+* `TerminalView.predictionText` draws caller-supplied text at the cursor,
+  underlined, without it ever entering the buffer. It exists for clients that
+  can show a keystroke before the far end confirms it — a Mosh client's local
+  echo, say — where writing the character into the buffer would be wrong,
+  because a screen diff computed against the frame the server believes you have
+  will never repair a locally invented cell.
+* The text is suppressed while IME composition is active: a user composing a
+  character must not also be shown a speculative one.
+* It is drawn whenever the cursor's row is on screen, not when the cursor
+  itself is painted, so it stays readable through the cursor's blink-off phase
+  and while an application has hidden the cursor. Composition keeps its old
+  behaviour of forcing the cursor visible; predictions deliberately do not.
+
 ## [6.0.1] - 2026-08-06
 
 * No library changes. The published archive drops from 5 MB to 377 KB: 6.0.0
