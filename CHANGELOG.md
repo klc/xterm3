@@ -1,4 +1,4 @@
-## [6.1.1] - 2026-08-09
+## [6.1.2] - 2026-08-09
 
 * `Terminal.onReply` separates the data the terminal sends on its own
   initiative — device attributes, status and cursor-position reports, colour
@@ -10,6 +10,8 @@
   terminals and must not answer a query twice, needs the distinction. Replies
   fall back to `onOutput` when no reply sink is set, so nothing changes for
   existing callers.
+
+## [6.1.1] - 2026-08-09
 
 * `TerminalView.commitComposing()` emits a pending IME composition as terminal
   input and reports whether there was one. Input that reaches the terminal from
