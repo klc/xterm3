@@ -1,5 +1,16 @@
 ## [6.1.1] - 2026-08-09
 
+* `Terminal.onReply` separates the data the terminal sends on its own
+  initiative — device attributes, status and cursor-position reports, colour
+  and size queries, terminfo capabilities, focus reports, OSC 52 clipboard
+  reads — from the data the user types. Both have always travelled the same
+  wire, and the bytes cannot be told apart after the fact: an arrow key and a
+  cursor-position report are both an escape sequence. An embedder that reads
+  traffic as "the user is typing", or that mirrors one session across two
+  terminals and must not answer a query twice, needs the distinction. Replies
+  fall back to `onOutput` when no reply sink is set, so nothing changes for
+  existing callers.
+
 * `TerminalView.commitComposing()` emits a pending IME composition as terminal
   input and reports whether there was one. Input that reaches the terminal from
   outside the keyboard — a mobile extra-keys bar, a paste button — is appended

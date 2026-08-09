@@ -158,7 +158,27 @@ class Terminal
   /// Function that is called when the terminal emits data to the underlying
   /// program. This is typically caused by user inputs from [textInput],
   /// [keyInput], [mouseInput], or [paste].
+  ///
+  /// Unless [onReply] is set, this also receives the data the terminal sends
+  /// on its own initiative — see there.
   void Function(String data)? onOutput;
+
+  /// Function that is called when the terminal answers the program by itself:
+  /// device attributes, status and cursor-position reports, colour and size
+  /// queries, terminfo capabilities, focus reports, OSC 52 clipboard reads.
+  ///
+  /// These bytes travel the same wire as user input and the program cannot
+  /// tell them apart — but the embedder can, and sometimes must. An embedder
+  /// that treats traffic on [onOutput] as "the user is typing" (to hand
+  /// control back from a mirroring device, say) will otherwise be fooled the
+  /// moment a full-screen program probes the terminal at startup.
+  ///
+  /// Leave it null and replies go to [onOutput], as they always have.
+  void Function(String data)? onReply;
+
+  /// Where a self-initiated reply goes: [onReply] when the embedder asked for
+  /// the distinction, [onOutput] otherwise.
+  void Function(String data)? get _replySink => onReply ?? onOutput;
 
   /// Function that is called when the dimensions of the terminal change.
   void Function(int width, int height, int pixelWidth, int pixelHeight)?
@@ -700,7 +720,7 @@ class Terminal
     _focused = focused;
     if (_isDisposed) return;
     if (!_modes._reportFocusMode) return;
-    onOutput?.call(switch (focused) {
+    _replySink?.call(switch (focused) {
       true => _emitter.focusIn(),
       false => _emitter.focusOut(),
     });
@@ -845,7 +865,7 @@ class Terminal
   void enquiry() {
     final response = onEnquiry?.call();
     if (response == null || response.isEmpty) return;
-    onOutput?.call(response);
+    _replySink?.call(response);
   }
 
   @override
@@ -1157,22 +1177,22 @@ class Terminal
 
   @override
   void sendPrimaryDeviceAttributes() {
-    onOutput?.call(_emitter.primaryDeviceAttributes());
+    _replySink?.call(_emitter.primaryDeviceAttributes());
   }
 
   @override
   void sendSecondaryDeviceAttributes() {
-    onOutput?.call(_emitter.secondaryDeviceAttributes());
+    _replySink?.call(_emitter.secondaryDeviceAttributes());
   }
 
   @override
   void sendTertiaryDeviceAttributes() {
-    onOutput?.call(_emitter.tertiaryDeviceAttributes());
+    _replySink?.call(_emitter.tertiaryDeviceAttributes());
   }
 
   @override
   void sendOperatingStatus() {
-    onOutput?.call(_emitter.operatingStatus());
+    _replySink?.call(_emitter.operatingStatus());
   }
 
   @override
@@ -1185,34 +1205,34 @@ class Terminal
       true => max(0, _buffer.cursorY - _buffer.marginTop),
       false => _buffer.cursorY,
     };
-    onOutput?.call(_emitter.cursorPosition(x, y));
+    _replySink?.call(_emitter.cursorPosition(x, y));
   }
 
   @override
   void sendPrivateDeviceStatusReport(List<int> params) {
     switch (params) {
       case [6]:
-        onOutput?.call(
+        _replySink?.call(
           '\x1b[?${_buffer.cursorY + 1};${_buffer.cursorX + 1};1R',
         );
       case [15]:
-        onOutput?.call('\x1b[?13n');
+        _replySink?.call('\x1b[?13n');
       case [25]:
-        onOutput?.call('\x1b[?23n');
+        _replySink?.call('\x1b[?23n');
       case [26]:
-        onOutput?.call('\x1b[?27;1;0;1n');
+        _replySink?.call('\x1b[?27;1;0;1n');
       case [55]:
-        onOutput?.call('\x1b[?53n');
+        _replySink?.call('\x1b[?53n');
       case [56]:
-        onOutput?.call('\x1b[?57;0n');
+        _replySink?.call('\x1b[?57;0n');
       case [62]:
-        onOutput?.call('\x1b[0*{');
+        _replySink?.call('\x1b[0*{');
       case [63, final id]:
-        onOutput?.call('\x1bP$id!~0000\x1b\\');
+        _replySink?.call('\x1bP$id!~0000\x1b\\');
       case [75]:
-        onOutput?.call('\x1b[?70n');
+        _replySink?.call('\x1b[?70n');
       case [85]:
-        onOutput?.call('\x1b[?83n');
+        _replySink?.call('\x1b[?83n');
       case _:
         return;
     }
@@ -1235,7 +1255,7 @@ class Terminal
       right ?? viewWidth,
     );
     final checksumText = checksum.toRadixString(16).padLeft(4, '0');
-    onOutput?.call('\x1bP$id!~${checksumText.toUpperCase()}\x1b\\');
+    _replySink?.call('\x1bP$id!~${checksumText.toUpperCase()}\x1b\\');
   }
 
   int _rectChecksum(int top, int left, int bottom, int right) {
@@ -1309,7 +1329,7 @@ class Terminal
   void sendColorScheme() {
     final colorScheme = onColorSchemeQuery?.call();
     if (colorScheme == null) return;
-    onOutput?.call(_emitter.colorScheme(colorScheme));
+    _replySink?.call(_emitter.colorScheme(colorScheme));
   }
 
   void reportColorSchemeChange() {
@@ -1319,12 +1339,12 @@ class Terminal
 
   @override
   void sendXtVersion() {
-    onOutput?.call(_emitter.xtVersion(onXtVersionQuery?.call()));
+    _replySink?.call(_emitter.xtVersion(onXtVersionQuery?.call()));
   }
 
   @override
   void sendStatusString(String query) {
-    onOutput?.call(_emitter.statusString(_statusString(query)));
+    _replySink?.call(_emitter.statusString(_statusString(query)));
   }
 
   @override
@@ -1337,7 +1357,7 @@ class Terminal
       rows: viewHeight,
     );
     if (value == null) return;
-    onOutput?.call(_emitter.terminfoCapability(key, value));
+    _replySink?.call(_emitter.terminfoCapability(key, value));
   }
 
   @override
@@ -1694,30 +1714,30 @@ class Terminal
 
   @override
   void sendSize() {
-    onOutput?.call(_emitter.size(viewHeight, viewWidth));
+    _replySink?.call(_emitter.size(viewHeight, viewWidth));
   }
 
   @override
   void sendPixelSize() {
     final pixelWidth = viewWidth * _cellPixelWidth;
     final pixelHeight = viewHeight * _cellPixelHeight;
-    onOutput?.call('\x1b[4;$pixelHeight;${pixelWidth}t');
+    _replySink?.call('\x1b[4;$pixelHeight;${pixelWidth}t');
   }
 
   @override
   void sendCellSize() {
-    onOutput?.call('\x1b[6;$_cellPixelHeight;${_cellPixelWidth}t');
+    _replySink?.call('\x1b[6;$_cellPixelHeight;${_cellPixelWidth}t');
   }
 
   @override
   void sendWindowReport() {
-    onOutput?.call('\x1b[$viewHeight;$viewWidth;1;1;1"w');
+    _replySink?.call('\x1b[$viewHeight;$viewWidth;1;1;1"w');
   }
 
   @override
   void sendTerminalStateReport(int request) {
     if (request != 1) return;
-    onOutput?.call('\x1bP1\$s\x1b\\');
+    _replySink?.call('\x1bP1\$s\x1b\\');
   }
 
   @override
@@ -1736,7 +1756,7 @@ class Terminal
       96 => 1,
       _ => 0,
     };
-    onOutput
+    _replySink
         ?.call('\x1bP$size!u${_settings.preferredSupplementalSetFinal}\x1b\\');
   }
 
@@ -1762,7 +1782,7 @@ class Terminal
       true => 'A',
       false => '@',
     };
-    onOutput?.call(
+    _replySink?.call(
       '\x1bP1\$u$row;$column;1;$rendition;$attributes;$flags;0;1;@BBBB\x1b\\',
     );
   }
@@ -1782,13 +1802,13 @@ class Terminal
       if (!_tabStops.isSetAt(column)) continue;
       stops.add('${column + 1}');
     }
-    onOutput?.call('\x1bP2\$u${stops.join('/')}\x1b\\');
+    _replySink?.call('\x1bP2\$u${stops.join('/')}\x1b\\');
   }
 
   void _sendInBandSizeReport() {
     final pixelWidth = viewWidth * _cellPixelWidth;
     final pixelHeight = viewHeight * _cellPixelHeight;
-    onOutput?.call('\x1b[48;$viewHeight;$viewWidth;$pixelHeight;$pixelWidth'
+    _replySink?.call('\x1b[48;$viewHeight;$viewWidth;$pixelHeight;$pixelWidth'
         't');
   }
 
@@ -2061,7 +2081,7 @@ class Terminal
       true => '?',
       false => '',
     };
-    onOutput?.call('\x1b[$privateMarker$mode;$state\x24y');
+    _replySink?.call('\x1b[$privateMarker$mode;$state\x24y');
   }
 
   int _ansiModeState(int mode) {
@@ -2281,7 +2301,7 @@ class Terminal
 
   @override
   void reportKittyKeyboardMode() {
-    onOutput
+    _replySink
         ?.call('\x1b[?${_modes._kittyKeyboardMode & _kittyKeyboardModeMask}u');
   }
 
@@ -2360,7 +2380,7 @@ class Terminal
 
   @override
   void reportTitle() {
-    onOutput?.call('\x1b]l${_title ?? ''}\x1b\\');
+    _replySink?.call('\x1b]l${_title ?? ''}\x1b\\');
   }
 
   @override
@@ -2391,7 +2411,7 @@ class Terminal
 
   @override
   void reportITerm2CellSize() {
-    onOutput?.call(
+    _replySink?.call(
       '\x1b]1337;ReportCellSize=$_cellPixelHeight;$_cellPixelWidth\x1b\\',
     );
   }
@@ -2411,7 +2431,7 @@ class Terminal
     if (value == null) return;
 
     final encoded = base64.encode(utf8.encode(value));
-    onOutput?.call('\x1b]1337;ReportVariable=$encoded\x1b\\');
+    _replySink?.call('\x1b]1337;ReportVariable=$encoded\x1b\\');
   }
 
   String? _resolveITerm2Variable(String name) {
@@ -2715,7 +2735,7 @@ class Terminal
     final color =
         _colors._indexedColorOverrides[index] ?? onColorQuery?.call(4, index);
     if (color == null) return;
-    onOutput?.call('\x1b]4;$index;${_formatOscColor(color)}\x1b\\');
+    _replySink?.call('\x1b]4;$index;${_formatOscColor(color)}\x1b\\');
   }
 
   @override
@@ -2759,7 +2779,7 @@ class Terminal
     final color = _colors._specialColorOverrides[storageIndex] ??
         onColorQuery?.call(5, storageIndex);
     if (color == null) return;
-    onOutput?.call('\x1b]$code;$reportIndex;${_formatOscColor(color)}\x1b\\');
+    _replySink?.call('\x1b]$code;$reportIndex;${_formatOscColor(color)}\x1b\\');
   }
 
   @override
@@ -2841,7 +2861,7 @@ class Terminal
     };
     final color = override ?? onColorQuery?.call(code, null);
     if (color == null) return;
-    onOutput?.call('\x1b]$code;${_formatOscColor(color)}\x1b\\');
+    _replySink?.call('\x1b]$code;${_formatOscColor(color)}\x1b\\');
   }
 
   @override
@@ -2929,7 +2949,7 @@ class Terminal
       if (text == null) return;
 
       final encoded = base64.encode(utf8.encode(text));
-      onOutput?.call('\x1b]52;$clipboardSelector;$encoded\x1b\\');
+      _replySink?.call('\x1b]52;$clipboardSelector;$encoded\x1b\\');
     }));
   }
 
