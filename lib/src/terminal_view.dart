@@ -598,8 +598,21 @@ class TerminalViewState extends State<TerminalView> {
   /// Clears a pending IME composition and resets the platform editing state.
   /// Call after input is sent to the terminal from outside the keyboard, such
   /// as a mobile extra-keys bar.
+  ///
+  /// This discards whatever the IME was still holding. To keep it, commit it
+  /// with [commitComposing] instead.
   void resetEditingState() {
     _customTextEditKey.currentState?.resetEditingState();
+  }
+
+  /// Commits a pending IME composition as terminal input, and reports whether
+  /// there was one. See [CustomTextEditState.commitComposing].
+  ///
+  /// Call *before* sending input that bypasses the keyboard (an extra-keys bar
+  /// key, a paste button) so the terminal receives what the user typed ahead of
+  /// it, in the order they typed it.
+  bool commitComposing() {
+    return _customTextEditKey.currentState?.commitComposing() ?? false;
   }
 
   Rect get cursorRect {

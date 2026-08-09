@@ -389,4 +389,81 @@ void main() {
       expect(tester.testTextInput.editingState?['text'], '  ');
     },
   );
+
+  group('commitComposing (input from outside the keyboard)', () {
+    testWidgets(
+      'flushes an open composition so the next out-of-band key lands after it',
+      (tester) async {
+        final (output, viewKey) = await pumpTerminal(
+          tester,
+          deleteDetection: true,
+        );
+
+        // The user types a path fragment. It is still composing, so the
+        // terminal has not seen it.
+        compose(tester, '  ', 'www', collapsed: false);
+        expect(output, isEmpty);
+
+        // An extra-keys bar is about to send Tab. Committing first is what
+        // makes the shell complete `www` instead of an empty line.
+        expect(viewKey.currentState!.commitComposing(), isTrue);
+        expect(output.join(), 'www');
+        expect(tester.testTextInput.editingState?['text'], '  ');
+
+        // Nothing composing left to commit.
+        expect(viewKey.currentState!.commitComposing(), isFalse);
+        expect(output.join(), 'www');
+      },
+    );
+
+    testWidgets('ignores the IME echo of a committed composition', (
+      tester,
+    ) async {
+      final (output, viewKey) = await pumpTerminal(
+        tester,
+        deleteDetection: true,
+      );
+
+      compose(tester, '  ', 'www', collapsed: false);
+      expect(viewKey.currentState!.commitComposing(), isTrue);
+
+      // Android keyboards commonly follow an out-of-band commit with their own
+      // delayed one. Emitting that too would type the word twice.
+      compose(tester, '  ', 'www', collapsed: true);
+      expect(output.join(), 'www');
+    });
+
+    testWidgets('keeps the same word typed again after a commit', (
+      tester,
+    ) async {
+      final (output, viewKey) = await pumpTerminal(
+        tester,
+        deleteDetection: true,
+      );
+
+      compose(tester, '  ', 'www', collapsed: false);
+      expect(viewKey.currentState!.commitComposing(), isTrue);
+
+      // The echo guard is spent on the very next editing value, so a repeat of
+      // the same word later is genuine input, not an echo.
+      compose(tester, '  ', 'ls', collapsed: true);
+      compose(tester, '  ', 'www', collapsed: false);
+      compose(tester, '  ', 'www', collapsed: true);
+
+      expect(output.join(), 'wwwlswww');
+    });
+
+    testWidgets('an action commit is not replayed by its delayed echo', (
+      tester,
+    ) async {
+      final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+
+      compose(tester, '  ', 'htop', collapsed: false);
+      await tester.testTextInput.receiveAction(TextInputAction.newline);
+      // The IME's delayed commit arrives after the newline was already sent.
+      compose(tester, '  ', 'htop', collapsed: true);
+
+      expect(output.join(), 'htop\r');
+    });
+  });
 }

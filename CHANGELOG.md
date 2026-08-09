@@ -1,3 +1,21 @@
+## [6.1.1] - 2026-08-09
+
+* `TerminalView.commitComposing()` emits a pending IME composition as terminal
+  input and reports whether there was one. Input that reaches the terminal from
+  outside the keyboard — a mobile extra-keys bar, a paste button — is appended
+  to what the terminal has already received, but an open composition has not
+  been received yet: it is deferred until the composition resolves. Sending Tab
+  while the IME still holds `www` completed an empty line rather than `www`.
+  Callers should commit before such a key; `resetEditingState()` remains for
+  when the composition is genuinely to be thrown away.
+* Fixed an out-of-band commit being typed twice in `deleteDetection` mode. The
+  guard that swallows the IME's delayed echo of a committed composition existed
+  only on the non-`deleteDetection` path, so on Android — where terminals turn
+  `deleteDetection` on to keep backspace working — pressing Enter sent the
+  command and then the keyboard's own delayed commit replayed the whole word on
+  the next line. The guard now covers both paths and is spent on the very next
+  editing value, so the same word typed again later is still genuine input.
+
 ## [6.1.0] - 2026-08-08
 
 * `TerminalView.predictionText` draws caller-supplied text at the cursor,

@@ -335,6 +335,12 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     final text = value.text;
     final initLength = _initEditingState.text.length;
 
+    // An out-of-band commit is echoed by the IME on the very next editing
+    // value, if at all, so the guard lives for exactly this call. Holding it
+    // any longer would swallow the same word typed again later.
+    final actionCommittedText = _actionCommittedText;
+    _actionCommittedText = null;
+
     if (value.composing.isValid) {
       final composingText = value.composing.textInside(text);
       final base = value.composing.start;
@@ -408,6 +414,29 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     if (text.length > initLength) {
       final textDelta = text.substring(initLength);
+
+      // A composition committed out of band — by an action (Enter) or by
+      // [commitComposing] — is often echoed back by the IME a moment later as
+      // its own delayed commit. It has already been emitted, so swallow the
+      // echo instead of sending the whole word to the terminal a second time.
+      if (actionCommittedText != null) {
+        if (textDelta == actionCommittedText) {
+          _resetEditingState();
+          return;
+        }
+
+        // Some IMEs batch the next edit into that delayed commit. Only the
+        // echoed part is dropped; the rest is genuinely new input.
+        if (textDelta.startsWith(actionCommittedText)) {
+          final remainingText = textDelta.substring(actionCommittedText.length);
+          if (remainingText.isNotEmpty) {
+            widget.onInsert(remainingText);
+          }
+          _resetEditingState();
+          return;
+        }
+      }
+
       if (textDelta.isNotEmpty) {
         widget.onInsert(textDelta);
       }
@@ -426,6 +455,21 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     widget.onAction(action);
   }
 
+  /// Commits a pending IME composition as terminal input, and reports whether
+  /// there was one.
+  ///
+  /// Input that reaches the terminal from outside the keyboard — a mobile
+  /// extra-keys bar, a paste button — is appended to what the terminal has
+  /// already received, but an open composition has *not* been received yet: it
+  /// is still sitting in the IME, deferred until the composition resolves. Send
+  /// such input without committing first and it lands against a line the user
+  /// cannot see the rest of, so `www` + Tab completes an empty line instead of
+  /// `www`.
+  ///
+  /// Prefer this over [resetEditingState] for anything that types: resetting
+  /// throws the composition away, which loses what the user typed.
+  bool commitComposing() => _commitComposingTextForAction();
+
   String _textDelta(TextEditingValue value) {
     final initialTextLength = _initEditingState.text.length;
     if (value.text.length < initialTextLength) {
@@ -435,9 +479,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     return value.text.substring(initialTextLength);
   }
 
-  void _commitComposingTextForAction() {
+  /// Emits an open composition as input and clears it. Returns false when
+  /// there was nothing composing.
+  bool _commitComposingTextForAction() {
     if (_currentEditingState.composing.isCollapsed) {
-      return;
+      return false;
     }
 
     final textDelta = _textDelta(_currentEditingState);
@@ -449,6 +495,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     }
 
     _resetEditingState();
+    return true;
   }
 
   void _resetEditingState() {
