@@ -714,7 +714,7 @@ class TerminalViewState extends State<TerminalView> {
     return false;
   }
 
-  void _onTapDown(_) {
+  void _onTapDown(TapDownDetails _) {
     if (_controller.selection != null) {
       _controller.clearSelection();
     } else {

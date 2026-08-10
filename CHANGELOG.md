@@ -1,3 +1,8 @@
+## [6.1.3] - 2026-08-10
+
+* Add explicit type annotations to the terminal tap-down callback and circular
+  buffer index assignment operator to satisfy pub.dev's stricter analysis.
+
 ## [6.1.2] - 2026-08-09
 
 * `Terminal.onReply` separates the data the terminal sends on its own
