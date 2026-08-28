@@ -30,6 +30,20 @@ class ByteConsumer {
     _advancePastConsumedBlocks();
     final data = _queue.first.data;
     final first = data.codeUnitAt(_currentOffset);
+
+    // A unit that does not start a surrogate pair is one code unit long and
+    // is its own code point. That is what the two calls below work out for it
+    // anyway, each re-running this same test. Everything outside astral text
+    // takes this branch: CSI parameters, C0 controls, Latin, Cyrillic, and the
+    // per-code-point path for text the run scan could not batch.
+    if (!_isHighSurrogate(first)) {
+      _currentOffset++;
+      _remainingCodeUnits--;
+      _totalConsumed++;
+      _rollbackAvailable++;
+      return first;
+    }
+
     final codePoint = _decodeCodePoint(data, _currentOffset, first);
     final codeUnitLength = _codePointCodeUnitLength(
       data,
