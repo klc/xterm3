@@ -749,6 +749,60 @@ digit just consumed was the last byte of the chunk.
 Anything reaching into the queue after `consume()` inside the CSI loop has to
 assume the queue may now be empty.
 
+## Where the scrollback cost actually is — 2026-08-29
+
+The `scrollback` column runs with `maxLines: 0`, which `Buffer` widens to
+`max(maxLines, viewHeight)`. The ring is still 50 lines, the allocation per
+scroll is the same and so is the eviction bookkeeping — the only thing that
+changes is how many lines stay alive. On `ascii` that column is worth 328 ns
+per line and `line_reuse_probe` put allocation on its own at 92 ns, so
+`script/scrollback_cost_probe.dart` went looking for the other 236.
+
+It is the live set. A line writing 30 cells costs 151 ns with 50 alive and
+**561 ns with 10000 alive** — the collector promoting each line's 3072-byte
+backing store into old space, at a copy proportional to the store rather than
+to the text in it.
+
+| depth | live | w=30 | w=60 | w=120 | w=192 |
+|---|---|---|---|---|---|
+| 50 | 0 MB | 151 | 174 | 274 | 388 |
+| 1000 | 3 MB | 169 | 203 | 307 | 424 |
+| 4000 | 12 MB | 285 | 326 | 415 | 533 |
+| 10000 | 29 MB | 561 | 629 | 767 | 814 |
+
+So the lever is line size, which is the half of Phase 5's closing line nobody
+had tried. Allocating each line at `_calcCapacity` of the width it actually
+writes, at 10000 deep: 561 → 180 at 30 cells, 629 → 345 at 60, 767 → 590 at
+120. It would also take scrollback's resident cost from 30 MB down to roughly
+10-15 MB on a realistic mix.
+
+### Trimming on the way into scrollback does not work
+
+The obvious form, and the one with the narrow blast radius: keep the line at
+full capacity while it is in the viewport, give it a right-sized store when it
+drops into scrollback. Nothing in the write path changes, the painter already
+drives off `line.length`, `getText` skips zero code points so its output is
+unchanged, and `Buffer.resize` already grows lines back on a window change.
+
+`script/trim_variant_probe.dart` says no, in every cell measured:
+
+| depth | written | today | trim | born small |
+|---|---|---|---|---|
+| 1000 | 30 | 171 | 224 | 79 |
+| 1000 | 95 | 248 | 336 | 186 |
+| 10000 | 30 | 544 | 601 | 181 |
+| 10000 | 95 | 646 | 819 | 394 |
+| 10000 | 120 | 691 | 970 | 581 |
+
+Trimming spends an allocation and a copy of the small store to save promoting
+the large one, and the two are the same order of magnitude. The saving is in
+never allocating the large store, not in handing it back. Recorded because this
+is the form of the idea that looks best on paper.
+
+Not implemented: a line born at the 64-cell floor and grown from inside
+`BufferLine`'s own write methods. Ceiling measured at 1.2-3.0x, cost on the
+per-code-point write path unmeasured.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and

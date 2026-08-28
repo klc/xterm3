@@ -770,7 +770,110 @@ Faz 5.1'in üç adayının üçü de kapandı: satır havuzu reddedildi (Faz 5.3
 
 ---
 
-## Faz 6 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
+## Faz 6 — Scrollback maliyetinin kaynağı — **ÖLÇÜLDÜ, UYGULANMADI (2026-08-29)**
+
+Faz 6 "flood altında ileri sarma" olarak açılmıştı. Ölçüm cepheyi yeniden
+çerçeveledi: hedeflenen maliyetin kaynağı bulundu ve ona kayıpsız, API'siz bir
+yoldan saldırılabiliyor. Flood fikri aşağıda Faz 7 adayına indi.
+
+**Araçlar.** `script/scrollback_cost_probe.dart` ve
+`script/trim_variant_probe.dart` — Flutter yok, xterm3 yok, saf `Uint32List`.
+
+### Kaynak: canlı küme, allocation değil
+
+`parse_bench`'in `scrollback` kolonu `maxLines: 0` ile koşuyor, ama
+`buffer.dart:81` bunu `max(maxLines, viewHeight)`'a genişletiyor. Yani ring
+hâlâ 50 satır, scroll başına allocation aynı, tahliye muhasebesi aynı. Tek
+değişen: canlı satır sayısı 50 mi 10000 mü.
+
+`ascii`'de o kolon satır başına 328 ns ediyor. Faz 5.3 allocation'ı tek başına
+92 ns ölçmüştü. Kalan 236 ns nerede?
+
+| depth | canlı | w=30 | w=60 | w=120 | w=192 |
+|---|---|---|---|---|---|
+| 50 | 0 MB | 151 | 174 | 274 | 388 |
+| 200 | 1 MB | 144 | 180 | 283 | 400 |
+| 1000 | 3 MB | 169 | 203 | 307 | 424 |
+| 4000 | 12 MB | 285 | 326 | 415 | 533 |
+| 10000 | 29 MB | **561** | 629 | 767 | 814 |
+
+Canlı küme sürüklüyor. 30 sütun yazan bir satır 50 canlıyken 151 ns, 10000
+canlıyken 561 ns. Bu, GC'nin her satırın 3072 baytlık backing store'unu old
+space'e terfi ettirirken yaptığı kopya — ve kopya store'un boyutuyla orantılı,
+içindeki metinle değil.
+
+**Yani kaldıraç satırların sayısı değil boyutu.** Faz 5'in kapanış cümlesi
+tam bunu söylüyordu ("allocate edilen satırların sayısını **ya da boyutunu**
+azaltmalı") ve boyut yarısı hiç denenmemişti.
+
+Aynı satırlar, `_calcCapacity`'nin yazılan genişlik için vereceği kapasiteyle
+(taban 64) allocate edilirse, derinlik 10000'de:
+
+| yazılan | kapasite | bugün | doğuştan küçük | kazanç |
+|---|---|---|---|---|
+| 30 | 64 | 561 | **180** | 3.1× |
+| 60 | 96 | 629 | **345** | 1.8× |
+| 120 | 128 | 767 | **590** | 1.3× |
+
+Yan kazanç: 10000 satırlık scrollback şu an 30 MB tutuyor; gerçekçi bir shell
+çıktısı karışımında bu ~10-15 MB'a iner. ShellVibe mobilde ayrıca değerli.
+
+### Reddedilen form: viewport'tan çıkarken trim
+
+Fikrin belirgin hâli ve blast radius'u en dar olanı: satır viewport'ta tam
+kapasitede yaşar, scrollback'e düşerken yazılan genişliğine kopyalanır. Yazma
+yoluna hiç dokunmaz, render zaten `line.length` ile dönüyor
+(`painter.dart:494`, `:580`, `:309`), `getText` sıfır codepoint'li hücreleri
+atladığı için çıktı değişmez, ve `Buffer.resize` (`buffer.dart:1672`) pencere
+değişiminde satırları zaten `newWidth`'e büyütüyor. Yani uygulanabilirliği
+temizdi.
+
+**Ölçüm her hücrede negatif çıktı.**
+
+| depth | yazılan | bugün | trim | doğuştan küçük |
+|---|---|---|---|---|
+| 1000 | 30 | 171 | 224 (−%24) | 79 |
+| 1000 | 95 | 248 | 336 (−%26) | 186 |
+| 4000 | 60 | 317 | 396 (−%20) | 181 |
+| 10000 | 30 | 544 | 601 (−%10) | 181 |
+| 10000 | 95 | 646 | 819 (−%21) | 394 |
+| 10000 | 120 | 691 | 970 (−%29) | 581 |
+
+Aritmetik basit: trim, promotion'da kazandığı ~250 ns'i geri vermek için küçük
+bir allocate artı kopya ödüyor ve o ikisi aynı büyüklük mertebesinde. **Kazancı
+veren şey büyük store'u geri vermek değil, hiç allocate etmemek.**
+
+Bu form kapandı. Kayda geçiyor çünkü fikrin en cazip görünen hâli bu ve biri
+tekrar uzanmadan önce ölçüldüğünü bilmeli.
+
+### Açık aday: doğuştan küçük satır
+
+Ölçülmüş tavan 1.2–3.0×. Uygulanmadı.
+
+Taslak: satır `_calcCapacity`'nin tabanı olan 64 hücreyle doğar; büyütme
+`line.dart`'ın yazma metotlarının içinde olur (`setAsciiCells`, `setCell`,
+`eraseRange`, `insertCells`, `copyFrom` — her biri yazacağı aralık için
+kapasite garantiler), böylece `Buffer` hiç değişmez ve
+`_data.length == _calcCapacity(_length) * _cellSize` invariant'ı korunur —
+okuma yolunda hiçbir kontrol gerekmez.
+
+Bilinen riskler:
+- Sıcak yazma yolunda kapasite karşılaştırması: `setAsciiCells`'te çağrı
+  başına bir tane (ucuz), `setCell`'de hücre başına bir tane (kod-noktası
+  yolu, ölçülmeli).
+- Geniş satırlarda büyütme kopyaları. `_calcCapacity` bilerek doubling
+  yapmıyor (`line.dart:745` yorumu: doubling throughput'u kötüleştirmişti), yani
+  büyüme adımı 32 hücre ve tam genişlik bir satır birkaç kopya ödeyebilir.
+- `altscreen` her satırı tam genişlik yazıyor; orada net kayıp olabilir.
+  Satırlar bir kez büyüyüp öyle kaldığı için muhtemelen tek seferlik, ama
+  ölçülmeden bilinmez.
+
+Adım adım ölçülmeli: önce kapasite muhasebesi tek başına (davranış değişmeden,
+sıcak yol maliyetini görmek için), sonra küçük doğum.
+
+---
+
+## Faz 7 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
 
 Saha semptomu (ShellVibe'da vtebench sırasında donma) write hızıyla kapanmıyor,
 ve bu aritmetikle görülebiliyor: vtebench 1 MiB'ı 11–24 ms'de boşaltıyor, yani
@@ -807,10 +910,13 @@ Bu round'un dışında bırakıldı: API yüzeyi kararı gerektiriyor, ve mikro-
 | 5.2 | `consume()` ASCII fast path | 5.1 | **`master`'a aday** — sgr +%6.6, regresyon yok |
 | 5.3 | Satır havuzu, 2. deneme | 5.1 | **reddedildi** — uygulanmadan ölçüldü, kapandı |
 | 5.4 | CSI parametre toplu tarama | 5.2 | **reddedildi** — iki uygulama, ikisi de negatif |
-| 6 | Flood altında ileri sarma | 5.1 | önerildi, ölçülmedi |
+| 6 | Scrollback maliyetinin kaynağı | 5.1 | ölçüldü; trim reddedildi, doğuştan küçük açık aday |
+| 7 | Flood altında ileri sarma | 6 | önerildi, ölçülmedi |
 
-Faz 5.1 yalnızca `bin/` ve `script/`'e dokunuyor, `lib/` altında hiçbir değişiklik
-yok — ürün riski sıfır, çıktısı karar verilebilir sayılar. Faz 6 bilerek ertelendi.
+Faz 5.1, 5.3, 5.4 ve 6 `lib/` altına hiç dokunmadı — üçü ölçüm ve kayıt, biri
+uygulanmadan reddedilen bir aday. `lib/`'i değiştiren tek faz 5.2. Faz 7 bilerek
+ertelendi; Faz 6 aynı maliyete kayıpsız ve API'siz bir yoldan saldıracak bir aday
+bıraktığı için önceliği düştü.
 
 `master` Faz 0 ve Faz 2'yi aldı — ölçüm altyapısı ve davranış değiştirmeyen pass
 ayrımı. Faz 1 ve Faz 3 `render-line-picture-cache` branch'inde duruyor.
