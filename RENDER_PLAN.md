@@ -313,11 +313,99 @@ Yapılacaklar:
    dar. Küçük, hedefli, ölçülebilir.
 2. **Flood 48 fps.** 32 MiB'lık akışta output frame pipeline'ını aç bırakıyor
    (70-75 MiB/s). Bu parse-per-write yolu; render tarafında yapılacak hiçbir şey
-   düzeltmiyor. Ölçülen tek "bütçeyi zorlayan" davranış bu.
+   düzeltmiyor. Ölçülen tek "bütçeyi zorlayan" davranış bu. **Faz 5'te ölçüldü ve
+   ayrıştırıldı.**
 
 Ayrıca `BENCHMARKS.md`'de iki açık ölçüm borcu var: `sgr` workload'ının viewport'u
 takip edip etmediği, ve `fullscreen`'in koşular arası tek yönlü tırmanışının termal mi
 gerçek mi olduğu.
+
+---
+
+## Faz 5 — Write path — **ÖLÇÜLDÜ, BİR DENEY REDDEDİLDİ (2026-08-29)**
+
+Faz 4'ün ikinci adayı (`flood`, 48 fps) sahada doğrulandı. ShellVibe'da yerel PTY
+üstünde vtebench koşarken pencere donuyor: vtebench 1 MiB'lık örnekleri 11–24ms'de
+"drenaj edildi" diye raporluyor, 2 saniyede bitiyor, ama uygulama o sırada yanıt
+vermiyor ve bitişten sonra da bir süre arkadan yetişiyor. Faz 4'ün dediği aynen
+çıktı: render tarafında yapılacak hiçbir şey bunu düzeltmiyor.
+
+**Not:** Bu ölçümlerin hiçbiri Flutter içermiyor. `bin/parse_bench.dart`, 170x50
+grid, workload başına 32 MiB, 8 KiB chunk (bir PTY okumasının verdiği boyut),
+`dart compile exe` ile derlenmiş.
+
+### Taban — M-serisi, macOS
+
+| workload | full | parser | buffer% | scrollback kapalı | grapheme kapalı |
+|---|---|---|---|---|---|
+| ascii | 102 | 431 | 76% | 173 | 104 |
+| ascii-long-lines | 153 | 825 | 81% | 230 | 147 |
+| sgr | **76** | **99** | 23% | 85 | 75 |
+| utf8 | 59 | 265 | 78% | 86 | 69 |
+| cyrillic | 83 | 296 | 72% | 140 | 83 |
+| altscreen | 170 | 234 | 27% | 174 | 174 |
+
+Birimler MiB/s; `buffer%`, tam yol süresinin parse olmayan kısmı.
+
+### Taban ne söylüyor
+
+1. **Escape parser çoğu yükte darboğaz değil.** `ascii`'de parser tek başına
+   431 MiB/s, tam yol 102. Zamanın %76–81'i buffer yazımında. "Parser yavaş"
+   teşhisi bu yükler için yanlış olurdu.
+2. **SGR istisna.** Orada buffer sadece %23 — kalan %77 parser'ın kendisi, ve
+   76 MiB/s ile en yavaş ikinci yol. Renkli çıktı gerçek kullanımda baskın
+   olduğu için pratikte en çok ödenen yol bu.
+3. **Scrollback tutmak pahalı.** Kapatınca ascii 102 → 173 (+%70), cyrillic
+   83 → 140 (+%69), utf8 59 → 86 (+%46).
+
+### Reddedilen deney — tahliye edilen satırları havuzlamak
+
+**Hipotez.** Scroll'da her satır öne düşen bir satırı tahliye edip arkaya aynı
+boyda yenisini allocate ediyor (`buffer.dart` `_newEmptyLine`). Geniş bir
+grid'de her biri birkaç KiB'lık `Uint32List`, yani büyük bir dosyayı `cat`'lemek
+heap'i dosyanın kendisinden çok daha fazla çalkalıyor. Tahliye edilen depolamayı
+geri vermek steady state'i allocation'sız yapmalı. `IndexAwareCircularBuffer`'da
+`onEvict` hook'u bu iş için zaten duruyor.
+
+**Uygulama.** `Buffer`'da serbest liste (derinlik 64), `onEvict`'ten besleniyor,
+`_newEmptyLine` aynı genişlikte satır varsa oradan alıyor; `BufferLine.
+resetForReuse()` `_data`'yı `fillRange` ile sıfırlıyor, map'leri ve `isWrapped`'i
+temizliyor. Anchor taşıyan satırlar havuza alınmıyor (bir seçim kenarı, arama
+isabeti veya mark hâlâ o satırı gösteriyor olabilir).
+
+**Sonuç: yaklaşık 2 kat yavaş.** ascii 102 → 52, utf8 59 → 32.
+
+Temizlemeyi geçici olarak çıkarıp (o hâliyle yanlış, sadece ölçüm için) maliyet
+ayrıştırıldı:
+
+| workload | taban | havuz + temizleme | havuz, temizlemesiz |
+|---|---|---|---|
+| ascii | 102 | 52 | **147** |
+| ascii-long-lines | 153 | 77 | **209** |
+| sgr | 76 | 57 | 82 |
+| utf8 | 59 | 32 | **84** |
+| cyrillic | 83 | 42 | **131** |
+| altscreen | 170 | 174 | 174 |
+
+**Yani havuzlama fikri doğru, temizleme onu öldürüyor.** Geri dönüşümün kendisi
+scroll ağırlıklı yüklerde %37–58 kazandırıyor.
+
+**Kök neden.** Dart'ta taze bir `Uint32List` allocate etmek, mevcut birini
+temizlemekten ucuz. VM taze tipli veriyi işletim sisteminin zaten sıfırladığı
+sayfalardan veriyor, yani allocation'daki sıfırlama pratikte bedava; `fillRange`
+ise soğuk ve halihazırda fault'lanmış birkaç KiB'ı gerçekten yazıyor. İki yol da
+"aynı kadar sıfırlıyor", maliyetleri aynı değil.
+
+**Bir daha denenirse.** Tam temizlemeden kaçınmak şart. Tek makul yol satır
+başına "yazılmış en yüksek sütun" işareti tutup yalnızca o aralığı temizlemek —
+tipik kısa shell satırlarında öder, tam genişlik çıktıda ödemez, yani kazanç
+workload'a bağlı olur ve yine ölçülmeden birleştirilemez.
+
+**Yan bulgu.** `BufferLine.anchors` her çağrıda `UnmodifiableListView` allocate
+ediyor. Bu deneyde suçlu değildi (kaldırmak sayıyı 51 → 52 oynattı, gürültü),
+ama sıcak bir yolda kullanılacaksa allocation yapmayan bir `hasAnchors` gerekir.
+
+Kod `master`'a girmedi, branch silindi. Kalan değer bu kayıt.
 
 ---
 
@@ -330,6 +418,7 @@ gerçek mi olduğu.
 | 2 | Pass ayrımı (davranış sabit) | 0 | **`master`'da** |
 | 3 | Line picture cache | 1, 2 | yapıldı, branch'te kaldı (ölçüm negatif) |
 | 4 | Ölçüm + karar | 0, 3 | cevaplandı |
+| 5 | Write path ölçümü | 0 | ölçüldü; satır havuzu reddedildi (ölçüm negatif) |
 
 `master` Faz 0 ve Faz 2'yi aldı — ölçüm altyapısı ve davranış değiştirmeyen pass
 ayrımı. Faz 1 ve Faz 3 `render-line-picture-cache` branch'inde duruyor.
