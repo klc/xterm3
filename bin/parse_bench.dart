@@ -13,9 +13,10 @@
 // Every workload is fed in 8 KiB chunks, the size a PTY read hands over, and
 // the terminal is sized to the same 170x50 grid the render comparison uses.
 
-import 'package:xterm3/src/core/escape/handler.dart';
 import 'package:xterm3/src/core/escape/parser.dart';
 import 'package:xterm3/src/terminal.dart';
+
+import 'noop_escape_handler.dart';
 
 const _columns = 170;
 const _rows = 50;
@@ -50,8 +51,12 @@ void main(List<String> args) {
     // The same bytes through the parser with a handler that does nothing, so
     // the difference is everything the terminal does per token: cell writes,
     // scrolling, scrollback eviction, mode bookkeeping.
+    //
+    // [NoopEscapeHandler] implements every member explicitly. It must never
+    // grow a `noSuchMethod` - see that file's header for the measurement
+    // that fell over when it had one.
     final parserOnly = _measure(chunks, () {
-      final parser = EscapeParser(_NoopHandler());
+      final parser = EscapeParser(NoopEscapeHandler());
       return parser.write;
     });
 
@@ -83,7 +88,7 @@ void main(List<String> args) {
 
   print('');
   print('full       = Terminal.write, 10000 lines of scrollback');
-  print('parser     = EscapeParser with a handler that does nothing');
+  print('parser     = EscapeParser with a complete do-nothing handler');
   print('buffer%    = share of full-path time that is not parsing');
   print('scrollback = Terminal.write with scrollback disabled');
   print('no-grapheme = Terminal.write with DEC mode 2027 off');
@@ -207,21 +212,4 @@ String _altScreenChunk(int seed) {
     frame++;
   }
   return buffer.toString();
-}
-
-/// An [EscapeHandler] that does nothing, so a run measures the parser alone.
-///
-/// The two hot entry points are implemented directly; everything else goes
-/// through [noSuchMethod], which is far too slow for a hot path but is only
-/// reached by escape sequences, which are rare per byte in every workload
-/// here.
-class _NoopHandler implements EscapeHandler, EscapeTextHandler {
-  @override
-  void writeChar(int char) {}
-
-  @override
-  void writeText(String text, int start, int end) {}
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => null;
 }
