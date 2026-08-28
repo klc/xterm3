@@ -528,9 +528,12 @@ Faz 5'in "scrollback maliyetinin ne kadarı GC promotion baskısı" açık sorus
 büyük ölçüde cevaplı: allocation. Ve reddedilen havuz deneyi bunun kanıtı — fikir
 yanlış değildi, temizleme stratejisi yanlıştı.
 
-**Faz 5'in "kök neden" paragrafı bir hipotez, doğrulanmış değil.** "VM taze tipli
-veriyi OS'un sıfırladığı sayfalardan verir" açıklaması 170 sütunluk bir satır
-(680 baytlık `Uint32List`) için muhtemelen yanlış — o boyut new-space bump-pointer
+**Faz 5'in "kök neden" paragrafı bir hipotez, doğrulanmış değil.**
+*(Faz 5.3 bunu ölçtü ve bu maddenin kendisini çürüttü: Faz 5'in açıklaması
+doğruymuş, aşağıdaki satır boyutu ise yanlış — 680 değil 3072 bayt. Madde,
+yanlış dönüşün kaydı olarak duruyor.)* "VM taze tipli veriyi OS'un sıfırladığı
+sayfalardan verir" açıklaması 170 sütunluk bir satır (680 baytlık `Uint32List`)
+için muhtemelen yanlış — o boyut new-space bump-pointer
 allocation'ı ve Dart onu açıkça sıfırlıyor. Daha olası iki aday: önbellek konumu
 (taze satır sıcak TLAB'de, havuzdan gelen satır uzun süre önce tahliye edilmiş ve
 soğuk) ve `Uint32List.fillRange`'in AOT'ta memset'e intrinsify edilip edilmediği.
@@ -605,6 +608,81 @@ adımdan daha fazla invariant taşıyor. Ayrı ölçülmeli.
 
 ---
 
+## Faz 5.3 — Satır havuzu, 2. deneme — **REDDEDİLDİ, UYGULANMADAN (2026-08-29)**
+
+Faz 5.1'in aday listesinde 1. sıradaydı. Faz 5.1 aynı zamanda "2. deneme bu
+ayrımı ölçmeden başlamamalı" diye kayıt düşmüştü. Ayrım ölçüldü, cevap hayır
+çıktı, kod yazılmadı.
+
+**Ölçüm aracı.** `script/line_reuse_probe.dart` — Flutter yok, xterm3 yok, saf
+`Uint32List`. İki senaryo da aynı sayıda satırı canlı tutuyor, tek fark taze mi
+geri dönüşmüş mü. `dart compile exe` ile derlenir.
+
+### Önce iki düzeltme
+
+**Satır 3072 bayt, 680 değil.** Faz 5.1'de `_calcCapacity`'yi atlayıp doğrudan
+sütun sayısından hesaplamışım. Doğrusu: `viewWidth` 170 →
+`_calcCapacity(170) = 192` → `Uint32List(192 * 4)` = 768 word = **3072 bayt**.
+`BENCHMARKS.md`'nin ilk metni ("clearing 3 KiB by hand") baştan doğruymuş.
+
+**Faz 5'in kök nedeni doğruymuş.** Faz 5.1 onu "hipotez, muhtemelen yanlış" diye
+işaretledi ve yerine önbellek konumu açıklamasını önerdi. O düzeltme yanlıştı ve
+yanlış satır boyutuna dayanıyordu. Ölçülen, 3072 baytlık satır başına:
+
+| iş | ns/satır | ns/word |
+|---|---|---|
+| allocate | 92 | **0.12** |
+| indexed store döngüsü | — | **0.475** |
+| `fillRange` | — | **1.6** |
+
+Allocate etmek, word'leri gerçekten yazan en ucuz şeyden **4 kat ucuz**. Yani
+allocation o word'leri yazmıyor. Faz 5'in "VM taze tipli veriyi zaten sıfır olan
+sayfalardan veriyor" açıklaması ayakta.
+
+### Asıl sonuç
+
+ns/satır, düşük olan iyi. `written` = satırın gerçekten metin tuttuğu hücre
+sayısı, kapasite 192. `loop-tail` = yalnızca yeni yazma sınırı ile eski "en
+yüksek yazılmış sütun" işareti arasını temizle — yazmanın kendisi öncesini zaten
+kapsadığı için Faz 5'in önerdiği tasarımın en iyi hâli bu.
+
+| written | alloc | fill-all | fill-written | loop-written | loop-tail | sonuç |
+|---|---|---|---|---|---|---|
+| 30 | 153 | 1287 | 251 | 161 | 197 | berabere |
+| 60 | 199 | 1323 | 492 | 307 | 242 | **alloc %22 önde** |
+| 120 | 304 | 1445 | 988 | 611 | 340 | alloc %12 önde |
+| 192 | 450 | 1565 | 1565 | 1023 | 355 | havuz %27 önde |
+
+(depth 64; 8 ve 512 derinlikleri aynı tabloyu veriyor, yani sonuç havuz
+derinliğine duyarsız.)
+
+Havuz yalnızca **tam genişlikte** kazanıyor — ve orada kazanmasının sebebi
+temizlenecek bir şey kalmaması, yani kazandığı şey tam olarak allocation'ın 92
+ns'i. Gerçek shell çıktısının yoğunlaştığı orta genişliklerde kaybediyor.
+Faz 5'in "tipik kısa shell satırlarında öder" öngörüsü tersine çıktı: kısa
+satırda temizlenecek kuyruk **uzun**, çünkü altındaki satır ondan genişti.
+
+**Karar: satır havuzu kapandı.** İki farklı temizleme stratejisiyle iki kez
+ölçüldü. Faz 5'in kapanış cümlesi geçerliliğini koruyor: scroll maliyetine
+yönelen bir şey, allocate edilen satırların **sayısını** ya da **boyutunu**
+azaltmalı, onları yeniden kullanmayı denememeli.
+
+Bu, Faz 5.1'in "scrollback cezasının %63-93'ü satır allocation'ı" tespitini
+geçersiz kılmıyor — tespit doğru, ama o allocation'ın kendisi zaten ucuz; pahalı
+olan onu geri dönüştürmek. Cezanın geri kalanı GC tarama basıncı ve satır
+nesnelerinin kendisi, ve oraya ulaşan yol havuzlamadan geçmiyor.
+
+### Yan bulgu — burada uygulaması yok
+
+`Uint32List.fillRange`, indexed store döngüsünün **3.4 katı** (1.6'ya karşı
+0.475 ns/word). AOT'ta memset'e inmiyor. xterm3 için kaldıraç değil:
+`BufferLine.eraseRange` zaten hücre bazlı `eraseCell` döngüsü kullanıyor, ve
+`lib/`'deki diğer `fillRange` çağrıları `tabs.dart`'ta reset başına bir kez ve
+`unicode_v11.dart`'ta tek seferlik tablo kurulumunda. Kayda geçiyor ki bir gün
+sıcak bir yola `fillRange` yazılmasın.
+
+---
+
 ## Faz 6 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
 
 Saha semptomu (ShellVibe'da vtebench sırasında donma) write hızıyla kapanmıyor,
@@ -640,6 +718,7 @@ Bu round'un dışında bırakıldı: API yüzeyi kararı gerektiriyor, ve mikro-
 | 5 | Write path ölçümü | 0 | ölçüldü; satır havuzu reddedildi (ölçüm negatif) |
 | 5.1 | `parser` kolonunun onarımı | 5 | **`master`'a aday** — `lib/` değişmedi |
 | 5.2 | `consume()` ASCII fast path | 5.1 | **`master`'a aday** — sgr +%6.6, regresyon yok |
+| 5.3 | Satır havuzu, 2. deneme | 5.1 | **reddedildi** — uygulanmadan ölçüldü, kapandı |
 | 6 | Flood altında ileri sarma | 5.1 | önerildi, ölçülmedi |
 
 Faz 5.1 yalnızca `bin/` ve `script/`'e dokunuyor, `lib/` altında hiçbir değişiklik

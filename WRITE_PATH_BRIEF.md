@@ -213,18 +213,16 @@ sadece ölçüm için) maliyet ayrıştırıldı:
 **Yani havuzlama fikri doğru, temizleme onu öldürüyor.** Geri dönüşümün kendisi
 scroll ağırlıklı yüklerde %37–58 kazandırıyor.
 
-**Kök neden — HİPOTEZ, doğrulanmadı.** İlk yazım şöyle diyordu: VM taze tipli
-veriyi işletim sisteminin zaten sıfırladığı sayfalardan verir, yani
-allocation'daki sıfırlama bedavadır. Bu 170 sütunluk bir satır için muhtemelen
-yanlış — o 680 baytlık bir `Uint32List`, yani new-space bump-pointer
-allocation'ı, ve Dart onu açıkça sıfırlıyor. Daha olası iki aday: **önbellek
-konumu** (taze satır sıcak TLAB belleğine düşüyor, havuzdan gelen satır uzun süre
-önce tahliye edilmiş ve soğuk) ve `Uint32List.fillRange`'in AOT'ta memset'e
-intrinsify edilip edilmediği.
+**Kök neden — ÖLÇÜLDÜ, doğrulandı (Faz 5.3).** İlk yazım şöyle diyordu: VM taze
+tipli veriyi işletim sisteminin zaten sıfırladığı sayfalardan verir, yani
+allocation'daki sıfırlama bedavadır. Doğruymuş. `script/line_reuse_probe.dart`,
+3072 baytlık bir satır başına: allocate 92 ns (**0.12 ns/word**), indexed store
+döngüsü **0.475 ns/word**, `fillRange` **1.6 ns/word**. Allocate etmek, word'leri
+gerçekten yazan en ucuz şeyden 4 kat ucuz — yani onları yazmıyor.
 
-Ayrım pratik: OS-sayfası modeli doğruysa kısmi temizleme de kaybeder; önbellek
-modeli doğruysa kazanır, çünkü kısa shell satırlarında dokunulan aralık bir cache
-line'a sığar. Ölçülen (2 kat yavaşlama) sağlam, açıklama değil.
+*(Bu brifingin bir ara revizyonu bu paragrafı "muhtemelen yanlış" diye
+işaretlemişti ve satır boyutunu 680 bayt sanmıştı. İkisi de hatalıydı; doğrusu
+`_calcCapacity(170) = 192` → `Uint32List(192 * 4)` = 3072 bayt.)*
 
 **Bu deneyin ölçmeden cevapladığı bir soru var.** Kendi iki tablosunu yan yana
 koy: scrollback cezasının ne kadarını havuzlama geri alıyor?
@@ -238,9 +236,13 @@ koy: scrollback cezasının ne kadarını havuzlama geri alıyor?
 Yani scrollback tutmanın maliyetinin %63–93'ü satır allocation'ı. Bölüm 9'un
 3. açık sorusu ("ne kadarı GC promotion baskısı") büyük ölçüde cevaplı.
 
-**Bir daha denenirse** tam temizlemeden kaçınmak şart — örneğin satır başına
-"yazılmış en yüksek sütun" işareti tutup yalnızca o aralığı temizlemek. Tipik kısa
-shell satırlarında öder, tam genişlik çıktıda ödemez.
+**Bir daha denendi ve kapandı (Faz 5.3).** "Yazılmış en yüksek sütun" işaretiyle
+sınırlı temizleme, uygulanmadan önce ölçüldü. Havuz yalnızca tam genişlikte
+kazanıyor — ve orada kazanmasının sebebi temizlenecek bir şey kalmaması. Gerçek
+shell çıktısının yoğunlaştığı orta genişliklerde (60 hücre: alloc 199 ns'e karşı
+en iyi havuz 242) kaybediyor. Öngörü tersine çıktı: kısa satırda temizlenecek
+kuyruk **uzun**, çünkü altındaki satır ondan genişti. Tam tablo
+`RENDER_PLAN.md` Faz 5.3'te.
 
 Kod `master`'a girmedi, branch silindi.
 
@@ -280,10 +282,10 @@ bir yolda allocation yapmayan bir `hasAnchors` gerekir.
 
 Düzeltilmiş tabandan çıkan sıra — en yüksek ölçülmüş tavandan en düşüğe:
 
-1. **Satır havuzu, 2. deneme (sınırlı temizleme).** Tavanı zaten ölçülü:
-   bölüm 7'nin "havuz, temizlemesiz" kolonu, ascii 102 → 147. Fikir doğru,
-   temizleme stratejisi yanlıştı. Ama önce bölüm 7'deki kök neden ayrımı
-   ölçülmeli, çünkü kısmi temizlemenin ödeyip ödemeyeceği ona bağlı.
+1. ~~**Satır havuzu, 2. deneme (sınırlı temizleme).**~~ **REDDEDİLDİ** —
+   Faz 5.3, uygulanmadan ölçüldü. Bölüm 7'ye bakın. Scroll maliyetine yönelen
+   bir şey, allocate edilen satırların **sayısını** ya da **boyutunu**
+   azaltmalı; yeniden kullanmak ölçülerek iki kez kapandı.
 2. ~~**`ByteConsumer.consume()` ASCII fast path.**~~ **YAPILDI** — Faz 5.2,
    `RENDER_PLAN.md`. sgr full +%6.6, sgr parser +%9.9, altscreen parser +%7.2,
    hiçbir yükte regresyon yok. Yukarıdaki tablo zaten bu değişiklik sonrası.

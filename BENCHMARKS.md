@@ -510,13 +510,9 @@ Two things this experiment settled without a further run. First, its own
 numbers answer how much of the scrollback penalty is allocation: pooling
 without the clear recovers 63% of it on `ascii`, 84% on `cyrillic` and 93% on
 `utf8`. Nearly all of it. Second, the explanation offered above — that the VM
-hands out typed data the OS already zeroed — is a hypothesis, not a finding.
-A 170-column line is a 680-byte `Uint32List`, which is a new-space bump-pointer
-allocation that Dart zeroes explicitly. Cache locality (a fresh line lands in
-hot TLAB memory; a pooled one was evicted long ago and is cold) and whether
-`fillRange` lowers to a memset in AOT are the likelier candidates. The
-difference decides whether clearing only the written span can pay, so a second
-attempt should measure it before it starts.
+hands out typed data the OS already zeroed — needed checking before a second
+attempt, because whether clearing only the written span can pay depends on it.
+It was checked, and it holds: see "Recycling evicted lines, take two" below.
 
 ## Where it stands against the published package — 2026-08-06
 
@@ -664,6 +660,53 @@ This also prescreened CSI bulk scanning, which was the point of doing it first:
 narrowed though - the same derivation now puts CSI at **at most** ~17 ns per
 character, down from ~19, and that bound still contains the CSI handler's own
 parameter walk and dispatch rather than `consume()` alone.
+
+## Recycling evicted lines, take two — measured, rejected again — 2026-08-29
+
+The first attempt cleared the whole capacity with `fillRange` and lost. The
+obvious repair was to clear only what the line had actually written. Measured
+with `script/line_reuse_probe.dart` before building anything, because the
+repair only makes sense if allocation's zeroing is genuinely free.
+
+A `BufferLine` at 170 columns is `Uint32List(192 * 4)` — 3072 bytes, not the
+680 an earlier note claimed. Per line, on an M-series macOS:
+
+| | ns per line | ns per word |
+|---|---|---|
+| allocate | 92 | **0.12** |
+| indexed store loop | — | **0.475** |
+| `fillRange` | — | **1.6** |
+
+Allocating is four times cheaper per word than the cheapest thing that actually
+writes those words, so allocation is not writing them. The explanation offered
+for the first attempt was right.
+
+The consequence, with `written` as the cells a line holds text in out of a
+192-cell capacity, and `loop-tail` clearing only the span between the new write
+extent and the previous high-water mark — the best form of the design:
+
+| written | alloc | fill-all | fill-written | loop-written | loop-tail |
+|---|---|---|---|---|---|
+| 30 | 153 | 1287 | 251 | 161 | 197 |
+| 60 | **199** | 1323 | 492 | 307 | 242 |
+| 120 | **304** | 1445 | 988 | 611 | 340 |
+| 192 | 450 | 1565 | 1565 | 1023 | **355** |
+
+Pooling wins only at full width, and only because there is nothing left to
+clear there — what it wins is exactly the 92 ns of allocation. Across the
+middle widths, where shell output sits, it loses. The prediction that a bounded
+clear "pays on typical short shell lines" came out backwards: a short line
+leaves a *long* tail to clear, because the line under it was wider. Pool depth
+does not matter — 8, 64 and 512 give the same table.
+
+So the closing line of the first attempt stands unchanged: anything aimed at
+the scrolling cost has to reduce the *number* of lines allocated or their size,
+not try to reuse them.
+
+One finding with no use here: `fillRange` costs 3.4x an indexed store loop, so
+it does not lower to a memset. `BufferLine.eraseRange` already clears cell by
+cell, and the only other `fillRange` calls in `lib/` are one-time table setup —
+recorded so nobody puts one on a hot path later.
 
 ## Adding a workload
 
