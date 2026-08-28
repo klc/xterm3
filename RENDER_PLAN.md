@@ -683,6 +683,93 @@ sıcak bir yola `fillRange` yazılmasın.
 
 ---
 
+## Faz 5.4 — CSI parametre toplu tarama — **REDDEDİLDİ (2026-08-29)**
+
+`WRITE_PATH_BRIEF.md`'nin ilk yazımında tek somut aday olarak sunulan fikir.
+Faz 5.1 onu üçüncü sıraya düşürmüştü, Faz 5.2 ön elemeden geçirmişti. İki farklı
+uygulamayla ölçüldü, ikisi de negatif. Kod `master`'a girmedi.
+
+### Önce sıfır riskli bir şey denendi: dal sırası
+
+`_consumeCsi`'nin döngüsünde rakam testi zincirin 7. sırasındaydı. CSI parametre
+baytlarının ~%65'i rakam ve rakamlar (0x30-0x39) önceki dalların hiçbiriyle
+eşleşemez — 0x18/0x1a değil, ESC/C1 değil, `< 0x20` değil, `;`/`:` değil. Testi
+taşma kontrolünün hemen ardına almak semantik olarak birebir aynı.
+
+**Sonuç: etkisi yok.** sgr parser 133 → 132, altscreen parser 297 → 299; ikisi de
+gürültü içinde, değer kümeleri örtüşüyor. Dal zinciri maliyet değilmiş — iyi
+tahmin edilen dört karşılaştırma ölçülebilir bir şey tutmuyor. Nötr ölçüm
+birleşmez, geri alındı.
+
+Bu, asıl aday için de bilgi: CSI döngüsündeki bayt başına maliyet dallarda değil.
+
+### Deneme 1 — `digitRunLength` + toplu ilerletme
+
+`ByteConsumer`'a `printableTextRunLength`'in ikizi bir `digitRunLength` eklendi;
+`_consumeCsi` rakam görünce koşunun kalanını tarayıp `consumeAsciiCodeUnits` ile
+tek seferde ilerletiyor. Blok sınırı kendiliğinden doğru (getter bloğun sonunda
+duruyor), taşma tek bir `min` ile korunuyor.
+
+| | sgr full | sgr parser | altscreen full | altscreen parser |
+|---|---|---|---|---|
+| taban | 80 | 131 | 179 | 299 |
+| deneme 1 | **74** | **115** | **166** | **267** |
+
+**%12'ye varan regresyon.** Sebep görünür: koşu başına dört ayrı
+`_advancePastConsumedBlocks()` çağrısı (`digitRunLength`, `currentBlock`,
+`currentCodeUnitOffset`, `consumeAsciiCodeUnits`) ve rakamların iki kez okunması
+— bir kez taramak, bir kez toplamak için.
+
+### Deneme 2 — tarama ve toplama tek geçişte
+
+Reddetmeden önce en güçlü hâli. `digitRunLength` tamamen kaldırıldı; parser bloğu
+bir kez alıp tek döngüde hem tarıyor hem `param`'a topluyor, sonra tek
+`consumeAsciiCodeUnits`. Bir geçiş, üç `_advancePastConsumedBlocks`.
+
+| | sgr full | sgr parser | altscreen full | altscreen parser |
+|---|---|---|---|---|
+| taban | 81 | 132 | 179 | 298 |
+| deneme 2 | **77** | **121** | **170** | **278** |
+
+Daha iyi ama hâlâ **%8.3 regresyon**. Değer kümeleri ayrık (sgr parser 131/132/132'ye
+karşı 121/120/121), yani gürültü değil.
+
+### Neden — ve Faz 5.2 ile bağlantısı
+
+Faz 5.2'den sonra `consume()` zaten ucuz: ortak durumda tek karşılaştırmalık bir
+`_advancePastConsumedBlocks()`, bir `_queue.first.data`, bir `codeUnitAt`, dört
+alan güncellemesi. Toplu yol bunlardan `run` tanesini şununla değiştiriyor: bir
+`isEmpty` kontrolü, iki getter (her biri kendi `_advancePastConsumedBlocks`'u
+ile), `limit`/`headroom` hesabı, tarama döngüsü, ve `consumeAsciiCodeUnits` (bir
+`_advancePastConsumedBlocks` daha artı sınır kontrolü).
+
+sgr'de sekans başına ortalama 9.6 bayt ve parametre koşuları 1-3 haneli; ilk
+rakam zaten `consume()` ile alındığı için toplu yola kalan ortalama ~1.5 rakam.
+Kurulum bunu amorti etmiyor.
+
+Faz 5.1'in notu bunu öngörmüştü: *"sekans başına 9.6 bayt ve 1-3 haneli parametre
+koşuları toplu taramanın kurulum maliyetini zor amorti eder."* Ölçüm bunu
+doğruladı ve bir şey daha ekliyor: **Faz 5.2 bu adayın hedeflediği boşluğu zaten
+kapatmıştı.** İki sonuç bağımsız değil — `consume()` ucuzladıkça etrafında
+toplu iş yapmanın anlamı kalmıyor.
+
+### Fuzzer bir hata yakaladı
+
+Deneme 2'nin ilk hâli `_queue.currentBlock`'u korumasız çağırıyordu; tüketilen
+rakam chunk'ın son baytıysa kuyruk boşalıyor ve `_queue.first` `StateError: No
+element` atıyor. `test/src/core/escape/parser_fuzz_test.dart` bunu üç ayrı seed
+ile yakaladı. (Deneme 1'de aynı koruma `digitRunLength` içindeydi.) Kayda
+geçiyor: CSI döngüsünde `consume()` sonrası kuyruğun boşalabileceği varsayılmalı.
+
+### Cephenin durumu
+
+Faz 5.1'in üç adayının üçü de kapandı: satır havuzu reddedildi (Faz 5.3),
+`consume()` fast path birleştirildi (Faz 5.2), CSI toplu tarama reddedildi
+(bu faz). `Terminal.write` üzerinde kalan bilinen mikro adım
+`consume()` içindeki çift `_queue.first` erişimi; ondan sonrası Faz 6.
+
+---
+
 ## Faz 6 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
 
 Saha semptomu (ShellVibe'da vtebench sırasında donma) write hızıyla kapanmıyor,
@@ -719,6 +806,7 @@ Bu round'un dışında bırakıldı: API yüzeyi kararı gerektiriyor, ve mikro-
 | 5.1 | `parser` kolonunun onarımı | 5 | **`master`'a aday** — `lib/` değişmedi |
 | 5.2 | `consume()` ASCII fast path | 5.1 | **`master`'a aday** — sgr +%6.6, regresyon yok |
 | 5.3 | Satır havuzu, 2. deneme | 5.1 | **reddedildi** — uygulanmadan ölçüldü, kapandı |
+| 5.4 | CSI parametre toplu tarama | 5.2 | **reddedildi** — iki uygulama, ikisi de negatif |
 | 6 | Flood altında ileri sarma | 5.1 | önerildi, ölçülmedi |
 
 Faz 5.1 yalnızca `bin/` ve `script/`'e dokunuyor, `lib/` altında hiçbir değişiklik

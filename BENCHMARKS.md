@@ -708,6 +708,47 @@ it does not lower to a memset. `BufferLine.eraseRange` already clears cell by
 cell, and the only other `fillRange` calls in `lib/` are one-time table setup —
 recorded so nobody puts one on a hot path later.
 
+## CSI parameter bulk scanning — measured, rejected — 2026-08-29
+
+The candidate the write-path briefing opened with: CSI parameters are ASCII
+digits, so scanning a run of them should beat calling `ByteConsumer.consume()`
+per digit the way the printable-text path already does. Two implementations,
+both slower than what they replaced.
+
+A free experiment first. The digit case sat seventh in `_consumeCsi`'s branch
+chain, and digits are about two thirds of the parameter bytes; none of the six
+tests before it can match 0x30-0x39, so hoisting it is semantically identical.
+It measured **nothing** — `sgr` parser 133 → 132, `altscreen` 297 → 299, both
+inside the noise. The branch chain is not what a CSI byte pays for.
+
+| | sgr full | sgr parser | altscreen full | altscreen parser |
+|---|---|---|---|---|
+| baseline | 81 | 132 | 179 | 298 |
+| run scanner + bulk advance | 74 | 115 | 166 | 267 |
+| scan and accumulate fused | 77 | 121 | 170 | 278 |
+
+The first version scanned the run in one getter and accumulated it in another
+loop, which cost four separate `_advancePastConsumedBlocks()` calls per run and
+read every digit twice. Fusing the two loops recovered about half of the loss
+and still landed 8% below the baseline, with the two conditions disjoint across
+three interleaved rounds.
+
+The reason is that the fast path merged earlier the same day left nothing to
+batch. `consume()` is now one normalisation compare, one block read, one
+`codeUnitAt` and four field updates. The bulk path replaces `run` of those with
+an emptiness check, two getters that each normalise again, a limit computation,
+a scan loop, and a `consumeAsciiCodeUnits` that normalises a third time. In
+`sgr` a sequence averages 9.6 bytes and its parameters are one to three digits;
+with the first digit already consumed, the bulk path is left with about 1.5
+digits to amortise all of that over. It cannot.
+
+Worth keeping from the attempt: the fuzzer earns its place. The fused version
+initially called `currentBlock` unguarded, which throws `StateError` when the
+digit just consumed was the last byte of the chunk.
+`test/src/core/escape/parser_fuzz_test.dart` caught it on three separate seeds.
+Anything reaching into the queue after `consume()` inside the CSI loop has to
+assume the queue may now be empty.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and

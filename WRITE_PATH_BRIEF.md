@@ -7,9 +7,11 @@ taban yine değişti. Bölüm 5, 6, 7 ve 9 güncel.
 **Amaç:** `Terminal.write` yolunun neden yavaş kaldığını, nelerin ölçüldüğünü ve
 nelerin denenip reddedildiğini tek dosyada devretmek.
 
-Bu dosya bir çözüm önerisi değil, bir problem tanımı. Bölüm 9'daki üç aday
-tavanlarına göre sıralı, ama hiçbiri uygulanmadı; ilk yazımda tek aday olarak
-sunulan CSI toplu tarama, düzeltilmiş ölçümden sonra üçüncü sıraya düştü.
+**Durum:** bölüm 9'daki üç adayın üçü de kapandı. Biri birleştirildi
+(`consume()` fast path, Faz 5.2), ikisi ölçülerek reddedildi (satır havuzu
+Faz 5.3, CSI toplu tarama Faz 5.4). `Terminal.write` üzerinde kalan bilinen
+mikro adım bölüm 9'un 4. maddesi; asıl kaldıraç ise bölüm 9'un sonundaki
+flood/ileri-sarma cephesi, ki o hiç ölçülmedi.
 
 ---
 
@@ -162,9 +164,11 @@ en riskli invariantları (aşağıdaki bölüm 8) sokmak olur.
 geçici olarak çıplak `codeUnitAt` + `offset++` ile değiştir (o hâliyle yanlış,
 sadece ölçüm için) ve tavanı gör.
 
-Faz 5.2 bu cepheye dair bir şey söyledi: `consume()`'un fast path'i sgr parser'ını
-%9.9 hızlandırdı, yani `consume()` gerçekten maliyet taşıyordu ve CSI adayı ayakta.
-Ama tavan 19 ns'den 17'ye indi — kolay kısmı alındı.
+**Faz 5.4 bu bölümü kapattı.** Toplu tarama iki ayrı uygulamayla yazıldı ve
+ikisi de tabanın altında kaldı; ayrıntı `RENDER_PLAN.md` Faz 5.4'te. Buradaki
+~17 ns'lik üst sınır demek ki büyük ölçüde `consume()` dışındaki işte —
+`_csi.params` bakımında, dispatch'te ve `_csiHandleSgr`'ın parametre
+yürüyüşünde. Toplu tarama o işin hiçbirine dokunmuyordu.
 
 **Neden:** `ByteConsumer.consume()` her karakterde `_advancePastConsumedBlocks()`
 + `_decodeCodePoint` + `_codePointCodeUnitLength` + dört alan güncellemesi yapıyor.
@@ -289,10 +293,16 @@ Düzeltilmiş tabandan çıkan sıra — en yüksek ölçülmüş tavandan en d�
 2. ~~**`ByteConsumer.consume()` ASCII fast path.**~~ **YAPILDI** — Faz 5.2,
    `RENDER_PLAN.md`. sgr full +%6.6, sgr parser +%9.9, altscreen parser +%7.2,
    hiçbir yükte regresyon yok. Yukarıdaki tablo zaten bu değişiklik sonrası.
-3. **CSI parametre tarama maliyeti.** Karakter başına **en fazla** ~17 ns.
-   Bölüm 6 — ve orada yazdığı gibi, bu üst sınırın ne kadarının `consume()`
-   olduğu ölçülmeden yazılmamalı.
-4. **`consume()` içinde `_queue.first`'e çift erişim.** Fast path'ten sonra
+3. ~~**CSI parametre toplu tarama.**~~ **REDDEDİLDİ** — Faz 5.4, iki ayrı
+   uygulama, ikisi de negatif: sgr parser 132 → 115 (koşu tarayıcı) ve
+   132 → 121 (tarama+toplama tek geçişte). Sıfır riskli bir ön deneme olan
+   dal sırası değişikliği de ölçülebilir hiçbir şey vermedi, yani bayt başına
+   maliyet dallarda değil. Sebep: Faz 5.2 `consume()`'u zaten ucuzlattığı için
+   etrafında toplu iş yapmanın amorti edeceği bir şey kalmadı — sgr'de sekans
+   başına 9.6 bayt ve ilk rakam zaten alındığı için toplu yola ortalama 1.5
+   rakam kalıyor.
+4. **`consume()` içinde `_queue.first`'e çift erişim.** Kalan tek bilinen mikro
+   adım; Faz 5.4'ten sonra bu cephede başka aday yok. Fast path'ten sonra
    kalan en görünür artık: bir kez `_advancePastConsumedBlocks()` içinde, bir
    kez `_queue.first.data` ile. Aktif bloğu bir alanda tutmak tekleştirir, ama
    `add`/`rollback`/`unrefConsumedBlocks`/`reset` yollarında geçersiz kılma
