@@ -540,6 +540,71 @@ dokunulan aralık bir cache line'a sığar. 2. deneme bu ayrımı ölçmeden ba�
 
 ---
 
+## Faz 5.2 — `consume()` ASCII fast path — **BİRLEŞTİRİLDİ (2026-08-29)**
+
+Faz 5.1'in aday listesindeki 2. madde. Ölçüm pozitif çıktı, `master`'a aday.
+
+**Değişiklik.** `ByteConsumer.consume()` her kod noktasında `_decodeCodePoint` ve
+`_codePointCodeUnitLength`'i çağırıyordu; ikisi de aynı high-surrogate testini
+tekrar çalıştırıp aynı cevaba varıyordu — surrogate çifti başlatmayan bir birim
+tek kod birimidir ve kendi kod noktasıdır. Testi bir kez başta yapıp dönmek,
+astral metin dışındaki her şeyi kapsıyor: CSI parametreleri, C0 kontrolleri,
+Latin, Kiril, ve run scan'in toplayamadığı metnin kod-noktası yolu.
+
+Yapı gereği eşdeğer: iki yardımcı da tam bu dalda `first` ve `1` döndürüyor.
+Rollback etkilenmiyor, `_previousRuneOffset` surrogate olmayan için zaten
+`offset - 1` veriyor.
+
+**Ölçüm — dönüşümlü A/B, üçer round, medyan, MiB/s.** İlk deneme ardışık
+koşuldu ve `consume()`'a girmeyen kolonlar da birlikte %4-8 düştüğü için atıldı;
+o termal sürüklenmeydi. Dönüşümlü koşu bunu iki koşula eşit dağıtıyor.
+
+| workload | full | parser | scrollback | no-grapheme |
+|---|---|---|---|---|
+| ascii | 105 → 106 | 567 → 579 (+%2.1) | 166 → 172 | 106 → 103 |
+| ascii-long-lines | 152 → 152 | 916 → 922 (+%0.7) | 225 → 226 | 148 → 149 |
+| **sgr** | 76 → **81** (+%6.6) | 121 → **133** (+%9.9) | 85 → 88 | 76 → **80** |
+| utf8 | 58 → 59 (+%1.7) | 334 → 342 (+%2.4) | 86 → 86 | 69 → 69 |
+| cyrillic | 85 → 85 | 348 → 364 (+%4.6) | 140 → 138 | 85 → 85 |
+| **altscreen** | 171 → **178** (+%4.1) | 276 → **296** (+%7.2) | 174 → **182** | 175 → **182** |
+
+Kazanç escape-ağırlıklı iki yükte toplanıyor — `consume()`'un gerçekten sıcak
+olduğu yer orası. Düz metin çoğunlukla `printableTextRunLength` +
+`consumeAsciiCodeUnits` toplu yolundan geçtiği için `consume()`'a az uğruyor.
+24 hücrenin hiçbirinde regresyon yok.
+
+Gürültü bandının üstünde olduğunun kanıtı: iki koşulun değerleri örtüşmüyor.
+`sgr` full 76/76/77'ye karşı 80/81/82; `sgr` parser 120/121/122'ye karşı
+132/133/133; `altscreen` parser 272/276/279'a karşı 296/296/300.
+
+**Yeni taban.** Sonraki ölçümler bu tablodan başlar:
+
+| workload | full | parser | buffer% | scrollback kapalı | grapheme kapalı |
+|---|---|---|---|---|---|
+| ascii | 106 | 579 | 82% | 172 | 103 |
+| ascii-long-lines | 152 | 922 | 84% | 226 | 149 |
+| sgr | 81 | 133 | 39% | 88 | 80 |
+| utf8 | 59 | 342 | 82% | 86 | 69 |
+| cyrillic | 85 | 364 | 77% | 138 | 85 |
+| altscreen | 178 | 296 | 40% | 182 | 182 |
+
+**Ön eleme sonucu.** Faz 5.1 bu adımı CSI hipotezinin ön elemesi olarak
+koymuştu: `consume()`'dan kazanç çıkmazsa CSI toplu tarama tek ölçümle düşerdi.
+Çıktı, yani CSI adayı ayakta — ama kalan tavan daraldı. Aynı türetme yeniden:
+ascii parser 579 → 1.68 ns/metin-karakteri; sgr parser 133 → 7.52 ms/MiB, bunun
+673k metin karakteri 1.13 ms, kalan 6.39 ms 375k CSI karakterine düşüyor →
+**karakter başına en fazla ~17 ns** (Faz 5.1'de ~19 idi). Bu hâlâ üst sınır:
+içinde `_csi.params.clear()`/`add()`, `FastLookupTable` dispatch'i ve
+`_csiHandleSgr`'ın parametre yürüyüşü de var.
+
+**Bir sonraki mikro adım.** `consume()` hâlâ `_queue.first`'e iki kez dokunuyor:
+bir kez `_advancePastConsumedBlocks()` içinde, bir kez `_queue.first.data` ile.
+Aktif bloğu bir alanda tutmak bunu tekleştirir, ama `add`/`rollback`/
+`unrefConsumedBlocks`/`reset` yollarında geçersiz kılma gerektirdiği için bu
+adımdan daha fazla invariant taşıyor. Ayrı ölçülmeli.
+
+---
+
 ## Faz 6 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
 
 Saha semptomu (ShellVibe'da vtebench sırasında donma) write hızıyla kapanmıyor,
@@ -574,6 +639,7 @@ Bu round'un dışında bırakıldı: API yüzeyi kararı gerektiriyor, ve mikro-
 | 4 | Ölçüm + karar | 0, 3 | cevaplandı |
 | 5 | Write path ölçümü | 0 | ölçüldü; satır havuzu reddedildi (ölçüm negatif) |
 | 5.1 | `parser` kolonunun onarımı | 5 | **`master`'a aday** — `lib/` değişmedi |
+| 5.2 | `consume()` ASCII fast path | 5.1 | **`master`'a aday** — sgr +%6.6, regresyon yok |
 | 6 | Flood altında ileri sarma | 5.1 | önerildi, ölçülmedi |
 
 Faz 5.1 yalnızca `bin/` ve `script/`'e dokunuyor, `lib/` altında hiçbir değişiklik

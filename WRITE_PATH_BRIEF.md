@@ -2,7 +2,8 @@
 
 **Tarih:** 2026-08-29 · **Taban:** `master` @ `1537440` (release 6.1.3)
 **Revizyon:** 2026-08-29 — bölüm 5'in `parser` kolonu bozuk çıktı ve yeniden
-ölçüldü; bölüm 5, 6, 7 ve 9 buna göre güncellendi (Faz 5.1)
+ölçüldü (Faz 5.1); ardından `consume()` fast path'i birleştirildi (Faz 5.2) ve
+taban yine değişti. Bölüm 5, 6, 7 ve 9 güncel.
 **Amaç:** `Terminal.write` yolunun neden yavaş kaldığını, nelerin ölçüldüğünü ve
 nelerin denenip reddedildiğini tek dosyada devretmek.
 
@@ -101,12 +102,14 @@ M-serisi macOS, MiB/s, üçer koşunun medyanı.
 
 | workload | full | parser | buffer% | scrollback kapalı | grapheme kapalı |
 |---|---|---|---|---|---|
-| ascii | 105 | 568 | 82% | 171 | 107 |
-| ascii-long-lines | 151 | 910 | 84% | 227 | 149 |
-| **sgr** | **77** | **121** | **36%** | 88 | 77 |
-| utf8 | 59 | 333 | 82% | 86 | 69 |
-| cyrillic | 85 | 360 | 76% | 139 | 86 |
-| altscreen | 170 | 279 | 39% | 175 | 175 |
+| ascii | 106 | 579 | 82% | 172 | 103 |
+| ascii-long-lines | 152 | 922 | 84% | 226 | 149 |
+| **sgr** | **81** | **133** | **39%** | 88 | 80 |
+| utf8 | 59 | 342 | 82% | 86 | 69 |
+| cyrillic | 85 | 364 | 77% | 138 | 85 |
+| altscreen | 178 | 296 | 40% | 182 | 182 |
+
+Faz 5.2 (`consume()` fast path) sonrası. Öncesi için `RENDER_PLAN.md` Faz 5.1.
 
 Bu tablo, ilk yazımdakinin yerini alıyor. Eskisinin `parser` ve `buffer%`
 kolonları bir harness kusurundan geliyordu: bench'in no-op handler'ı
@@ -119,15 +122,15 @@ düzeltmeden sonra da kıpırdamadılar. Tam kayıt: `RENDER_PLAN.md`, Faz 5.1.
 ### Üç okuma
 
 1. **Escape parser çoğu yükte darboğaz değil.** `ascii`'de parser tek başına
-   568 MiB/s, tam yol 105. Zamanın **%82–84'ü** buffer yazımında. "Parser yavaş"
+   579 MiB/s, tam yol 106. Zamanın **%82–84'ü** buffer yazımında. "Parser yavaş"
    teşhisi bu yükler için yanlış olur — ve düzeltilmiş sayılarla daha da yanlış.
-2. **SGR istisna, ama sanıldığı kadar değil.** Orada buffer %36 — kalan %64
-   parser'ın kendisi, ve 121 MiB/s ile açık ara en yavaş parse yolu (sonraki en
-   yavaş: altscreen 279). Gerçek CLI çıktısı (renkli prompt, `ls --color`, build
+2. **SGR istisna, ama sanıldığı kadar değil.** Orada buffer %39 — kalan %61
+   parser'ın kendisi, ve 133 MiB/s ile açık ara en yavaş parse yolu (sonraki en
+   yavaş: altscreen 296). Gerçek CLI çıktısı (renkli prompt, `ls --color`, build
    log'ları, `htop`) SGR ağırlıklı olduğu için pratikte en çok ödenen yol budur.
    İlk yazımdaki "%23 buffer / %77 parser" rakamı artefaktın kendisiydi.
-3. **Scrollback tutmak pahalı.** Kapatınca ascii 105 → 171 (+%63), cyrillic
-   85 → 139 (+%64), utf8 59 → 86 (+%46). Bu okuma kusurdan etkilenmedi.
+3. **Scrollback tutmak pahalı.** Kapatınca ascii 106 → 172 (+%62), cyrillic
+   85 → 138 (+%62), utf8 59 → 86 (+%46). Bu okuma kusurdan etkilenmedi.
 
 ---
 
@@ -141,13 +144,13 @@ Bundan türetilen per-karakter maliyet:
 | yol | ns/karakter |
 |---|---|
 | toplu ASCII (`printableTextRunLength` → `writeText`) | **1.7** |
-| CSI içi, karakter başına **üst sınır** | **~19** |
+| CSI içi, karakter başına **üst sınır** | **~17** |
 
-*Türetme: ascii parser 568 MiB/s → 1.72 ns/char. sgr parser 121 MiB/s →
-8.26 ms/MiB; bunun 673k metin karakteri toplu yoldan 1.16 ms, kalan 7.11 ms
-375k CSI karakterine düşüyor → 18.9 ns/char.*
+*Türetme: ascii parser 579 MiB/s → 1.68 ns/char. sgr parser 133 MiB/s →
+7.52 ms/MiB; bunun 673k metin karakteri toplu yoldan 1.13 ms, kalan 6.39 ms
+375k CSI karakterine düşüyor → 17.0 ns/char.*
 
-**Bu bir üst sınır, `consume()`'un payı değil.** O 7.11 ms'in içinde `consume()`
+**Bu bir üst sınır, `consume()`'un payı değil.** O 6.39 ms'in içinde `consume()`
 dışında şunlar da var: sekans başına `_csi.params.clear()` +
 `intermediates.clear()` + `paramSeparators.clear()`, parametre başına growable
 `add()`, `FastLookupTable` dispatch'i ve `_csiHandleSgr`'ın parametre yürüyüşü.
@@ -158,6 +161,10 @@ en riskli invariantları (aşağıdaki bölüm 8) sokmak olur.
 Ölçmenin ucuz yolu bölüm 7'de zaten kullanılmış: CSI döngüsündeki `consume()`'u
 geçici olarak çıplak `codeUnitAt` + `offset++` ile değiştir (o hâliyle yanlış,
 sadece ölçüm için) ve tavanı gör.
+
+Faz 5.2 bu cepheye dair bir şey söyledi: `consume()`'un fast path'i sgr parser'ını
+%9.9 hızlandırdı, yani `consume()` gerçekten maliyet taşıyordu ve CSI adayı ayakta.
+Ama tavan 19 ns'den 17'ye indi — kolay kısmı alındı.
 
 **Neden:** `ByteConsumer.consume()` her karakterde `_advancePastConsumedBlocks()`
 + `_decodeCodePoint` + `_codePointCodeUnitLength` + dört alan güncellemesi yapıyor.
@@ -277,18 +284,19 @@ Düzeltilmiş tabandan çıkan sıra — en yüksek ölçülmüş tavandan en d�
    bölüm 7'nin "havuz, temizlemesiz" kolonu, ascii 102 → 147. Fikir doğru,
    temizleme stratejisi yanlıştı. Ama önce bölüm 7'deki kök neden ayrımı
    ölçülmeli, çünkü kısmi temizlemenin ödeyip ödemeyeceği ona bağlı.
-2. **`ByteConsumer.consume()` ASCII fast path.** `byte_consumer.dart:31-42`:
-   `_decodeCodePoint` ve `_codePointCodeUnitLength` aynı surrogate testini iki
-   kez yapıyor, `first < 0xd800` iken ikisinin de cevabı sabit. ~10 satır, yeni
-   durum yok, rollback semantiği değişmiyor (`_previousRuneOffset` surrogate
-   olmayan için zaten `offset - 1` veriyor). `consume()` çağıran her yol
-   kazanıyor — sgr, utf8, altscreen, OSC, `_discardCsiInput`. Aynı zamanda
-   madde 3'ün ön elemesi.
-3. **CSI parametre tarama maliyeti.** Karakter başına **en fazla** ~19 ns.
+2. ~~**`ByteConsumer.consume()` ASCII fast path.**~~ **YAPILDI** — Faz 5.2,
+   `RENDER_PLAN.md`. sgr full +%6.6, sgr parser +%9.9, altscreen parser +%7.2,
+   hiçbir yükte regresyon yok. Yukarıdaki tablo zaten bu değişiklik sonrası.
+3. **CSI parametre tarama maliyeti.** Karakter başına **en fazla** ~17 ns.
    Bölüm 6 — ve orada yazdığı gibi, bu üst sınırın ne kadarının `consume()`
    olduğu ölçülmeden yazılmamalı.
+4. **`consume()` içinde `_queue.first`'e çift erişim.** Fast path'ten sonra
+   kalan en görünür artık: bir kez `_advancePastConsumedBlocks()` içinde, bir
+   kez `_queue.first.data` ile. Aktif bloğu bir alanda tutmak tekleştirir, ama
+   `add`/`rollback`/`unrefConsumedBlocks`/`reset` yollarında geçersiz kılma
+   gerektiriyor — madde 2'den daha fazla invariant taşıyor.
 
-Bu üçünün toplamı bile saha semptomunu kapatmaz. Bunun sebebi bölüm 1'de duruyor
+Bunların toplamı bile saha semptomunu kapatmaz. Bunun sebebi bölüm 1'de duruyor
 ama sonucu orada yazılmamış: vtebench 40–90 MiB/s süregelen üretiyor, write sgr'de
 77 MiB/s, ve kuyruk sınırsız. Write'ı %30 hızlandırmak donmayı gidermez,
 geciktirir. xterm3 içinde kalan asıl kaldıraç, backlog bir eşiği aştığında

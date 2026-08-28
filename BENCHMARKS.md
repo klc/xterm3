@@ -621,6 +621,50 @@ was really 64%.
 What did not change: `sgr`'s full-path throughput, and the cost of retaining
 scrollback. Both come from columns the defect never touched.
 
+## Taking the surrogate decode off `consume()` — 2026-08-29
+
+`ByteConsumer.consume()` called `_decodeCodePoint` and `_codePointCodeUnitLength`
+per code point, and both re-ran the same high-surrogate test to reach the same
+answer. Testing once and returning early covers everything outside astral text.
+
+Measured as an interleaved A/B — three rounds of each binary, alternating, so
+thermal drift lands on both conditions. A first attempt that ran the two
+conditions back to back was thrown away: columns that never touch `consume()`
+moved 4-8% with it, which is drift, not signal.
+
+| workload | full | parser | scrollback | no-grapheme |
+|---|---|---|---|---|
+| ascii | 105 → 106 | 567 → 579 | 166 → 172 | 106 → 103 |
+| ascii-long-lines | 152 → 152 | 916 → 922 | 225 → 226 | 148 → 149 |
+| sgr | 76 → **81** | 121 → **133** | 85 → 88 | 76 → **80** |
+| utf8 | 58 → 59 | 334 → 342 | 86 → 86 | 69 → 69 |
+| cyrillic | 85 → 85 | 348 → 364 | 140 → 138 | 85 → 85 |
+| altscreen | 171 → **178** | 276 → **296** | 174 → **182** | 175 → **182** |
+
+The gain is concentrated on the two escape-heavy workloads, which is where
+`consume()` is hot. Plain text goes through `printableTextRunLength` and
+`consumeAsciiCodeUnits` instead and barely reaches it. Nothing regressed in any
+of the 24 cells, and the two conditions do not overlap on `sgr` (76/76/77
+against 80/81/82) or `altscreen`'s parser column (272/276/279 against
+296/296/300).
+
+### The baseline after this
+
+| workload | full | parser | buffer% | scrollback | no-grapheme |
+|---|---|---|---|---|---|
+| ascii | 106 | 579 | 82% | 172 | 103 |
+| ascii-long-lines | 152 | 922 | 84% | 226 | 149 |
+| sgr | 81 | 133 | 39% | 88 | 80 |
+| utf8 | 59 | 342 | 82% | 86 | 69 |
+| cyrillic | 85 | 364 | 77% | 138 | 85 |
+| altscreen | 178 | 296 | 40% | 182 | 182 |
+
+This also prescreened CSI bulk scanning, which was the point of doing it first:
+`consume()` was carrying real cost, so that candidate survives. Its ceiling
+narrowed though - the same derivation now puts CSI at **at most** ~17 ns per
+character, down from ~19, and that bound still contains the CSI handler's own
+parameter walk and dispatch rather than `consume()` alone.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
