@@ -504,7 +504,19 @@ only the live cells. The VM's allocator hands out typed data that is already
 zeroed, and clearing 3 KiB by hand costs more than asking for a fresh one.
 
 Anything else aimed at the scrolling cost has to reduce the *number* of lines
-allocated or their size, not try to reuse them.
+allocated or their size, or find a way to reuse one without clearing all of it.
+
+Two things this experiment settled without a further run. First, its own
+numbers answer how much of the scrollback penalty is allocation: pooling
+without the clear recovers 63% of it on `ascii`, 84% on `cyrillic` and 93% on
+`utf8`. Nearly all of it. Second, the explanation offered above — that the VM
+hands out typed data the OS already zeroed — is a hypothesis, not a finding.
+A 170-column line is a 680-byte `Uint32List`, which is a new-space bump-pointer
+allocation that Dart zeroes explicitly. Cache locality (a fresh line lands in
+hot TLAB memory; a pooled one was evicted long ago and is cold) and whether
+`fillRange` lowers to a memset in AOT are the likelier candidates. The
+difference decides whether clearing only the written span can pay, so a second
+attempt should measure it before it starts.
 
 ## Where it stands against the published package — 2026-08-06
 
@@ -550,14 +562,64 @@ too, taking 12% longer at an 8ms budget and 46% longer at 4ms.
 ### What has not moved
 
 `sgr` is unchanged in every table: 74 → 76 MiB/s on the write path, and the
-parser alone caps it at 99. CSI dispatch is the ceiling and nothing here
-touched it. `altscreen` is unchanged because it neither scrolls nor allocates
+parser alone caps it at 99 — see "The `parser` column was wrong until
+2026-08-29" below, which re-measures that cap at 121 and cuts the parser's
+share of `sgr` from 77% to 64%. Nothing here touched CSI dispatch either way. `altscreen` is unchanged because it neither scrolls nor allocates
 lines. `fullscreen` frame times are at parity by design — the glyph cache
 regression that had moved them was removed rather than tuned.
 
 The `boxdraw` raster gap is not a regression: it survives with the glyph cache
 compiled out, and 170 columns are 1366.8px wide on this build against 1330.8px
 on the published one, so 2.7% more pixels are rasterised per frame.
+
+## The `parser` column was wrong until 2026-08-29
+
+Every `parser` number above this line, and every `buffer%` derived from one, was
+measured with a no-op handler that implemented `writeChar` and `writeText` and
+let the other 233 `EscapeHandler` members fall through to `noSuchMethod`. Each
+of those calls allocated an `Invocation` and boxed its arguments, so the column
+charged the parser for work the real `Terminal` never does.
+
+The comment justifying it said escape sequences are rare per byte. The workload
+generators in the same file disagree: `ascii` reaches a handler about 22,000
+times per MiB through `\r\n` alone, and `sgr` about 50,000 times.
+
+`bin/noop_escape_handler.dart` now implements every member explicitly, with no
+`noSuchMethod`, generated from the declarations by `script/gen_noop_handler.dart`.
+Leaving `noSuchMethod` out is the point: `implements` without it turns a member
+the benchmark has not caught up with into an analyzer error rather than a
+quietly poisoned number.
+
+### Old and new, medians of three runs each
+
+| workload | full | parser | buffer% | scrollback | no-grapheme |
+|---|---|---|---|---|---|
+| ascii | 107 → 105 | 437 → **568** | 76 → **82** | 173 → 171 | 105 → 107 |
+| ascii-long-lines | 149 → 151 | 824 → **910** | 82 → **84** | 230 → 227 | 148 → 149 |
+| sgr | 76 → 77 | 99 → **121** | 23 → **36** | 86 → 88 | 75 → 77 |
+| utf8 | 58 → 59 | 267 → **333** | 78 → **82** | 86 → 86 | 70 → 69 |
+| cyrillic | 85 → 85 | 294 → **360** | 71 → **76** | 140 → 139 | 83 → 86 |
+| altscreen | 172 → 170 | 232 → **279** | 26 → **39** | 174 → 175 | 174 → 175 |
+
+`full`, `scrollback` and `no-grapheme` all run against the real `Terminal` and
+never touched `noSuchMethod`. They are unmoved across three runs each, which is
+the control the change had to pass: only the intended column moved.
+
+Backing the artifact out of the column difference gives 22-24 ns per
+zero-argument handler call and 37-44 ns per call carrying arguments — consistent
+with an `Invocation` allocation plus argument boxing, and the reason the
+artifact weighed on `sgr` about 2.3x what it weighed on `ascii`.
+
+### What this changes
+
+The buffer's share of the write path is **larger** than the earlier tables said,
+not smaller: 82-84% on plain text, and 36-39% even on the two escape-heavy
+workloads. `sgr` is still the most parser-bound workload and its parser column
+is still by far the slowest at 121 MiB/s, but the "SGR is 77% parser" reading
+was really 64%.
+
+What did not change: `sgr`'s full-path throughput, and the cost of retaining
+scrollback. Both come from columns the defect never touched.
 
 ## Adding a workload
 

@@ -1,11 +1,14 @@
 # xterm3 — Write path throughput brifingi
 
 **Tarih:** 2026-08-29 · **Taban:** `master` @ `1537440` (release 6.1.3)
+**Revizyon:** 2026-08-29 — bölüm 5'in `parser` kolonu bozuk çıktı ve yeniden
+ölçüldü; bölüm 5, 6, 7 ve 9 buna göre güncellendi (Faz 5.1)
 **Amaç:** `Terminal.write` yolunun neden yavaş kaldığını, nelerin ölçüldüğünü ve
 nelerin denenip reddedildiğini tek dosyada devretmek.
 
-Bu dosya bir çözüm önerisi değil, bir problem tanımı. Aşağıdaki tek somut aday
-(CSI toplu tarama) **ölçülmemiş bir hipotez**; en iyi yol olduğu iddia edilmiyor.
+Bu dosya bir çözüm önerisi değil, bir problem tanımı. Bölüm 9'daki üç aday
+tavanlarına göre sıralı, ama hiçbiri uygulanmadı; ilk yazımda tek aday olarak
+sunulan CSI toplu tarama, düzeltilmiş ölçümden sonra üçüncü sıraya düştü.
 
 ---
 
@@ -49,9 +52,12 @@ tutuyor.
 
 ---
 
-## 3. Render darboğaz DEĞİL — kapanmış soru
+## 3. Render tekil frame bütçesini zorlamıyor — `drawAtlas` sorusu kapandı
 
-Faz 0–4 bunu ölçtü ve kapattı. Ajan render tarafına yönelmemeli.
+Faz 0–4 bunu ölçtü. Dikkat: kapanan soru `drawAtlas`'a geçmekti, render'ın
+tümü değil. Flood altında sürdürülebilir frame hızını hâlâ raster belirliyor
+(aşağıdaki Faz 3 maddesi bunu söylüyor) — o ayrı bir cephe, bu brifingin
+konusu değil ama "render kapalı dosya" diye okunmamalı.
 
 - Hiçbir workload 16.7 ms frame bütçesine yaklaşmıyor. En kötü p99: **2.8 ms UI /
   3.6 ms raster**.
@@ -81,6 +87,8 @@ Kolonlar:
 
 - `full` — `Terminal.write`, 10000 satır scrollback
 - `parser` — aynı baytlar `EscapeParser`'dan, hiçbir şey yapmayan handler ile
+  (`bin/noop_escape_handler.dart`, 233 üyenin hepsi açıkça uygulanmış;
+  `noSuchMethod` **eklenmemeli**, sebebi o dosyanın başlığında)
 - `buffer%` — tam yol süresinin parse olmayan kısmı
 - `scrollback` — `maxLines: 0` ile `Terminal.write`
 - `no-grapheme` — DEC mode 2027 kapalı
@@ -89,32 +97,41 @@ Kolonlar:
 
 ## 5. Taban ölçüm
 
-M-serisi macOS, MiB/s:
+M-serisi macOS, MiB/s, üçer koşunun medyanı.
 
 | workload | full | parser | buffer% | scrollback kapalı | grapheme kapalı |
 |---|---|---|---|---|---|
-| ascii | 102 | 431 | 76% | 173 | 104 |
-| ascii-long-lines | 153 | 825 | 81% | 230 | 147 |
-| **sgr** | **76** | **99** | **23%** | 85 | 75 |
-| utf8 | 59 | 265 | 78% | 86 | 69 |
-| cyrillic | 83 | 296 | 72% | 140 | 83 |
-| altscreen | 170 | 234 | 27% | 174 | 174 |
+| ascii | 105 | 568 | 82% | 171 | 107 |
+| ascii-long-lines | 151 | 910 | 84% | 227 | 149 |
+| **sgr** | **77** | **121** | **36%** | 88 | 77 |
+| utf8 | 59 | 333 | 82% | 86 | 69 |
+| cyrillic | 85 | 360 | 76% | 139 | 86 |
+| altscreen | 170 | 279 | 39% | 175 | 175 |
+
+Bu tablo, ilk yazımdakinin yerini alıyor. Eskisinin `parser` ve `buffer%`
+kolonları bir harness kusurundan geliyordu: bench'in no-op handler'ı
+`EscapeHandler`'ın 233 üyesini `noSuchMethod`'a düşürüyor, her çağrıda bir
+`Invocation` allocate ediyordu. Ölçülen artefakt: argümansız çağrıda 22–24 ns,
+argümanlıda 37–44 ns; `ascii`'de MiB başına ~22.000, `sgr`'de ~50.000 çağrı.
+`full`, `scrollback` ve `grapheme kapalı` kolonları etkilenmemişti ve
+düzeltmeden sonra da kıpırdamadılar. Tam kayıt: `RENDER_PLAN.md`, Faz 5.1.
 
 ### Üç okuma
 
 1. **Escape parser çoğu yükte darboğaz değil.** `ascii`'de parser tek başına
-   431 MiB/s, tam yol 102. Zamanın %76–81'i buffer yazımında. "Parser yavaş"
-   teşhisi bu yükler için yanlış olur.
-2. **SGR istisna.** Orada buffer sadece %23 — kalan %77 parser'ın kendisi ve
-   76 MiB/s ile en yavaş ikinci yol. Gerçek CLI çıktısı (renkli prompt,
-   `ls --color`, build log'ları, `htop`) SGR ağırlıklı olduğu için pratikte en
-   çok ödenen yol budur.
-3. **Scrollback tutmak pahalı.** Kapatınca ascii 102 → 173 (+%70), cyrillic
-   83 → 140 (+%69), utf8 59 → 86 (+%46).
+   568 MiB/s, tam yol 105. Zamanın **%82–84'ü** buffer yazımında. "Parser yavaş"
+   teşhisi bu yükler için yanlış olur — ve düzeltilmiş sayılarla daha da yanlış.
+2. **SGR istisna, ama sanıldığı kadar değil.** Orada buffer %36 — kalan %64
+   parser'ın kendisi, ve 121 MiB/s ile açık ara en yavaş parse yolu (sonraki en
+   yavaş: altscreen 279). Gerçek CLI çıktısı (renkli prompt, `ls --color`, build
+   log'ları, `htop`) SGR ağırlıklı olduğu için pratikte en çok ödenen yol budur.
+   İlk yazımdaki "%23 buffer / %77 parser" rakamı artefaktın kendisiydi.
+3. **Scrollback tutmak pahalı.** Kapatınca ascii 105 → 171 (+%63), cyrillic
+   85 → 139 (+%64), utf8 59 → 86 (+%46). Bu okuma kusurdan etkilenmedi.
 
 ---
 
-## 6. Bulunan somut nokta — doğrulanmış, çözülmemiş
+## 6. Bulunan somut nokta — üst sınır ölçüldü, payı hâlâ bilinmiyor
 
 `sgr` payload'ının **%35.8'i** CSI baytı (sayılarak ölçüldü, tahmin değil:
 8271 baytın 2963'ü, 308 CSI sekansı).
@@ -123,12 +140,24 @@ Bundan türetilen per-karakter maliyet:
 
 | yol | ns/karakter |
 |---|---|
-| toplu ASCII (`printableTextRunLength` → `writeText`) | **2.2** |
-| CSI içi (`ByteConsumer.consume()` başına) | **~23** |
+| toplu ASCII (`printableTextRunLength` → `writeText`) | **1.7** |
+| CSI içi, karakter başına **üst sınır** | **~19** |
 
-*Türetme: ascii parser 431 MiB/s → 2.21 ns/char. sgr parser 99 MiB/s →
-10.10 ms/MiB; bunun 673k metin karakteri toplu yoldan 1.49 ms, kalan 8.61 ms
-375k CSI karakterine düşüyor → 22.9 ns/char.*
+*Türetme: ascii parser 568 MiB/s → 1.72 ns/char. sgr parser 121 MiB/s →
+8.26 ms/MiB; bunun 673k metin karakteri toplu yoldan 1.16 ms, kalan 7.11 ms
+375k CSI karakterine düşüyor → 18.9 ns/char.*
+
+**Bu bir üst sınır, `consume()`'un payı değil.** O 7.11 ms'in içinde `consume()`
+dışında şunlar da var: sekans başına `_csi.params.clear()` +
+`intermediates.clear()` + `paramSeparators.clear()`, parametre başına growable
+`add()`, `FastLookupTable` dispatch'i ve `_csiHandleSgr`'ın parametre yürüyüşü.
+Hepsi MiB başına ~39.000 sekans üzerinden ödeniyor. `consume()`'un gerçek payı
+ölçülmedi; ölçmeden CSI toplu tarayıcısı yazmak, kazancı bilinmeyen bir işe
+en riskli invariantları (aşağıdaki bölüm 8) sokmak olur.
+
+Ölçmenin ucuz yolu bölüm 7'de zaten kullanılmış: CSI döngüsündeki `consume()`'u
+geçici olarak çıplak `codeUnitAt` + `offset++` ile değiştir (o hâliyle yanlış,
+sadece ölçüm için) ve tavanı gör.
 
 **Neden:** `ByteConsumer.consume()` her karakterde `_advancePastConsumedBlocks()`
 + `_decodeCodePoint` + `_codePointCodeUnitLength` + dört alan güncellemesi yapıyor.
@@ -177,11 +206,30 @@ sadece ölçüm için) maliyet ayrıştırıldı:
 **Yani havuzlama fikri doğru, temizleme onu öldürüyor.** Geri dönüşümün kendisi
 scroll ağırlıklı yüklerde %37–58 kazandırıyor.
 
-**Kök neden:** Dart'ta taze bir `Uint32List` allocate etmek, mevcut birini
-temizlemekten ucuz. VM taze tipli veriyi işletim sisteminin zaten sıfırladığı
-sayfalardan veriyor, yani allocation'daki sıfırlama pratikte bedava; `fillRange`
-ise soğuk ve halihazırda fault'lanmış birkaç KiB'ı gerçekten yazıyor. İki yol da
-"aynı kadar sıfırlıyor", maliyetleri aynı değil.
+**Kök neden — HİPOTEZ, doğrulanmadı.** İlk yazım şöyle diyordu: VM taze tipli
+veriyi işletim sisteminin zaten sıfırladığı sayfalardan verir, yani
+allocation'daki sıfırlama bedavadır. Bu 170 sütunluk bir satır için muhtemelen
+yanlış — o 680 baytlık bir `Uint32List`, yani new-space bump-pointer
+allocation'ı, ve Dart onu açıkça sıfırlıyor. Daha olası iki aday: **önbellek
+konumu** (taze satır sıcak TLAB belleğine düşüyor, havuzdan gelen satır uzun süre
+önce tahliye edilmiş ve soğuk) ve `Uint32List.fillRange`'in AOT'ta memset'e
+intrinsify edilip edilmediği.
+
+Ayrım pratik: OS-sayfası modeli doğruysa kısmi temizleme de kaybeder; önbellek
+modeli doğruysa kazanır, çünkü kısa shell satırlarında dokunulan aralık bir cache
+line'a sığar. Ölçülen (2 kat yavaşlama) sağlam, açıklama değil.
+
+**Bu deneyin ölçmeden cevapladığı bir soru var.** Kendi iki tablosunu yan yana
+koy: scrollback cezasının ne kadarını havuzlama geri alıyor?
+
+| workload | taban | scrollback kapalı | havuz, temizlemesiz | ceza | geri alınan |
+|---|---|---|---|---|---|
+| ascii | 102 | 173 | 147 | 71 | 45 (%63) |
+| cyrillic | 83 | 140 | 131 | 57 | 48 (%84) |
+| utf8 | 59 | 86 | 84 | 27 | 25 (%93) |
+
+Yani scrollback tutmanın maliyetinin %63–93'ü satır allocation'ı. Bölüm 9'un
+3. açık sorusu ("ne kadarı GC promotion baskısı") büyük ölçüde cevaplı.
 
 **Bir daha denenirse** tam temizlemeden kaçınmak şart — örneğin satır başına
 "yazılmış en yüksek sütun" işareti tutup yalnızca o aralığı temizlemek. Tipik kısa
@@ -197,6 +245,11 @@ bir yolda allocation yapmayan bir `hasAnchors` gerekir.
 
 ## 8. Kısıtlar
 
+- **Harness'ı önce doğrula.** Faz 5.1'in dersi: brifingin iki teşhisi de bir
+  ölçüm artefaktından çıkmıştı. `bin/noop_escape_handler.dart`'a `noSuchMethod`
+  eklemek (ya da `EscapeHandler`'a üye ekleyip dosyayı yeniden üretmemek)
+  `parser` kolonunu tekrar zehirler. Dosya `script/gen_noop_handler.dart` ile
+  üretiliyor, elle yamanmıyor.
 - **Ölçmeden birleştirme yok.** Bu reponun kuralı: Faz 1, 3 ve 5 böyle reddedildi.
   Her değişiklik `parse_bench` ile ölçülüp önce/sonra tablosuyla gelmeli. Negatif
   çıkarsa geri alınıp `RENDER_PLAN.md`'ye kayıt düşülmeli — reddedilen deneyin
@@ -207,7 +260,7 @@ bir yolda allocation yapmayan bir `hasAnchors` gerekir.
   sınırına dayandığı vakalar için yeni test şart.
 - `dart analyze` sıfır uyarı, `flutter test` tamamen yeşil olmalı.
   Bu brifing yazılırken `master` @ `1537440` üzerinde taban **853 test geçiyor,
-  1 atlanıyor** — bir değişiklik bu sayıyı düşürmemeli.
+  1 atlanıyor** — bir değişiklik bu sayıyı düşürmemeli. Faz 5.1 sonrası aynı.
 - Ölçüm gürültü bandı, Faz 2'de dört koşuyla belirlendi: **±0.5 ms** (frame
   ölçümleri için). `parse_bench` throughput sayıları daha kararlı ama tek koşuya
   güvenilmemeli.
@@ -218,14 +271,35 @@ bir yolda allocation yapmayan bir `hasAnchors` gerekir.
 
 `Terminal.write`'ı, özellikle SGR ağırlıklı çıktıda, nasıl hızlandırırız?
 
-Bilinen üç açık cephe, hepsi ölçülmüş, hiçbiri çözülmemiş:
+Düzeltilmiş tabandan çıkan sıra — en yüksek ölçülmüş tavandan en düşüğe:
 
-1. **CSI parametre tarama maliyeti** — karakter başına ~23 ns, toplu metin
-   yolunun 10 katı. Bölüm 6.
-2. **Buffer yazım yolu** — düz metinde toplam sürenin %76–81'i. Bölüm 5.
-   Havuzlama denendi ve reddedildi (bölüm 7); başka yaklaşımlar açık.
-3. **Scrollback tutma maliyeti** — %46–70. Bölüm 5. Bunun ne kadarının GC
-   promotion baskısı, ne kadarının başka bir şey olduğu ölçülmedi.
+1. **Satır havuzu, 2. deneme (sınırlı temizleme).** Tavanı zaten ölçülü:
+   bölüm 7'nin "havuz, temizlemesiz" kolonu, ascii 102 → 147. Fikir doğru,
+   temizleme stratejisi yanlıştı. Ama önce bölüm 7'deki kök neden ayrımı
+   ölçülmeli, çünkü kısmi temizlemenin ödeyip ödemeyeceği ona bağlı.
+2. **`ByteConsumer.consume()` ASCII fast path.** `byte_consumer.dart:31-42`:
+   `_decodeCodePoint` ve `_codePointCodeUnitLength` aynı surrogate testini iki
+   kez yapıyor, `first < 0xd800` iken ikisinin de cevabı sabit. ~10 satır, yeni
+   durum yok, rollback semantiği değişmiyor (`_previousRuneOffset` surrogate
+   olmayan için zaten `offset - 1` veriyor). `consume()` çağıran her yol
+   kazanıyor — sgr, utf8, altscreen, OSC, `_discardCsiInput`. Aynı zamanda
+   madde 3'ün ön elemesi.
+3. **CSI parametre tarama maliyeti.** Karakter başına **en fazla** ~19 ns.
+   Bölüm 6 — ve orada yazdığı gibi, bu üst sınırın ne kadarının `consume()`
+   olduğu ölçülmeden yazılmamalı.
+
+Bu üçünün toplamı bile saha semptomunu kapatmaz. Bunun sebebi bölüm 1'de duruyor
+ama sonucu orada yazılmamış: vtebench 40–90 MiB/s süregelen üretiyor, write sgr'de
+77 MiB/s, ve kuyruk sınırsız. Write'ı %30 hızlandırmak donmayı gidermez,
+geciktirir. xterm3 içinde kalan asıl kaldıraç, backlog bir eşiği aştığında
+scrollback'e yazmayı / reflow'u / anchor bakımını atlayan bir mod; tavanı
+`scrollback kapalı` kolonunda zaten duruyor (ascii +%63). `RENDER_PLAN.md`'de
+Faz 6 adayı olarak kayıtlı, bilerek bu round'un dışında.
+
+Not: bölüm 1'in "uygulama tarafında düzeltilemez" tespiti `flutter_pty`'nin
+**public Stream API'si** için doğru; native okuma tarafının fork'lanamayacağı
+ya da fd'nin bir isolate'ten okunamayacağı anlamına gelmiyor. O kapı kapalı
+ilan edildi ama denenmedi.
 
 `BENCHMARKS.md`'de ayrıca iki açık ölçüm borcu var: `sgr` workload'ının viewport'u
 takip edip etmediği, ve `fullscreen`'in koşular arası tek yönlü tırmanışının

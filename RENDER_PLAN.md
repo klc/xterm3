@@ -409,6 +409,160 @@ Kod `master`'a girmedi, branch silindi. Kalan değer bu kayıt.
 
 ---
 
+## Faz 5.1 — Faz 5'in `parser` kolonu bozuktu — **ONARILDI (2026-08-29)**
+
+Faz 5'in üç okumasından ikisi `bin/parse_bench.dart`'ın `parser` kolonundan
+çıkarılmıştı. O kolon, ölçmek istediği şeyi ölçmüyordu.
+
+### Kusur
+
+Bench'in no-op handler'ı yalnızca `writeChar` ve `writeText`'i uyguluyor,
+`EscapeHandler`'ın kalan 233 üyesini `noSuchMethod`'a düşürüyordu. Her çağrı bir
+`Invocation` allocate ediyor ve argümanları kutuluyor. Dosyanın kendi gerekçesi
+"escape sekansları bayt başına nadirdir" idi; aynı dosyadaki workload üreteçleri
+bunu yalanlıyor:
+
+| workload | handler çağrısının kaynağı | ~çağrı/MiB |
+|---|---|---|
+| ascii | satır başına `\r\n` → `carriageReturn` + `lineFeed` | 22.000 |
+| utf8 | aynı | 34.000 |
+| sgr | satır başına 6 SGR + 1 reset + `\r\n` | 50.000 |
+| altscreen | satır başına CUP + SGR + SGR-reset | 16.000 |
+
+Yani `parser` kolonu, gerçek `Terminal`'in hiç ödemediği bir harness maliyetini
+parser'ın hesabına yazıyordu — ve `buffer% = 1 - full/parser` olduğu için aynı
+maliyet `buffer%`'i de aşağı çekiyordu.
+
+### Onarım
+
+`bin/noop_escape_handler.dart`: 233 üyenin hepsi açıkça uygulanmış, `noSuchMethod`
+yok. `script/gen_noop_handler.dart` dosyayı `handler.dart`'tan üretiyor.
+
+`noSuchMethod`'un yokluğu bir tercih değil, mekanizmanın kendisi: `implements` var
+ve `noSuchMethod` yokken, `handler.dart`'a yarın eklenecek bir üye bench'i sessizce
+zehirlemek yerine analyzer hatası veriyor.
+
+### Eski / yeni taban
+
+Üçer koşunun medyanı, aynı makine ve oturum, `dart compile exe`.
+
+| workload | full | parser eski → yeni | buffer% eski → yeni | scrollback | no-grapheme |
+|---|---|---|---|---|---|
+| ascii | 107 → 105 | 437 → **568** (+%30) | 76 → **82** | 173 → 171 | 105 → 107 |
+| ascii-long-lines | 149 → 151 | 824 → **910** (+%10) | 82 → **84** | 230 → 227 | 148 → 149 |
+| sgr | 76 → 77 | 99 → **121** (+%22) | 23 → **36** | 86 → 88 | 75 → 77 |
+| utf8 | 58 → 59 | 267 → **333** (+%25) | 78 → **82** | 86 → 86 | 70 → 69 |
+| cyrillic | 85 → 85 | 294 → **360** (+%22) | 71 → **76** | 140 → 139 | 83 → 86 |
+| altscreen | 172 → 170 | 232 → **279** (+%20) | 26 → **39** | 174 → 175 | 174 → 175 |
+
+**Kontrol:** `full`, `scrollback` ve `no-grapheme` gerçek `Terminal` handler'ını
+kullanıyor, `noSuchMethod`'a hiç uğramıyorlardı — ve üç koşuda da kıpırdamadılar.
+Değişikliğin yalnızca hedeflenen kolonu etkilediğinin kanıtı bu.
+
+Gürültü notu: eski koşularda `sgr`'nin `full` değeri 69–77 arasında oynadı (%11),
+`utf8`'in `no-grapheme` değeri 62–70. Yeni koşularda ikisi de daha kararlı. Tek
+koşuya hâlâ güvenilmemeli.
+
+### Artefaktın büyüklüğü
+
+Kolon farkından geri çıkarılan `noSuchMethod` maliyeti:
+
+| workload | Δ ms/MiB | çağrı/MiB | ns/çağrı |
+|---|---|---|---|
+| ascii | 0.53 | 22.000 | 24 |
+| utf8 | 0.74 | 34.000 | 22 |
+| sgr | 1.84 | 50.000 | 37 |
+| altscreen | 0.73 | 16.000 | 44 |
+
+Argümansız çağrılar 22–24 ns, argüman taşıyanlar 37–44 ns. `Invocation`
+allocation'ı artı argüman kutulama ile tutarlı, ve artefaktın neden `sgr`'de
+`ascii`'den ağır bastığını açıklıyor: hem daha sık, hem argümanlı.
+
+### Faz 5'in üç okumasının revizyonu
+
+1. **"Escape parser çoğu yükte darboğaz değil" — ayakta, hatta daha güçlü.**
+   Buffer payı düz metinde %76–81 değil **%82–84**.
+2. **"SGR istisna, buffer sadece %23" — yön doğru, büyüklük yanlış.** Gerçek sayı
+   **%36**. SGR hâlâ en parser-ağırlıklı yük ve `parser` kolonu 121 MiB/s ile
+   açık ara en yavaş parse yolu (sonraki en yavaş: altscreen 279), ama "kalan
+   %77 parser'ın kendisi" ifadesi %64'e iniyor. Aynı düzeltme `altscreen`'i de
+   %26'dan %39'a taşıyor.
+3. **"Scrollback tutmak pahalı" — dokunulmadı.** Bu okuma `full` ve `scrollback`
+   kolonlarından geliyor, ikisi de kusurdan etkilenmiyordu.
+
+### `WRITE_PATH_BRIEF.md` bölüm 6'nın türetmesi
+
+Brifing CSI karakteri başına ~23 ns çıkarmıştı. Düzeltilmiş sayılarla aynı türetme
+~19 ns veriyor. Ama bu hâlâ bir **üst sınır**, ölçüm değil: kalan sürenin içinde
+`ByteConsumer.consume()`'un yanı sıra `_csi.params.clear()`/`add()`,
+`FastLookupTable` dispatch'i ve `_csiHandleSgr`'ın parametre yürüyüşü de var.
+`consume()`'un gerçek payı hâlâ ölçülmedi.
+
+### Bu tabandan çıkan aday sırası
+
+1. **Satır havuzu, 2. deneme (sınırlı temizleme).** Ölçülmüş tavanı en yüksek olan
+   aday, ve düzeltme onu güçlendirdi: buffer payı her yükte sanılandan büyük
+   çıktı. Reddedilen deneyin "havuz, temizlemesiz" kolonu tavanı zaten veriyor
+   (ascii 102 → 147).
+2. **`ByteConsumer.consume()` ASCII fast path.** `byte_consumer.dart:31-42`;
+   `_decodeCodePoint` ve `_codePointCodeUnitLength` aynı surrogate testini iki kez
+   yapıyor ve `first < 0xd800` iken ikisinin de cevabı sabit. ~10 satır, rollback
+   semantiği değişmiyor, `consume()` çağıran her yol kazanıyor. Aynı zamanda
+   madde 3'ün ön elemesi: kazanç çıkmazsa CSI hipotezi tek ölçümle düşer.
+3. **CSI parametre toplu tarama.** Önceliği düştü ama ölmedi. Yazmadan önce
+   throwaway bir hack ile tavanı ölçmek şart — sekans başına 9.6 bayt ve 1–3
+   haneli parametre koşuları toplu taramanın kurulum maliyetini zor amorti eder.
+
+### Ölçüm gerektirmeyen iki kayıt
+
+**Scrollback cezasının %63–93'ü satır allocation'ı.** Faz 5'in kendi iki
+tablosundan, yeni ölçüm yapmadan:
+
+| workload | taban | scrollback kapalı | havuz, temizlemesiz | ceza | geri alınan |
+|---|---|---|---|---|---|
+| ascii | 102 | 173 | 147 | 71 | 45 (%63) |
+| cyrillic | 83 | 140 | 131 | 57 | 48 (%84) |
+| utf8 | 59 | 86 | 84 | 27 | 25 (%93) |
+
+Faz 5'in "scrollback maliyetinin ne kadarı GC promotion baskısı" açık sorusu böylece
+büyük ölçüde cevaplı: allocation. Ve reddedilen havuz deneyi bunun kanıtı — fikir
+yanlış değildi, temizleme stratejisi yanlıştı.
+
+**Faz 5'in "kök neden" paragrafı bir hipotez, doğrulanmış değil.** "VM taze tipli
+veriyi OS'un sıfırladığı sayfalardan verir" açıklaması 170 sütunluk bir satır
+(680 baytlık `Uint32List`) için muhtemelen yanlış — o boyut new-space bump-pointer
+allocation'ı ve Dart onu açıkça sıfırlıyor. Daha olası iki aday: önbellek konumu
+(taze satır sıcak TLAB'de, havuzdan gelen satır uzun süre önce tahliye edilmiş ve
+soğuk) ve `Uint32List.fillRange`'in AOT'ta memset'e intrinsify edilip edilmediği.
+Ayrım pratik sonuç doğuruyor: OS-sayfası modeli doğruysa kısmi temizleme de
+kaybeder, önbellek modeli doğruysa kazanır — çünkü kısa shell satırlarında
+dokunulan aralık bir cache line'a sığar. 2. deneme bu ayrımı ölçmeden başlamamalı.
+
+---
+
+## Faz 6 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
+
+Saha semptomu (ShellVibe'da vtebench sırasında donma) write hızıyla kapanmıyor,
+ve bu aritmetikle görülebiliyor: vtebench 1 MiB'ı 11–24 ms'de boşaltıyor, yani
+40–90 MiB/s süregelen üretim; `Terminal.write` sgr'de 77 MiB/s. Write'ı %30
+hızlandırmak, kuyruğu sınırsız olan bir sistemde donmayı gidermez, geciktirir.
+
+`PacedTerminalWriter` bunu kendi dokümanında söylüyor
+(`lib/src/ui/paced_writer.dart:28-31`): backpressure yok, bekleyen chunk'lar parse
+edilene kadar tutuluyor. Not: Faz 5'teki "uygulama tarafında düzeltilemez" ifadesi
+`flutter_pty`'nin **public Stream API'si** için doğru; native okuma tarafının
+değiştirilemeyeceği anlamına gelmiyor, o kapı ölçülmedi.
+
+xterm3 içinde kalan kaldıraç: backlog bir eşiği aştığında scrollback'e yazmayı,
+reflow'u ve anchor bakımını atlayan bir mod — o satırlar nasılsa viewport'a hiç
+girmeden kayacak. Tavanı zaten ölçülü: `scrollback` kolonu ascii'de +%63,
+cyrillic'te +%64.
+
+Bu round'un dışında bırakıldı: API yüzeyi kararı gerektiriyor, ve mikro-optimizasyon
+ölçümleriyle aynı anda gitmesi ikisinin de gürültüsünü karıştırır.
+
+---
+
 ## Sıralama ve risk
 
 | Faz | İş | Bağımlılık | Risk |
@@ -419,6 +573,11 @@ Kod `master`'a girmedi, branch silindi. Kalan değer bu kayıt.
 | 3 | Line picture cache | 1, 2 | yapıldı, branch'te kaldı (ölçüm negatif) |
 | 4 | Ölçüm + karar | 0, 3 | cevaplandı |
 | 5 | Write path ölçümü | 0 | ölçüldü; satır havuzu reddedildi (ölçüm negatif) |
+| 5.1 | `parser` kolonunun onarımı | 5 | **`master`'a aday** — `lib/` değişmedi |
+| 6 | Flood altında ileri sarma | 5.1 | önerildi, ölçülmedi |
+
+Faz 5.1 yalnızca `bin/` ve `script/`'e dokunuyor, `lib/` altında hiçbir değişiklik
+yok — ürün riski sıfır, çıktısı karar verilebilir sayılar. Faz 6 bilerek ertelendi.
 
 `master` Faz 0 ve Faz 2'yi aldı — ölçüm altyapısı ve davranış değiştirmeyen pass
 ayrımı. Faz 1 ve Faz 3 `render-line-picture-cache` branch'inde duruyor.
