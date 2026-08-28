@@ -7,7 +7,9 @@ taban yine değişti. Bölüm 5, 6, 7 ve 9 güncel.
 **Amaç:** `Terminal.write` yolunun neden yavaş kaldığını, nelerin ölçüldüğünü ve
 nelerin denenip reddedildiğini tek dosyada devretmek.
 
-**Durum:** bölüm 9'daki üç adayın üçü de kapandı. Biri birleştirildi
+**Durum:** bölüm 9'daki üç adayın üçü de kapandı, ve bölüm 5'in üçüncü okuması
+(scrollback maliyeti) Faz 6'da kaynağına kadar ölçüldü — write path'teki en büyük
+tek kaldıraç orada duruyor, uygulanmamış hâlde. Biri birleştirildi
 (`consume()` fast path, Faz 5.2), ikisi ölçülerek reddedildi (satır havuzu
 Faz 5.3, CSI toplu tarama Faz 5.4). `Terminal.write` üzerinde kalan bilinen
 mikro adım bölüm 9'un 4. maddesi; asıl kaldıraç ise bölüm 9'un sonundaki
@@ -132,7 +134,8 @@ düzeltmeden sonra da kıpırdamadılar. Tam kayıt: `RENDER_PLAN.md`, Faz 5.1.
    log'ları, `htop`) SGR ağırlıklı olduğu için pratikte en çok ödenen yol budur.
    İlk yazımdaki "%23 buffer / %77 parser" rakamı artefaktın kendisiydi.
 3. **Scrollback tutmak pahalı.** Kapatınca ascii 106 → 172 (+%62), cyrillic
-   85 → 138 (+%62), utf8 59 → 86 (+%46). Bu okuma kusurdan etkilenmedi.
+   85 → 138 (+%62), utf8 59 → 86 (+%46). Bu okuma kusurdan etkilenmedi, ve
+   Faz 6'da kaynağına kadar ölçüldü — bölüm 9, madde 5.
 
 ---
 
@@ -301,20 +304,38 @@ Düzeltilmiş tabandan çıkan sıra — en yüksek ölçülmüş tavandan en d�
    etrafında toplu iş yapmanın amorti edeceği bir şey kalmadı — sgr'de sekans
    başına 9.6 bayt ve ilk rakam zaten alındığı için toplu yola ortalama 1.5
    rakam kalıyor.
-4. **`consume()` içinde `_queue.first`'e çift erişim.** Kalan tek bilinen mikro
-   adım; Faz 5.4'ten sonra bu cephede başka aday yok. Fast path'ten sonra
+4. **`consume()` içinde `_queue.first`'e çift erişim.** Parse tarafında kalan
+   tek bilinen mikro adım; Faz 5.4'ten sonra o cephede başka aday yok. Fast path'ten sonra
    kalan en görünür artık: bir kez `_advancePastConsumedBlocks()` içinde, bir
    kez `_queue.first.data` ile. Aktif bloğu bir alanda tutmak tekleştirir, ama
    `add`/`rollback`/`unrefConsumedBlocks`/`reset` yollarında geçersiz kılma
    gerektiriyor — madde 2'den daha fazla invariant taşıyor.
 
+5. **Doğuştan küçük satır — write path'teki en büyük açık aday.** Faz 6
+   scrollback cezasının kaynağını buldu: GC'nin her satırın 3072 baytlık
+   backing store'unu old space'e terfi ettirirken yaptığı kopya. Canlı küme
+   sürüklüyor — 30 sütun yazan bir satır 50 canlıyken 151 ns, 10000 canlıyken
+   561 ns. Satır yazdığı genişliğe göre allocate edilse **1.2–3.0×**, artı
+   scrollback belleği 30 MB'tan ~10-15 MB'a iner.
+
+   Fikrin belirgin hâli olan "viewport'tan çıkarken trim et" **ölçüldü ve
+   kaybediyor** (%9–30): trim, promotion'da kazandığını küçük bir allocate
+   artı kopyayla geri veriyor. Kazancı veren şey büyük store'u geri vermek
+   değil, hiç allocate etmemek. Açık olan form: satır `_calcCapacity`'nin
+   tabanı 64 hücreyle doğar, büyütme `line.dart`'ın yazma metotlarının içinde
+   olur — `Buffer` değişmez, invariant korunur, okuma yolunda kontrol
+   gerekmez. Ölçülmeyen: sıcak yazma yolundaki kapasite karşılaştırması ve
+   `altscreen` (her satırı tam genişlik yazıyor, orada net kayıp olabilir).
+   `RENDER_PLAN.md` Faz 6.
+
 Bunların toplamı bile saha semptomunu kapatmaz. Bunun sebebi bölüm 1'de duruyor
 ama sonucu orada yazılmamış: vtebench 40–90 MiB/s süregelen üretiyor, write sgr'de
 77 MiB/s, ve kuyruk sınırsız. Write'ı %30 hızlandırmak donmayı gidermez,
-geciktirir. xterm3 içinde kalan asıl kaldıraç, backlog bir eşiği aştığında
-scrollback'e yazmayı / reflow'u / anchor bakımını atlayan bir mod; tavanı
-`scrollback kapalı` kolonunda zaten duruyor (ascii +%63). `RENDER_PLAN.md`'de
-Faz 6 adayı olarak kayıtlı, bilerek bu round'un dışında.
+geciktirir. Backlog bir eşiği aştığında scrollback'e yazmayı / reflow'u / anchor
+bakımını atlayan bir mod, `RENDER_PLAN.md`'de Faz 7 adayı olarak kayıtlı.
+Önceliği Faz 6'nın altında: aynı maliyete kayıpsız ve API'siz saldıran bir yol
+varken, kayıplı ya da eşik-tabanlı bir moda geçmek için önce onun tükenmesi
+gerekir.
 
 Not: bölüm 1'in "uygulama tarafında düzeltilemez" tespiti `flutter_pty`'nin
 **public Stream API'si** için doğru; native okuma tarafının fork'lanamayacağı
