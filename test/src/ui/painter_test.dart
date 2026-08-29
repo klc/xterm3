@@ -1043,6 +1043,69 @@ void main() {
     ligaturePainter.dispose();
   });
 
+  test('TerminalPainter bounds its rejected ligature run set', () {
+    // A devicePixelRatio far below 1 makes snapToDevicePixels clamp the
+    // measured cell size to a value wildly larger than any real glyph
+    // advance (cellSize below), so every multi-cell run is rejected: the
+    // shaped paragraph never comes close to filling `cellSize.width *
+    // length`. That turns rejection into a deterministic, engine-agnostic
+    // way to drive the rejected-run set, instead of relying on incidental
+    // font kerning.
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(enableLigatures: true),
+      textScaler: TextScaler.noScaling,
+      devicePixelRatio: 0.011,
+    );
+    expect(painter.cellSize.width, greaterThan(50));
+
+    const punctuation = '!#&*+-./:;<=>?\\^_|~';
+    final texts = <String>[];
+    for (var a = 0; a < punctuation.length; a++) {
+      for (var b = 0; b < punctuation.length; b++) {
+        texts.add(punctuation[a] + punctuation[b]);
+      }
+    }
+    outer:
+    for (var a = 0; a < punctuation.length; a++) {
+      for (var b = 0; b < punctuation.length; b++) {
+        for (var c = 0; c < punctuation.length; c++) {
+          texts.add(punctuation[a] + punctuation[b] + punctuation[c]);
+          if (texts.length >= 700) break outer;
+        }
+      }
+    }
+
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    for (final text in texts) {
+      final terminal = Terminal()
+        ..resize(9, 1)
+        ..write(text);
+      painter.paintLineForegrounds(
+        canvas,
+        Offset.zero,
+        terminal.buffer.lines[0],
+      );
+    }
+    recorder.endRecording().dispose();
+
+    // None of the 700 runs shaped into something that fills its cells, so
+    // every one of them went through the rejection path rather than adding a
+    // run-keyed entry to the paragraph cache: only the single-cell entries
+    // for the 20-character punctuation alphabet are present.
+    expect(painter.paragraphCacheLength, lessThanOrEqualTo(punctuation.length));
+
+    // 700 distinct run texts (plus the suffix runs the per-cell fallback
+    // re-attempts after each rejection) comfortably exceed the 512-entry
+    // bound, so without the wholesale clear this would settle at whatever
+    // count of distinct rejections that traffic produced. With it, the set
+    // never grows past its bound.
+    expect(painter.rejectedLigatureRunsLength, lessThanOrEqualTo(512));
+
+    painter.dispose();
+  });
+
   test('symbol glyphs can extend into an adjacent blank cell', () {
     final painter = TerminalPainter(
       theme: TerminalThemes.whiteOnBlack,

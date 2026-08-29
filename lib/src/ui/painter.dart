@@ -46,6 +46,20 @@ const _maxLigatureRunLength = 8;
 /// drift off the cell grid is rejected here and painted cell by cell instead.
 const _ligatureAdvanceEpsilon = 0.5;
 
+/// Upper bound on the number of entries in [TerminalPainter._rejectedLigatureRuns].
+///
+/// The key space is nominally huge — up to 8 punctuation characters drawn
+/// from the ~20 accepted by [_isLigatureCandidate], times 4 face-flag
+/// combinations — but real content only ever produces a few dozen distinct
+/// runs (operators like `->`, `=>`, `==`, `&&`, comment borders, and the
+/// like). 512 sits comfortably above that working set while still being
+/// small enough that a wholesale clear, on the rare content that keeps
+/// generating new runs, is cheap and rare. Overflow is never a correctness
+/// issue: an evicted rejection is rediscovered the next time its run is
+/// shaped, which costs exactly the one extra layout the entry existed to
+/// avoid.
+const _maxRejectedLigatureRuns = 512;
+
 /// Whether [codePoint] may take part in a ligature.
 ///
 /// Restricted to the ASCII punctuation that programming ligatures are built
@@ -167,6 +181,12 @@ class TerminalPainter {
   /// per rejected run into [_paragraphCache], where it would never be drawn
   /// yet keep competing with the single-cell entries for slots. Validity
   /// depends on the resolved font, so this is cleared wherever the cache is.
+  ///
+  /// Bounded by [_maxRejectedLigatureRuns] at the one add site: unlike
+  /// [_paragraphCache], which is bounded by a per-key LRU because a cache
+  /// miss there is expensive, a dropped rejection here only costs one
+  /// re-layout of that run — precisely what the entry was avoiding — so a
+  /// plain wholesale clear on overflow is enough.
   final _rejectedLigatureRuns = <(String, int)>{};
 
   final Map<int, Color> _indexedColorOverrides = {};
@@ -299,6 +319,11 @@ class TerminalPainter {
   int get paragraphCacheLength => _paragraphCache.length;
 
   int get proceduralGlyphCacheLength => _proceduralGlyphCache.length;
+
+  /// Exposed for tests: the number of run texts currently remembered as not
+  /// shaping into a grid-aligned ligature.
+  @visibleForTesting
+  int get rejectedLigatureRunsLength => _rejectedLigatureRuns.length;
 
   int glyphConstraintCellSpan(BufferLine line, int column) {
     final gridWidth = line.getWidth(column);
@@ -793,6 +818,13 @@ class TerminalPainter {
       final candidate = _layoutRun(text, style);
       if (!_runFillsCells(candidate, runWidth)) {
         candidate.dispose();
+        // Real content only ever produces a few dozen distinct rejected
+        // runs; reaching the bound means something pathological is feeding
+        // this path, and a full clear is cheaper than tracking which entry
+        // to evict for a case that is not expected to occur.
+        if (_rejectedLigatureRuns.length >= _maxRejectedLigatureRuns) {
+          _rejectedLigatureRuns.clear();
+        }
         _rejectedLigatureRuns.add(rejectionKey);
         return false;
       }
