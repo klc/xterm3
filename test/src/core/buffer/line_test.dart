@@ -395,4 +395,17 @@ void main() {
     expect(cell.content & CellContent.codepointMask, 0x41);
     expect(line.getCodePoint(0), 0x41);
   });
+
+  test('hasAnchors answers without building the anchors view', () {
+    final line = BufferLine(10);
+    expect(line.hasAnchors, isFalse);
+
+    final anchor = line.createAnchor(2);
+    expect(line.hasAnchors, isTrue);
+    expect(line.anchors, hasLength(1));
+
+    anchor.dispose();
+    expect(line.hasAnchors, isFalse);
+    expect(line.anchors, isEmpty);
+  });
 }

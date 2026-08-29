@@ -803,6 +803,53 @@ Not implemented: a line born at the 64-cell floor and grown from inside
 `BufferLine`'s own write methods. Ceiling measured at 1.2-3.0x, cost on the
 per-code-point write path unmeasured.
 
+## Costs of a code review's findings — 2026-08-29
+
+A review flagged thirteen things by inspection. Nine held up against the code;
+`bin/review_bench.dart` then measured the ones that are measurable, because
+inspection cannot tell a finding that costs a microsecond a minute from one
+that costs a millisecond a frame. Numbers are medians of five, interleaved
+before and after.
+
+| finding | before | after |
+|---|---|---|
+| `wholeWord` search, matches abutting word chars | 14.3 ms | **12.9 ms** |
+| `wholeWord` search, matches at word boundaries | 7.2 ms (+10% over plain) | **6.6 ms (+1%)** |
+| `urlAt` per pointer hover | 1.3-1.9 us + ~3 KB | **not run while the modifier is up** |
+| editable rect reports per 50 writes | 50 ancestor walks | **1, at the next paint** |
+| `runes.length` + `runes.first` per keystroke | 25 ns | **3 ns** |
+| `isSemanticPromptLine`, 1000 prompts queued | 14.5 us | 19.4 us |
+| reflow 10000 lines, one anchor each | 199-214 ns/line | 204-249 ns/line |
+| OSC 52 clipboard, 8 KiB payload | 12.6 ns/byte | 12.7 ns/byte |
+
+The last three are the honest part of the table.
+
+**Reflow anchors and the OSC rejoin measured neutral.** `BufferLine.anchors`
+really does allocate an `UnmodifiableListView` per call and reflow really did
+call it inside its copy loop, and `_osc.sublist(n).join(';')` really does
+allocate a list to copy strings that mostly did not need copying. Both are now
+avoided, and neither shows up in the timing. They are kept because they remove
+provably dead work and because `hasAnchors` is the API the code wanted, not
+because they made anything faster - and this table is where that is written
+down rather than implied.
+
+**The semantic prompt queue got slower, deliberately.** The prune only dropped
+stale anchors from the front, so anchors that went stale in the middle stayed.
+That is not just wasted scanning: the queue is capped at the buffer's line
+count and the cap evicts from the front, so enough stale entries push a
+still-valid prompt out and the terminal forgets a prompt that is on screen.
+`terminal_test.dart` has that as a regression test, and it fails against the
+old prune. The full sweep costs one extra traversal of the queue - 5 us at
+1000 queued prompts - on a path that only `ui/shortcut/actions.dart` reaches,
+from a keyboard shortcut. Not a frame path.
+
+**Two flagged items were left alone.** `_csi.params` could be a fixed
+`Int32List` instead of a growable list, but Phase 5.4 measured that whole loop
+and found reordering it worth nothing and batching it worth -8%, so there is no
+reason to expect this one to pay. And `PacedTerminalWriter`'s unbounded queue
+is real, but bounding it means either dropping output or a threshold mode with
+an API surface - recorded as Phase 7, not something to slip into a cleanup.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and

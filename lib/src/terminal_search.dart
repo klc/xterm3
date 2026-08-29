@@ -122,5 +122,18 @@ int? _codePointAt(String text, int offset) {
 
 bool _isWordCodePoint(int? value) {
   if (value == null) return false;
+
+  // ASCII covers the overwhelming majority of what a terminal search runs
+  // against, and every ASCII answer is decidable by range. Taking it here
+  // keeps `String.fromCharCode` and a Unicode regex off the path: a
+  // `wholeWord` search runs this twice per candidate match, so on output
+  // where matches abut word characters it was doubling search time.
+  if (value < 0x80) {
+    return (value >= 0x30 && value <= 0x39) || // 0-9
+        (value >= 0x41 && value <= 0x5a) || // A-Z
+        (value >= 0x61 && value <= 0x7a) || // a-z
+        value == 0x5f; // _
+  }
+
   return _wordCodePoint.hasMatch(String.fromCharCode(value));
 }

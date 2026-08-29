@@ -149,7 +149,10 @@ class CursorStyle {
 
   bool get isFaint => (attrs & CellAttr.faint) != 0;
 
-  bool get isItalis => (attrs & CellAttr.italic) != 0;
+  bool get isItalic => (attrs & CellAttr.italic) != 0;
+
+  @Deprecated('Use isItalic instead. Will be removed in the next major.')
+  bool get isItalis => isItalic;
 
   bool get isUnderline => (attrs & CellAttr.underline) != 0;
 
@@ -174,6 +177,8 @@ class CursorStyle {
   bool get isEncircled => (attrs & CellAttr.encircled) != 0;
 
   bool get isProtected => (attrs & CellAttr.protected) != 0;
+
+  bool get isStrikethrough => (attrs & CellAttr.strikethrough) != 0;
 
   void setForegroundColor16(int color) {
     foreground = color | CellColor.named;

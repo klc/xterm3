@@ -307,7 +307,6 @@ class Terminal
   bool isSemanticPromptLine(int line) {
     _pruneSemanticPromptAnchors();
     for (final anchor in _semanticPromptAnchors) {
-      if (!_isValidSemanticPromptAnchor(anchor)) continue;
       if (anchor.y == line) return true;
       if (anchor.y > line) return false;
     }
@@ -319,7 +318,6 @@ class Terminal
     _pruneSemanticPromptAnchors();
     int? result;
     for (final anchor in _semanticPromptAnchors) {
-      if (!_isValidSemanticPromptAnchor(anchor)) continue;
       if (anchor.y >= line) break;
       result = anchor.y;
     }
@@ -330,7 +328,6 @@ class Terminal
   int? semanticPromptLineAfter(int line) {
     _pruneSemanticPromptAnchors();
     for (final anchor in _semanticPromptAnchors) {
-      if (!_isValidSemanticPromptAnchor(anchor)) continue;
       if (anchor.y > line) return anchor.y;
     }
     return null;
@@ -3108,10 +3105,30 @@ class Terminal
   }
 
   void _pruneSemanticPromptAnchors() {
-    while (_semanticPromptAnchors.isNotEmpty &&
-        !_isValidSemanticPromptAnchor(_semanticPromptAnchors.first)) {
-      _semanticPromptAnchors.removeFirst().dispose();
+    // Anchors do not go stale in order. Eviction takes them from the front,
+    // but overwriting a prompt line invalidates one wherever it sits, and a
+    // head-only prune leaves those behind for every later query to walk and
+    // re-validate. Rebuild the queue instead, and only when something is
+    // actually stale so the common case stays allocation-free.
+    // Each anchor is validated exactly once. `survivors` stays null until the
+    // first stale one is found, so a queue with nothing to drop - the common
+    // case - allocates nothing and rewrites nothing.
+    List<CellAnchor>? survivors;
+    var index = 0;
+    for (final anchor in _semanticPromptAnchors) {
+      if (_isValidSemanticPromptAnchor(anchor)) {
+        survivors?.add(anchor);
+      } else {
+        survivors ??= _semanticPromptAnchors.take(index).toList();
+        anchor.dispose();
+      }
+      index++;
     }
+    if (survivors == null) return;
+
+    _semanticPromptAnchors
+      ..clear()
+      ..addAll(survivors);
   }
 
   bool _isValidSemanticPromptAnchor(CellAnchor anchor) {

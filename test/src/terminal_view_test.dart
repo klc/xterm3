@@ -566,6 +566,71 @@ void main() {
     await tester.sendKeyUpEvent(modifierKey);
   });
 
+  testWidgets(
+      'TerminalView underlines a plain-text URL when the modifier goes down '
+      'under a stationary pointer', (tester) async {
+    // Plain-text URL detection is skipped while the modifier is up, because
+    // nothing can act on the result and detection rebuilds the logical line
+    // at pointer-move rates. Pressing the modifier without moving the pointer
+    // has to run it once, or the link never lights up.
+    final terminal = Terminal()..write('see https://example.com/x for more');
+    final controller = TerminalController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(home: TerminalView(terminal, controller: controller)),
+    );
+
+    final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+    final cell = state.renderTerminal.getOffset(const CellOffset(8, 0));
+    final position = state.renderTerminal.localToGlobal(cell);
+    final modifierKey = switch (defaultTargetPlatform == TargetPlatform.macOS) {
+      true => LogicalKeyboardKey.metaLeft,
+      false => LogicalKeyboardKey.controlLeft,
+    };
+    final pointer = TestPointer(1, PointerDeviceKind.mouse);
+
+    await tester.sendEventToBinding(pointer.hover(position));
+    await tester.pump();
+    expect(controller.underlines, isEmpty);
+
+    await tester.sendKeyDownEvent(modifierKey);
+    await tester.pump();
+    expect(controller.underlines, hasLength(1));
+
+    await tester.sendKeyUpEvent(modifierKey);
+    await tester.pump();
+    expect(controller.underlines, isEmpty);
+  });
+
+  testWidgets(
+      'TerminalView reports the editable rect once per frame, not '
+      'once per write', (tester) async {
+    // `_notifyEditableRect` walks to the root through `localToGlobal`. A PTY
+    // hands over many small chunks between frames and each is a
+    // `Terminal.write`, so reporting inline meant one ancestor walk per chunk
+    // to publish a rect that can only be observed after the frame.
+    final terminal = Terminal();
+
+    await tester.pumpWidget(MaterialApp(home: TerminalView(terminal)));
+
+    final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+    var reports = 0;
+    state.renderTerminal.onEditableRect = (rect, caretRect) => reports++;
+
+    for (var i = 0; i < 50; i++) {
+      terminal.write('chunk $i\r\n');
+    }
+    expect(reports, 0, reason: 'writes alone must not report');
+
+    await tester.pump();
+    expect(reports, 1);
+
+    // A frame with no terminal change must not report again.
+    await tester.pump();
+    expect(reports, 1);
+  });
+
   testWidgets('TerminalView updates hovered links from global modifiers', (
     tester,
   ) async {

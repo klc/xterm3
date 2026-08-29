@@ -14,6 +14,7 @@ import 'package:xterm3/src/core/platform.dart';
 import 'package:xterm3/src/terminal.dart';
 import 'package:xterm3/src/terminal_search.dart';
 import 'package:xterm3/src/terminal_url_detection.dart';
+import 'package:xterm3/src/utils/char_code.dart';
 import 'package:xterm3/src/ui/controller.dart';
 import 'package:xterm3/src/ui/cursor_type.dart';
 import 'package:xterm3/src/ui/custom_text_edit.dart';
@@ -269,6 +270,10 @@ class TerminalViewState extends State<TerminalView> {
   int? _hoveredHyperlinkId;
 
   TerminalSearchMatch? _hoveredUrlMatch;
+
+  /// The cell the pointer was last over, kept so URL detection can be run
+  /// when the hyperlink modifier goes down without the pointer moving.
+  CellOffset? _lastHoverOffset;
 
   TerminalUnderline? _hoveredUrlUnderline;
 
@@ -654,20 +659,42 @@ class TerminalViewState extends State<TerminalView> {
   void _onPointerHover(PointerHoverEvent event) {
     _updateHyperlinkModifierState();
     final offset = renderTerminal.getCellOffset(event.localPosition);
+    _lastHoverOffset = offset;
     final hyperlinkId = widget.terminal.hyperlinkIdAt(offset);
     _setHoveredHyperlinkId(switch (hyperlinkId) {
       0 => null,
       _ => hyperlinkId,
     });
-    _setHoveredUrlMatch(switch (hyperlinkId) {
-      // An OSC 8 hyperlink cell takes precedence over plain-text detection.
-      0 => widget.terminal.urlAt(offset),
-      _ => null,
-    });
+    _updateHoveredUrlMatch(hyperlinkId);
     widget.onHover?.call(event, offset);
   }
 
+  /// Runs plain-text URL detection for the cell under the pointer, but only
+  /// when the result can be acted on.
+  ///
+  /// Nothing uses [_hoveredUrlMatch] unless the hyperlink modifier is down -
+  /// see [_hasActiveLink] and [_syncHoveredUrlUnderline] - and detection is
+  /// not cheap: it rebuilds the logical line the cell belongs to and runs a
+  /// pattern over it, at pointer-move rates. So it is skipped while the
+  /// modifier is up, and [_updateHyperlinkModifierState] runs it once when
+  /// the modifier goes down so a link still lights up under a stationary
+  /// pointer.
+  void _updateHoveredUrlMatch(int hyperlinkId) {
+    // An OSC 8 hyperlink cell takes precedence over plain-text detection.
+    if (hyperlinkId != 0 || !_hyperlinkModifierPressed) {
+      _setHoveredUrlMatch(null);
+      return;
+    }
+
+    final offset = _lastHoverOffset;
+    _setHoveredUrlMatch(switch (offset) {
+      null => null,
+      _ => widget.terminal.urlAt(offset),
+    });
+  }
+
   void _onPointerExit(PointerExitEvent event) {
+    _lastHoverOffset = null;
     _setHoveredHyperlinkId(null);
     _setHoveredUrlMatch(null);
     widget.onExit?.call(event);
@@ -706,6 +733,14 @@ class TerminalViewState extends State<TerminalView> {
     };
     if (_hyperlinkModifierPressed == pressed) return;
     setState(() => _hyperlinkModifierPressed = pressed);
+    // Detection is skipped while the modifier is up, so the match for the
+    // cell under a stationary pointer has to be produced here.
+    _updateHoveredUrlMatch(
+      switch (_lastHoverOffset) {
+        null => 0,
+        final offset => widget.terminal.hyperlinkIdAt(offset),
+      },
+    );
     _syncHoveredUrlUnderline();
   }
 
@@ -745,7 +780,7 @@ class TerminalViewState extends State<TerminalView> {
       return;
     }
     final mappedKey = charToTerminalKey(text);
-    if (mappedKey == null && text.runes.length != 1) {
+    if (mappedKey == null && singleCodePoint(text) == null) {
       widget.terminal.textInput(text);
       _scrollToBottom();
       return;
@@ -917,7 +952,7 @@ class TerminalViewState extends State<TerminalView> {
     }
 
     final keyLabel = event.logicalKey.keyLabel;
-    if (keyLabel.runes.length != 1) {
+    if (singleCodePoint(keyLabel) == null) {
       return null;
     }
     if (keyToTerminalKey(event.logicalKey) != null) {

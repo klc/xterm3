@@ -48,6 +48,11 @@ class BufferLine with IndexedItem {
 
   List<CellAnchor> get anchors => UnmodifiableListView(_anchors);
 
+  /// Whether this line carries any anchors, without building the view
+  /// [anchors] returns. Reflow asks this per line and, for a line that has
+  /// none, that view was the only thing allocated.
+  bool get hasAnchors => _anchors.isNotEmpty;
+
   bool get hasCombiningCharacters => _combiningCharacters?.isNotEmpty ?? false;
 
   Map<int, String> get _mutableCombiningCharacters {

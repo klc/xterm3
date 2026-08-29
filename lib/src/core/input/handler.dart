@@ -3,6 +3,7 @@ export 'package:xterm3/src/core/input/kitty_handler.dart';
 
 import 'package:xterm3/src/core/input/event.dart';
 import 'package:xterm3/src/core/input/keys.dart';
+import 'package:xterm3/src/utils/char_code.dart';
 import 'package:xterm3/src/core/input/keytab/keytab.dart';
 import 'package:xterm3/src/core/input/kitty_handler.dart';
 import 'package:xterm3/src/core/platform.dart';
@@ -145,8 +146,9 @@ class ModifyOtherKeysInputHandler implements TerminalInputHandler {
 
   int? _codepoint(TerminalKeyboardEvent event) {
     final text = event.text;
-    if (text != null && text.runes.length == 1) {
-      return text.runes.first;
+    if (text != null) {
+      final codePoint = singleCodePoint(text);
+      if (codePoint != null) return codePoint;
     }
 
     final key = event.key;
@@ -358,16 +360,19 @@ class AltInputHandler implements TerminalInputHandler {
     final text = _legacyText(event);
     if (text == null) return null;
 
-    final codePoint = text.runes.single;
+    // `_legacyText` only ever returns a single code point, so this cannot
+    // be null - the `!` keeps that contract visible instead of silently
+    // widening it.
+    final codePoint = singleCodePoint(text)!;
     if (codePoint > 0x7f) return text;
     return '\x1b$text';
   }
 
   String? _legacyText(TerminalKeyboardEvent event) {
     final text = event.text;
-    if (text != null && text.runes.length == 1) {
-      final codePoint = text.runes.first;
-      if (codePoint >= 0x20 && codePoint != 0x7f) {
+    if (text != null) {
+      final codePoint = singleCodePoint(text);
+      if (codePoint != null && codePoint >= 0x20 && codePoint != 0x7f) {
         if (event.platform != TerminalTargetPlatform.macos ||
             codePoint <= 0x7f) {
           return text;

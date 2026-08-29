@@ -140,7 +140,7 @@ mixin _StatusStringReports {
     final attributes = <int>[0];
     if (_cursorStyle.isBold) attributes.add(1);
     if (_cursorStyle.isFaint) attributes.add(2);
-    if (_cursorStyle.isItalis) attributes.add(3);
+    if (_cursorStyle.isItalic) attributes.add(3);
     if (_cursorStyle.isUnderline) attributes.add(4);
     if (_cursorStyle.isBlink) attributes.add(5);
     if (_cursorStyle.isInverse) attributes.add(7);

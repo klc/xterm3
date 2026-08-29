@@ -2266,18 +2266,18 @@ class EscapeParser {
 
       switch (ps) {
         case '0':
-          final value = _osc.sublist(1).join(';');
+          final value = _oscTail(1);
           handler.setTitle(value);
           handler.setIconName(value);
           return true;
         case '1':
-          handler.setIconName(_osc.sublist(1).join(';'));
+          handler.setIconName(_oscTail(1));
           return true;
         case '2':
-          handler.setTitle(_osc.sublist(1).join(';'));
+          handler.setTitle(_oscTail(1));
           return true;
         case '7':
-          handler.setCurrentDirectory(_osc.sublist(1).join(';'));
+          handler.setCurrentDirectory(_oscTail(1));
           return true;
         case '9':
           if (pt == '4' && _handleConEmuProgress()) {
@@ -2286,11 +2286,11 @@ class EscapeParser {
           if (pt == '9' && _handleConEmuCurrentDirectory()) {
             return true;
           }
-          handler.showNotification('', _osc.sublist(1).join(';'));
+          handler.showNotification('', _oscTail(1));
           return true;
         case '8':
           if (_osc.length < 3) return true;
-          handler.setHyperlink(pt, _osc.sublist(2).join(';'));
+          handler.setHyperlink(pt, _oscTail(2));
           return true;
         case '4':
           for (var i = 1; i + 1 < _osc.length; i += 2) {
@@ -2341,7 +2341,7 @@ class EscapeParser {
           _handleKittyColorProtocol();
           return true;
         case '22':
-          handler.setMouseShape(_osc.sublist(1).join(';'));
+          handler.setMouseShape(_oscTail(1));
           return true;
         case '52':
           if (_osc.length < 3) return true;
@@ -2391,7 +2391,7 @@ class EscapeParser {
       case '777':
         if (_osc.length < 4) return true;
         if (_osc[1].toLowerCase() != 'notify') return true;
-        handler.showNotification(_osc[2], _osc.sublist(3).join(';'));
+        handler.showNotification(_osc[2], _oscTail(3));
         return true;
       case '1337':
         _handleITerm2Protocol();
@@ -2421,13 +2421,13 @@ class EscapeParser {
       'primary' => 'p',
       _ => 'c',
     };
-    handler.storeClipboard(selector, _osc.sublist(2).join(';'));
+    handler.storeClipboard(selector, _oscTail(2));
   }
 
   void _handleKittyTextSizingProtocol() {
     if (_osc.length < 3) return;
 
-    final text = _osc.sublist(2).join(';');
+    final text = _oscTail(2);
     if (text.length > 4096) return;
     if (!_isSafeKittyText(text)) return;
 
@@ -2470,7 +2470,7 @@ class EscapeParser {
   void _handleITerm2Protocol() {
     if (_osc.length < 2) return;
 
-    final payload = _osc.sublist(1).join(';');
+    final payload = _oscTail(1);
     final separator = payload.indexOf('=');
     if (separator < 0) {
       switch (payload.toLowerCase()) {
@@ -2728,7 +2728,7 @@ class EscapeParser {
   bool _handleConEmuCurrentDirectory() {
     if (_osc.length < 3) return false;
 
-    final value = _osc.sublist(2).join(';');
+    final value = _oscTail(2);
     if (value.isEmpty) return false;
 
     handler.setCurrentDirectory(value);
@@ -2777,6 +2777,26 @@ class EscapeParser {
   }
 
   final _osc = <String>[];
+
+  /// The OSC payload from parameter [from] onward, with the `;` separators
+  /// the split consumed put back.
+  ///
+  /// `_osc.sublist(from).join(';')` allocates a list and then copies every
+  /// string into a new one. The common shape is a single remaining parameter
+  /// - a window title, a hyperlink URI, a base64 clipboard payload - where
+  /// that string already exists and neither copy is needed. An 8 KiB OSC 52
+  /// paste was copying 8 KiB twice to hand back what it already had.
+  String _oscTail(int from) {
+    if (_osc.length <= from) return '';
+    if (_osc.length == from + 1) return _osc[from];
+
+    final buffer = StringBuffer(_osc[from]);
+    for (var i = from + 1; i < _osc.length; i++) {
+      buffer.write(';');
+      buffer.write(_osc[i]);
+    }
+    return buffer.toString();
+  }
 
   bool _oscOverflowed = false;
 

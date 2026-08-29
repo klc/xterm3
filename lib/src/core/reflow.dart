@@ -154,12 +154,17 @@ class _LineReflow {
         continue;
       }
 
-      for (var anchor in line.anchors.toList()) {
-        // Exclusive upper bound: an anchor sitting exactly at
-        // from + cellsToCopy belongs to the cell that's about to be copied
-        // in the *next* iteration (or line), not this one.
-        if (anchor.x >= from && anchor.x < from + cellsToCopy) {
-          builder.addAnchor(anchor, anchor.x - from);
+      if (line.hasAnchors) {
+        // The copy is not optional: `addAnchor` reparents, which mutates the
+        // list being walked. `hasAnchors` is what keeps it off lines that
+        // have nothing to reparent, which is nearly all of them.
+        for (var anchor in line.anchors.toList()) {
+          // Exclusive upper bound: an anchor sitting exactly at
+          // from + cellsToCopy belongs to the cell that's about to be copied
+          // in the *next* iteration (or line), not this one.
+          if (anchor.x >= from && anchor.x < from + cellsToCopy) {
+            builder.addAnchor(anchor, anchor.x - from);
+          }
         }
       }
 
@@ -174,7 +179,7 @@ class _LineReflow {
       }
     }
 
-    if (line.anchors.isNotEmpty) {
+    if (line.hasAnchors) {
       for (var anchor in line.anchors.toList()) {
         if (anchor.x >= to) {
           builder.addAnchor(anchor, anchor.x - to);

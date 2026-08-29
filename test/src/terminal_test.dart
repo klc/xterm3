@@ -2224,6 +2224,26 @@ void main() {
     expect(terminal.semanticPromptLineAfter(-1), isNull);
   });
 
+  test('Terminal does not let stale prompt anchors crowd out live ones', () {
+    // The queue is capped at the buffer's line count, and the cap evicts from
+    // the front. Anchors that went stale in the middle used to stay in it, so
+    // enough of them would push a still-valid prompt out of the queue and the
+    // terminal would forget a prompt that is right there on screen.
+    final terminal = Terminal(maxLines: 20)..resize(12, 4);
+
+    terminal.write('\x1b]133;A\x1b\\keep\r\n');
+    expect(terminal.isSemanticPromptLine(0), isTrue);
+
+    // More prompts than the queue can hold, each erased right after it is
+    // marked, so every one of them is stale by the time the next arrives.
+    for (var i = 0; i < 30; i++) {
+      terminal.write('\x1b]133;A\x1b\\gone\x1b[2K\r');
+    }
+
+    expect(terminal.isSemanticPromptLine(0), isTrue);
+    expect(terminal.semanticPromptLineAfter(-1), 0);
+  });
+
   test('Terminal replaces an erased semantic prompt index', () {
     final terminal = Terminal(maxLines: 20)..resize(12, 4);
 

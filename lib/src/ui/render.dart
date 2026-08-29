@@ -237,7 +237,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void _onScroll() {
     _stickToBottom = _scrollOffset >= _maxScrollExtent;
     markNeedsLayout();
-    _notifyEditableRect();
+    _markEditableRectDirty();
   }
 
   void _onFocusChange() {
@@ -267,7 +267,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     } else {
       markNeedsPaint();
     }
-    _notifyEditableRect();
+    _markEditableRectDirty();
   }
 
   void _recordTerminalLayoutState() {
@@ -615,7 +615,24 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     );
   }
 
+  /// Set when the cursor rect may have moved, cleared once it has been
+  /// reported. See [_notifyEditableRect].
+  var _editableRectDirty = false;
+
+  /// Marks the editable rect as needing to be reported after the next paint.
+  ///
+  /// [_notifyEditableRect] walks to the root through [localToGlobal], and it
+  /// used to run inline on every terminal change. A PTY hands over dozens of
+  /// small chunks between frames and each one is a `Terminal.write`, so that
+  /// was dozens of ancestor walks per frame to report a rect that can only be
+  /// observed once, after the frame. Deferring collapses them into one.
+  void _markEditableRectDirty() {
+    _editableRectDirty = true;
+  }
+
   void _notifyEditableRect() {
+    _editableRectDirty = false;
+
     final onEditableRect = _onEditableRect;
     if (onEditableRect == null) return;
 
@@ -778,6 +795,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
     canvas.restore();
     context.setWillChangeHint();
+
+    // Flush here rather than from every terminal change: this is the point
+    // where the cursor has settled for the frame, and `localToGlobal` is one
+    // walk instead of one per chunk the PTY delivered.
+    if (_editableRectDirty) _notifyEditableRect();
   }
 
   /// Paints the terminal in four passes, in this order:
