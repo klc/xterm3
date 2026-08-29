@@ -1,8 +1,8 @@
 # Benchmarks
 
 Baseline numbers for the render pipeline, and the procedure that produced them.
-Every phase of the render and write-path work is accepted or rejected against
-this table — a change that does not move a number here has not been shown to do
+Every phase of the work in `RENDER_PLAN.md` is accepted or rejected against this
+table — a change that does not move a number here has not been shown to do
 anything.
 
 ## Running
@@ -109,15 +109,15 @@ most of that 1.6ms, but 1.6ms out of 16.7ms is headroom that is already there.
 **`boxdraw` is the most expensive workload, not `fullscreen`.** 2.4ms UI /
 3.3ms raster, at a 97.1% glyph cache hit rate. The 2.9% miss rate is doing real
 work: procedural glyphs rebuild vector paths on a miss. Raising that hit rate
-is a cheaper, more targeted win than any of the render pipeline phases below.
+is a cheaper, more targeted win than any of the phases in `RENDER_PLAN.md`.
 
 **The flood number is the one that looks wrong.** 49.2 fps during a write burst
 means output starves the frame pipeline — that is the unbounded parse-per-write
 path, not the paint path. No amount of render work fixes it.
 
 Taken together: the render pipeline plan targets a bottleneck the measurements
-do not show. Phase 4 — "measure, then decide" — can be answered now rather than
-after building phases 1 through 3.
+do not show. Phase 4 of `RENDER_PLAN.md` — "measure, then decide" — can be
+answered now rather than after building phases 1 through 3.
 
 ## Phase 1 — revision counters — 2026-08-05 — **not merged**
 
@@ -805,10 +805,11 @@ per-code-point write path unmeasured.
 
 ## Costs of a code review's findings — 2026-08-29
 
-A review flagged thirteen things by inspection. Nine held up against the code,
-and the ones that are measurable were then measured, because inspection cannot
-tell a finding that costs a microsecond a minute from one that costs a
-millisecond a frame. Numbers are medians of five, interleaved before and after.
+A review flagged thirteen things by inspection. Nine held up against the code;
+`bin/review_bench.dart` then measured the ones that are measurable, because
+inspection cannot tell a finding that costs a microsecond a minute from one
+that costs a millisecond a frame. Numbers are medians of five, interleaved
+before and after.
 
 | finding | before | after |
 |---|---|---|
