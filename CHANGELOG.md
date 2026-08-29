@@ -1,3 +1,48 @@
+## [6.2.0] - 2026-08-29
+
+* `CursorStyle.isItalic` replaces `isItalis`, which had carried the typo since
+  it was introduced. The old name stays as a deprecated alias and will go in
+  the next major. `CursorStyle.isStrikethrough` fills the gap beside it: the
+  attribute was already tracked, but nothing exposed it.
+* Semantic prompt anchors are pruned by a full sweep rather than only from the
+  front. Anchors invalidated in the middle of the queue used to survive, and
+  since the queue is capped at the buffer's line count and that cap evicts from
+  the front, enough stale entries pushed a still-valid prompt out — the
+  terminal forgot a prompt that was on screen.
+* Escape-heavy output parses faster. `ByteConsumer.consume()` ran the same
+  high-surrogate test twice per code point to reach the same conclusion, that a
+  unit which does not start a surrogate pair is one unit long and is its own
+  code point. Testing once covers everything outside astral text. The gain
+  lands where `consume()` is hot: SGR-heavy output goes from 76 to 81 MiB/s end
+  to end and 121 to 133 MiB/s through the parser, alt-screen output from 171 to
+  178 and 276 to 296. Plain text is unchanged, since it goes through the run
+  scan instead.
+* `wholeWord` search no longer builds a one-character `String` and runs a
+  Unicode regex per side of every candidate match. An ASCII range check up
+  front takes the overhead from 10% to 1-3%, and 14.3 ms to 12.9 ms on output
+  where matches abut word characters.
+* Plain-text URL detection runs only while the hyperlink modifier is held. It
+  used to run on every pointer hover — 1.3 to 1.9 us and about 3 KB per event —
+  to produce a result nothing could act on. It also runs once when the modifier
+  goes down under a stationary pointer, so a link still lights up without
+  moving the mouse.
+* The editable rect is published once per frame instead of once per terminal
+  change. Fifty writes between frames were fifty walks to the root to update an
+  observable that is read once; it is now marked dirty and flushed from
+  `paint`.
+* The painter's record of run texts already known not to shape into a
+  grid-aligned ligature no longer grows without bound. It exists so that a run
+  a font declines to ligate stops competing for slots in the paragraph cache,
+  but it carried no limit of its own and was discarded only when the font or
+  colours changed. Ordinary content settles it at a few dozen entries; a
+  session that keeps producing unfamiliar punctuation runs grew it for as long
+  as the painter lived. Dropping an entry is never a correctness matter: it
+  costs exactly the one re-layout the entry was there to avoid.
+* API reference fixes. Literal values written as `[true]`, `[false]` and
+  `[null]` rendered as unresolved links rather than as code, and the types
+  reachable through more than one library now name `xterm` as their canonical
+  home rather than leaving dartdoc to pick one at low confidence.
+
 ## [6.1.3] - 2026-08-10
 
 * Add explicit type annotations to the terminal tap-down callback and circular
