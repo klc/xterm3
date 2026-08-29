@@ -152,7 +152,7 @@ class TerminalView extends StatefulWidget {
   final ScrollController? scrollController;
 
   /// Should this widget automatically notify the underlying terminal when its
-  /// size changes. [true] by default.
+  /// size changes. `true` by default.
   final bool autoResize;
 
   /// Opacity of the terminal background. Set to 0 to make the terminal
@@ -205,11 +205,11 @@ class TerminalView extends StatefulWidget {
   final TerminalCursorType cursorType;
 
   /// Whether to always show the cursor. This is useful for debugging.
-  /// [false] by default.
+  /// `false` by default.
   final bool alwaysShowCursor;
 
-  /// Workaround to detect delete key for platforms and IMEs that does not
-  /// emit hardware delete event. Prefered on mobile platforms. [false] by
+  /// Workaround to detect the delete key on platforms and IMEs that do not
+  /// emit a hardware delete event. Preferred on mobile platforms. `false` by
   /// default.
   final bool deleteDetection;
 

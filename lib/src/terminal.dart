@@ -71,7 +71,7 @@ class Terminal
   void Function(String title)? onTitleChange;
 
   /// Function that is called when the program requests the terminal to change
-  /// the icon of the window. [icon] is the name of the icon.
+  /// the icon of the window. `icon` is the name of the icon.
   void Function(String icon)? onIconChange;
 
   /// Called when the application reports its current directory using OSC 7.
@@ -203,7 +203,7 @@ class Terminal
   /// unrecognised OSC `Ps`, or a DCS payload that matches no known
   /// request. Ignoring unrecognised input is correct terminal behaviour and
   /// this callback does not change that; it only lets you observe it.
-  /// [raw] contains the sequence as received, including the leading `ESC`,
+  /// `raw` contains the sequence as received, including the leading `ESC`,
   /// formatted for readability (control bytes rendered as `^0x..`, `ESC`
   /// spelled out, etc.) rather than as literal control characters.
   ///

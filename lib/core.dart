@@ -1,3 +1,7 @@
+/// Terminal emulation core: escape-sequence parsing, the buffer/cell model,
+/// and the headless terminal engine. No Flutter dependency.
+library;
+
 export 'src/core/buffer/buffer.dart';
 export 'src/core/buffer/cell_flags.dart';
 export 'src/core/buffer/cell_offset.dart';

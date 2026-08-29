@@ -1,3 +1,7 @@
+/// Flutter rendering for xterm3: the terminal view widget, controller,
+/// themes, cursor/selection styling, and keyboard shortcuts.
+library;
+
 export 'src/terminal_view.dart';
 export 'src/ui/controller.dart';
 export 'src/ui/cursor_type.dart';
