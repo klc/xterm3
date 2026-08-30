@@ -1,3 +1,32 @@
+## [6.3.0] - 2026-08-30
+
+* A `BufferLine` no longer sizes its cell storage to the terminal's width the
+  moment it is created. A line is born holding a shared empty list, so
+  scrolling allocates nothing per line, and the first write sizes the store to
+  what it is about to write; a line that later outgrows that store grows to its
+  full length in one step. Output whose lines are shorter than the window —
+  which is most output — stops paying for the columns it never reaches.
+
+  Scrollback shrinks with it. At a 170-column window holding 10000 lines,
+  90-column output retains 14.6 MB where it used to retain 29.3, and 60-column
+  output retains 9.8 MB. Full-width output is unchanged, since there was
+  nothing to give back.
+
+  Throughput moves both ways, measured end to end at 170x50 over 32 MiB per
+  workload: plain ASCII +18%, Cyrillic +19%, mixed UTF-8 +24%, alt-screen
+  unchanged, 170-column lines -3%. SGR-heavy output is **13% slower**, and that
+  is a real cost rather than measurement noise: such a line is filled by
+  several short runs between colour changes, so the first write sizes the store
+  small and a later one has to grow it, which is two allocations where the old
+  behaviour needed one. Growing in smaller steps was measured at -22% and
+  starting from a larger store at -14%, so this is the least bad of the three.
+
+* `BufferLine.data` — deprecated, and marked visible for testing — now reports
+  the storage a line actually holds rather than a list sized to the window. It
+  can be empty for a line nothing has written to. Reading cells through the
+  accessors is unaffected: a cell with no storage behind it answers with the
+  zeros it would have held anyway.
+
 ## [6.2.0] - 2026-08-29
 
 * `CursorStyle.isItalic` replaces `isItalis`, which had carried the typo since
