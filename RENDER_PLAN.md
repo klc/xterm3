@@ -946,7 +946,7 @@ sıcak yol maliyetini görmek için), sonra küçük doğum.
 
 ---
 
-## Faz 6.1 — Doğuştan küçük satır — **UYGULANDI, ÖLÇÜLDÜ (2026-08-30)**
+## Faz 6.1 — Doğuştan küçük satır — **BİRLEŞTİRİLDİ (2026-08-30)**
 
 Faz 6'nın açık adayı. Ölçülmüş tavanı 1.2–3.0× diye kaydedilmişti; o rakam
 `trim_variant_probe`'un modelinden geliyordu ve model, satırın **doğru boyda
@@ -1025,10 +1025,14 @@ TUI'de sıfır.
 
 ### Durum
 
-Uygulama `perf/born-small-buffer-line` dalında, 896 test geçiyor. Birleştirme
-kararı bir takas: dört yükte +%18…+%24 ve 2–3× bellek, karşılığında `sgr`'de
-−%13. `sgr` sentetik bir yük değil — renkli `ls`, syntax highlight, TUI hep o
-desen.
+Birleştirildi, 896 test geçiyor. Bilerek kabul edilen bir takas: dört yükte
++%18…+%24 ve 2–3× bellek, karşılığında `sgr`'de −%13. `sgr` sentetik bir yük
+değil — renkli `ls`, syntax highlight, TUI hep o desen — yani bu bir kayıp,
+ödenmiş bir fiyat olarak duruyor.
+
+`sgr`'i geri almanın tek yolu ilk yazmanın satırın nereye kadar dolacağını
+bilmesi, ve bilemez. Bir sonraki bakan için: 32'şer büyüme (−%22) ve 128'de
+doğma (−%14) zaten denendi, ikisi de daha kötü.
 
 ---
 
