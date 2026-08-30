@@ -1032,7 +1032,7 @@ desen.
 
 ---
 
-## Faz 7 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
+## Faz 7 adayı — flood altında ileri sarma — **PREMİSİ ÇÜRÜDÜ (2026-08-30)**
 
 Saha semptomu (ShellVibe'da vtebench sırasında donma) write hızıyla kapanmıyor,
 ve bu aritmetikle görülebiliyor: vtebench 1 MiB'ı 11–24 ms'de boşaltıyor, yani
@@ -1045,13 +1045,34 @@ edilene kadar tutuluyor. Not: Faz 5'teki "uygulama tarafında düzeltilemez" ifa
 `flutter_pty`'nin **public Stream API'si** için doğru; native okuma tarafının
 değiştirilemeyeceği anlamına gelmiyor, o kapı ölçülmedi.
 
-xterm3 içinde kalan kaldıraç: backlog bir eşiği aştığında scrollback'e yazmayı,
-reflow'u ve anchor bakımını atlayan bir mod — o satırlar nasılsa viewport'a hiç
-girmeden kayacak. Tavanı zaten ölçülü: `scrollback` kolonu ascii'de +%63,
-cyrillic'te +%64.
+xterm3 içinde kalan kaldıraç diye şu önerilmişti: backlog bir eşiği aştığında
+scrollback'e yazmayı, reflow'u ve anchor bakımını atlayan bir mod — o satırlar
+nasılsa viewport'a hiç girmeden kayacak. Tavanı `scrollback` kolonundan
+türetilmişti: ascii'de +%63, cyrillic'te +%64.
 
-Bu round'un dışında bırakıldı: API yüzeyi kararı gerektiriyor, ve mikro-optimizasyon
-ölçümleriyle aynı anda gitmesi ikisinin de gürültüsünü karıştırır.
+**O tavan bu moda ait değil.** `scrollback` kolonu `maxLines: 0` ile koşuyor,
+ki `buffer.dart:81` bunu `max(maxLines, viewHeight)` = 50'ye genişletiyor.
+İki koşu arasındaki tek fark canlı satır sayısı — 50'ye karşı 10000 — ve
+`IndexAwareCircularBuffer.push` bu iki durumda **aynı** işi yapıyor. Dahası
+derinlik 10000'de daha *az*: ring dolana kadar hiç tahliye yok, yani `onEvict`
+ve hyperlink budaması hiç çalışmıyor. Daha az iş yapıp daha yavaş koşuyor,
+çünkü fark iş miktarında değil, GC'nin canlı tuttuğu kümede.
+
+Sonuç: **geçmişi koruyan bir ileri sarma modu o farkın hiçbirini toplayamaz.**
+Fark, scrollback'i tutmanın fiyatı; modu açmak satırları yine tutmayı gerektirir.
+Toplayabilmesinin tek yolu geçmişi düşürmek olurdu, ki o bir performans modu
+değil, veri kaybı kararıdır.
+
+O farka saldırabilen tek şey satırın **boyutu**, ve Faz 6.1 tam olarak onu yaptı.
+Ölçüldü: Faz 6.1 sonrası `full`/`scrollback` açığı ascii'de %41 → %32,
+utf8'de %30 → %15, cyrillic'te %40 → %30. Yani tavanın bir kısmı zaten
+toplandı ve kalanı da aynı cepheye ait, ileri sarmaya değil.
+
+Saha semptomu için kalan cevap değişmiyor ve xterm3'ün içinde değil: üretici
+sınırsızsa `Terminal.write`'ı hızlandırmak donmayı geciktirir, gidermez.
+ShellVibe bunu okuma tarafına backpressure koyarak çözdü (kendi isolate'inde,
+64 KiB/4 ms batch, dört batch kredi) — `PacedTerminalWriter`'ın dokümanının
+zaten söylediği yer (`lib/src/ui/paced_writer.dart:28-31`).
 
 ---
 
