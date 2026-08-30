@@ -12,6 +12,10 @@ import 'package:xterm3/src/utils/unicode_v11.dart';
 
 const _cellSize = 4;
 
+/// Storage for a line nothing has written to yet. Shared, so creating a line
+/// - which scrolling does once per line of output - allocates nothing at all.
+final _noCells = Uint32List(0);
+
 const _cellForeground = 0;
 
 const _cellBackground = 1;
@@ -26,11 +30,41 @@ class BufferLine with IndexedItem {
   BufferLine(
     this._length, {
     this.isWrapped = false,
-  }) : _data = Uint32List(_calcCapacity(_length) * _cellSize);
+  }) : _data = _noCells;
 
   int _length;
 
   Uint32List _data;
+
+  /// Grows storage so cell [index] is addressable. The common call finds the
+  /// room already there and costs one comparison.
+  ///
+  /// The first write allocates for what it is about to write, so a line that
+  /// is filled in one run - which is what scrolling output looks like - gets
+  /// exactly one store, sized to the text rather than to the viewport. A line
+  /// that later outgrows that store jumps straight to its full [length]
+  /// instead of climbing in 32-cell steps.
+  void _ensureCapacity(int index) {
+    final required = (index + 1) * _cellSize;
+    if (required <= _data.length) return;
+
+    if (_data.isEmpty) {
+      _data = Uint32List(_calcCapacity(index + 1) * _cellSize);
+      return;
+    }
+
+    final cells = index + 1 > _length ? index + 1 : _length;
+    final grown = Uint32List(_calcCapacity(cells) * _cellSize);
+    grown.setRange(0, _data.length, _data);
+    _data = grown;
+  }
+
+  /// A cell field, or 0 for a cell this line has never had storage for.
+  int _field(int index, int field) {
+    final offset = index * _cellSize + field;
+    if (offset >= _data.length) return 0;
+    return _data[offset];
+  }
 
   @Deprecated('Exposes raw cell storage; will be removed in the next major.')
   @visibleForTesting
@@ -64,15 +98,15 @@ class BufferLine with IndexedItem {
   }
 
   int getForeground(int index) {
-    return _data[index * _cellSize + _cellForeground];
+    return _field(index, _cellForeground);
   }
 
   int getBackground(int index) {
-    return _data[index * _cellSize + _cellBackground];
+    return _field(index, _cellBackground);
   }
 
   int getAttributes(int index) {
-    return _data[index * _cellSize + _cellAttributes];
+    return _field(index, _cellAttributes);
   }
 
   int getHyperlinkId(int index) {
@@ -97,15 +131,15 @@ class BufferLine with IndexedItem {
   }
 
   int getContent(int index) {
-    return _data[index * _cellSize + _cellContent];
+    return _field(index, _cellContent);
   }
 
   int getCodePoint(int index) {
-    return _data[index * _cellSize + _cellContent] & CellContent.codepointMask;
+    return _field(index, _cellContent) & CellContent.codepointMask;
   }
 
   int getWidth(int index) {
-    return _data[index * _cellSize + _cellContent] >> CellContent.widthShift;
+    return _field(index, _cellContent) >> CellContent.widthShift;
   }
 
   String? getCombiningCharacters(int index) {
@@ -141,15 +175,14 @@ class BufferLine with IndexedItem {
     CellData cellData, {
     bool includeUnderlineColor = true,
   }) {
-    final offset = index * _cellSize;
-    cellData.foreground = _data[offset + _cellForeground];
-    cellData.background = _data[offset + _cellBackground];
+    cellData.foreground = _field(index, _cellForeground);
+    cellData.background = _field(index, _cellBackground);
     cellData.underlineColor = switch (includeUnderlineColor) {
       true => _underlineColors?[index] ?? 0,
       false => 0,
     };
-    cellData.flags = _data[offset + _cellAttributes];
-    cellData.content = _data[offset + _cellContent];
+    cellData.flags = _field(index, _cellAttributes);
+    cellData.content = _field(index, _cellContent);
   }
 
   CellData createCellData(int index) {
@@ -159,23 +192,28 @@ class BufferLine with IndexedItem {
   }
 
   void setForeground(int index, int value) {
+    _ensureCapacity(index);
     _data[index * _cellSize + _cellForeground] = value;
   }
 
   void setBackground(int index, int value) {
+    _ensureCapacity(index);
     _data[index * _cellSize + _cellBackground] = value;
   }
 
   void setAttributes(int index, int value) {
+    _ensureCapacity(index);
     _data[index * _cellSize + _cellAttributes] = value;
   }
 
   void setContent(int index, int value) {
+    _ensureCapacity(index);
     _data[index * _cellSize + _cellContent] = value;
     _combiningCharacters?.remove(index);
   }
 
   void setWidth(int index, int width) {
+    _ensureCapacity(index);
     final offset = index * _cellSize + _cellContent;
     _data[offset] = (_data[offset] & CellContent.codepointMask) |
         (width << CellContent.widthShift);
@@ -189,6 +227,7 @@ class BufferLine with IndexedItem {
   void setCell(int index, int char, int width, CursorStyle style) {
     _repairWideCellPairing(index, width, style);
 
+    _ensureCapacity(index);
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
     _data[offset + _cellBackground] = style.background;
@@ -242,6 +281,7 @@ class BufferLine with IndexedItem {
     assert(textStart >= 0 && textStart + count <= text.length);
     if (count <= 0) return;
 
+    _ensureCapacity(start + count - 1);
     clearWideCellAt(start, style);
     clearWideCellAt(start + count - 1, style);
 
@@ -303,6 +343,7 @@ class BufferLine with IndexedItem {
   }
 
   void setCellData(int index, CellData cellData) {
+    _ensureCapacity(index);
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = cellData.foreground;
     _data[offset + _cellBackground] = cellData.background;
@@ -313,6 +354,7 @@ class BufferLine with IndexedItem {
   }
 
   void eraseCell(int index, CursorStyle style) {
+    _ensureCapacity(index);
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = CellColor.normal;
     _data[offset + _cellBackground] = style.background;
@@ -323,6 +365,7 @@ class BufferLine with IndexedItem {
   }
 
   void resetCell(int index) {
+    _ensureCapacity(index);
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = 0;
     _data[offset + _cellBackground] = 0;
@@ -408,6 +451,7 @@ class BufferLine with IndexedItem {
         end < _length && end > 0 && getWidth(end - 1) == 2;
 
     if (start + count < end) {
+      _ensureCapacity(end - 1);
       final moveStart = start * _cellSize;
       final moveEnd = (end - count) * _cellSize;
       final moveOffset = count * _cellSize;
@@ -514,6 +558,7 @@ class BufferLine with IndexedItem {
     }
 
     if (start + count < end) {
+      _ensureCapacity(end - 1);
       final moveStart = start * _cellSize;
       final moveEnd = (end - count) * _cellSize;
       final moveOffset = count * _cellSize;
@@ -599,16 +644,6 @@ class BufferLine with IndexedItem {
     }
 
     final oldLength = _length;
-
-    if (length > _length) {
-      final newBufferSize = _calcCapacity(length) * _cellSize;
-
-      if (newBufferSize > _data.length) {
-        final newBuffer = Uint32List(newBufferSize);
-        newBuffer.setRange(0, _data.length, _data);
-        _data = newBuffer;
-      }
-    }
 
     _length = length;
 
@@ -706,6 +741,8 @@ class BufferLine with IndexedItem {
     //   Uint32List.sublistView(src.data, srcCol * _cellSize, len * _cellSize),
     // );
 
+    _ensureCapacity(dstCol + len - 1);
+    src._ensureCapacity(srcCol + len - 1);
     final srcOffset = srcCol * _cellSize;
     final dstOffset = dstCol * _cellSize;
     _data.setRange(

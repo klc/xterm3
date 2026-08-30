@@ -946,6 +946,92 @@ sıcak yol maliyetini görmek için), sonra küçük doğum.
 
 ---
 
+## Faz 6.1 — Doğuştan küçük satır — **UYGULANDI, ÖLÇÜLDÜ (2026-08-30)**
+
+Faz 6'nın açık adayı. Ölçülmüş tavanı 1.2–3.0× diye kaydedilmişti; o rakam
+`trim_variant_probe`'un modelinden geliyordu ve model, satırın **doğru boyda
+doğduğunu** varsayıyordu. Gerçek `Buffer` bunu yapamaz: satır boşken yaratılır,
+ne kadar geniş yazılacağını kimse bilmez. Dört şekil ölçüldü.
+
+### Önce sıfır davranış değişikliği: kapasite muhasebesi
+
+`BufferLine`'a `_ensureCapacity(index)` ve okuma tarafında `_field(index, k)`
+eklendi — depo `length`'i kapsamak zorunda değil artık; yazma büyütüyor, kapasite
+dışındaki okuma hücrenin zaten tutacağı sıfırı döndürüyor. Constructor
+değişmeden ölçüldü, yani guard'lar hiç tetiklenmiyor: **%0 ile −%1.5**, çoğu
+gürültü içinde. Sıcak yol kontrolü ucuz; sonraki ölçümlerin farkı tahsis
+şeklinden geliyor, kontrolden değil.
+
+### Üç tahsis şekli
+
+`parse_bench` `full` kolonu, MiB/s, tabana göre:
+
+| workload | yazılan | 64'te doğ, 32'şer büyü | 64'te doğ, tam genişliğe sıçra | 128'de doğ |
+|---|---|---|---|---|
+| ascii | 90 | −%11 | −%17 | ~0 |
+| ascii-long-lines | 170 | −%14 | −%12 | −%30 |
+| sgr | ~132 | −%22 | −%12.5 | −%14 |
+| utf8 | 60 | **+%27** | **+%22** | −%4 |
+| cyrillic | ~90 | −%7 | −%16 | ~0 |
+| altscreen | 170 | 0 | 0 | 0 |
+
+Üçü de net kayıp. Sayaçlar nedeni tek satırda veriyor: `ascii`'de satır başına
+**1 büyütme** (hedef 96 hücre), `sgr`'de **~3** (96→128→160), `utf8`'de **0**.
+Kazanç yalnızca satır hiç büyümediğinde geliyor. Büyüyen her satır fazladan bir
+allocate artı kopya ödüyor ve hayatta kalan deposu yine eskisi kadar büyük —
+maliyeti ödüyor, kazancı alamıyor. `ascii-long-lines`'ta bu en açık: 192 hücreye
+büyüyor, yani tabanla **aynı** depo, üstüne bir allocate ve bir kopya.
+
+### Dördüncü şekil: hiç storage'sız doğ
+
+Sayaçların işaret ettiği yer. Satır paylaşılan boş bir `Uint32List(0)` ile doğar
+— scroll başına **sıfır** tahsis — ve **ilk yazma deposunu yazacağı şeye göre
+boyutlandırır. Sonraki büyütme tam `_length`'e sıçrar.** Tek runda dolan bir
+satır (akan çıktı böyle görünür) tam olarak bir depo alır, viewport'a değil
+metne göre boyutlanmış.
+
+Beş serpiştirilmiş tur:
+
+| workload | taban | lazy | Δ |
+|---|---|---|---|
+| ascii | 94 93 89 90 90 | 106 108 109 109 109 | **+%18** |
+| cyrillic | 73 77 72 75 76 | 90 88 90 88 89 | **+%19** |
+| utf8 | 49 49 51 50 48 | 62 61 62 60 62 | **+%24** |
+| altscreen | 137 134 135 136 136 | 137 136 137 134 137 | düz |
+| ascii-long-lines | 130 131 129 129 125 | 126 127 121 125 127 | −%3 |
+| sgr | 64 63 63 63 62 | 55 54 56 55 55 | **−%13** |
+
+`sgr` tek gerçek kayıp ve şekli belli: satır altı ayrı kısa runla dolduruluyor
+(0, 22, 44, 66, 88, 110), ilk yazma depoyu 64'e boyutluyor, altıncı run onu
+192'ye sıçratıyor — iki tahsis artı 64 hücrelik kopya. 32'şer büyüme bunu −%22
+yapıyordu, tam genişliğe sıçramak −%13'e indiriyor; bu deseni tek tahsise
+indirmenin bir yolu yok, çünkü ilk yazma satırın nereye kadar dolacağını
+bilmiyor.
+
+### Bellek — Faz 6'nın asıl iddiası
+
+`script/scrollback_retained_probe.dart`, 170 sütunluk viewport, 10000 satır:
+
+| yazılan genişlik | taban | lazy | |
+|---|---|---|---|
+| 90 sütun (`ascii`) | 29.3 MB | **14.6 MB** | 2.0× |
+| 60 sütun (`utf8`) | 29.3 MB | **9.8 MB** | 3.0× |
+| 170 sütun (tam) | 29.3 MB | 29.3 MB | değişmiyor |
+
+Faz 6'nın "30 MB → ~10-15 MB" tahmini birebir çıktı. Tasarruf, satırın
+yazıldığı genişlikle viewport genişliği arasındaki fark kadar — yani insanların
+gerçekten sakladığı çıktıda (shell transcript, log) en yüksek, tam genişlik bir
+TUI'de sıfır.
+
+### Durum
+
+Uygulama `perf/born-small-buffer-line` dalında, 896 test geçiyor. Birleştirme
+kararı bir takas: dört yükte +%18…+%24 ve 2–3× bellek, karşılığında `sgr`'de
+−%13. `sgr` sentetik bir yük değil — renkli `ls`, syntax highlight, TUI hep o
+desen.
+
+---
+
 ## Faz 7 adayı — flood altında ileri sarma — **ÖNERİLDİ, ÖLÇÜLMEDİ**
 
 Saha semptomu (ShellVibe'da vtebench sırasında donma) write hızıyla kapanmıyor,
