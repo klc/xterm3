@@ -7,13 +7,19 @@ taban yine değişti. Bölüm 5, 6, 7 ve 9 güncel.
 **Amaç:** `Terminal.write` yolunun neden yavaş kaldığını, nelerin ölçüldüğünü ve
 nelerin denenip reddedildiğini tek dosyada devretmek.
 
-**Durum:** bölüm 9'daki üç adayın üçü de kapandı, ve bölüm 5'in üçüncü okuması
-(scrollback maliyeti) Faz 6'da kaynağına kadar ölçüldü — write path'teki en büyük
-tek kaldıraç orada duruyor, uygulanmamış hâlde. Biri birleştirildi
-(`consume()` fast path, Faz 5.2), ikisi ölçülerek reddedildi (satır havuzu
-Faz 5.3, CSI toplu tarama Faz 5.4). `Terminal.write` üzerinde kalan bilinen
-mikro adım bölüm 9'un 4. maddesi; asıl kaldıraç ise bölüm 9'un sonundaki
-flood/ileri-sarma cephesi, ki o hiç ölçülmedi.
+**Durum (2026-08-30):** bu brifingin açtığı cephelerin hepsi kapandı.
+Birleştirilenler: `consume()` fast path (Faz 5.2) ve doğuştan küçük satır
+(Faz 6.1 — ascii +%18, cyrillic +%19, utf8 +%24, `sgr` −%13, ve tutulan
+scrollback'te 2–3× bellek). Reddedilenler: satır havuzu (Faz 5.3) ve CSI toplu
+tarama (Faz 5.4 iki uygulamayla, Faz 5.5 bir üçüncüsüyle — sonuncusu ölçümle
+değil sayımla kapattı, `script/csi_param_census.dart`).
+
+Bölüm 9'un sonundaki flood/ileri-sarma cephesi **premisi çürüyerek** kapandı:
+tavanı `scrollback` kolonundan türetilmişti, ama o kolonun farkı GC'nin canlı
+tuttuğu kümede, bir modun atlayabileceği işte değil — ayrıntı `RENDER_PLAN.md`
+Faz 7. Geriye kalan tek bilinen mikro adım bölüm 9'un 4. maddesi
+(`consume()` içindeki çift `_queue.first` erişimi), ve ölçülmemiş tek kapı
+`flutter_pty`'nin native okuma tarafı.
 
 ---
 
