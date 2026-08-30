@@ -304,6 +304,19 @@ Düzeltilmiş tabandan çıkan sıra — en yüksek ölçülmüş tavandan en d�
    etrafında toplu iş yapmanın amorti edeceği bir şey kalmadı — sgr'de sekans
    başına 9.6 bayt ve ilk rakam zaten alındığı için toplu yola ortalama 1.5
    rakam kalıyor.
+
+   **Faz 5.5 (2026-08-30) bunu üçüncü bir uygulamayla 6.2.0 tabanında
+   yeniden ölçtü ve tekrar reddetti**, ama artık ölçümle değil sayımla:
+   tarama `ByteConsumer`'ın içine alınıp kurulum tek
+   `_advancePastConsumedBlocks()`'a indirildiğinde bile altscreen parser
+   228 → 222 (%2.8 regresyon, değer kümeleri ayrık), sgr parser başabaş.
+   `script/csi_param_census.dart` nedenini sayıyor: kurulum parametre
+   başına, kazanç ilk rakamdan sonraki her rakamda. altscreen'de tarayıcı
+   **191 `consume()` çağrısını kaldırmak için 300 çağrı yapıyor**
+   (parametrelerin %53'ü tek haneli); sgr'de parametreler daha uzun olduğu
+   için başabaş kalıyor. Tavan da küçük: altscreen'de CSI rakamları akışın
+   %5.1'i. Parametreler 1–3 haneli olduğu sürece uygulama şekli bunu
+   değiştirmiyor — cephe kapalı.
 4. **`consume()` içinde `_queue.first`'e çift erişim.** Parse tarafında kalan
    tek bilinen mikro adım; Faz 5.4'ten sonra o cephede başka aday yok. Fast path'ten sonra
    kalan en görünür artık: bir kez `_advancePastConsumedBlocks()` içinde, bir

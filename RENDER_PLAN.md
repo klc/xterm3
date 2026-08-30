@@ -768,6 +768,79 @@ Faz 5.1'in üç adayının üçü de kapandı: satır havuzu reddedildi (Faz 5.3
 (bu faz). `Terminal.write` üzerinde kalan bilinen mikro adım
 `consume()` içindeki çift `_queue.first` erişimi; ondan sonrası Faz 6.
 
+Faz 5.5 bu cepheyi üçüncü bir uygulamayla yeniden açtı ve kapattı; oradaki
+sayım, reddedişin neden uygulamaya bağlı olmadığını gösteriyor.
+
+---
+
+## Faz 5.5 — CSI toplu tarama, 3. deneme — **REDDEDİLDİ (2026-08-30)**
+
+Faz 5.4 iki uygulamayla reddetmişti, ama ikisinin de gerekçesi kurulum
+maliyetiydi: dört ve üç ayrı `_advancePastConsumedBlocks()`. O maliyeti
+sıfırlayan bir üçüncü şekil kaldığı ve o günden beri taban 6.2.0'a taşındığı
+için yeniden ölçüldü.
+
+### Uygulama: tarama `ByteConsumer`'ın içine
+
+Getter üzerinden blok alıp parser'da taramak yerine, tarama da toplama da
+`ByteConsumer.consumeDigitRun(param, maxCount)` içine girdi: tek
+`_advancePastConsumedBlocks()`, tek blok erişimi, alanlar doğrudan
+güncelleniyor, `consumeAsciiCodeUnits` çağrısı yok. `_consumeCsi`'nin rakam
+dalı iki satır: çağır, `digitRunLength` kadar `rawLength` ekle. Taşma
+`maxCount = _maxCsiRawLength - rawLength` ile korunuyor, yani parametre
+bloğun sonuna kadar uzasa bile `rawLength` tek tek tüketilmiş hâliyle aynı
+yerde kalıyor ve taşma bir sonraki turda tetikleniyor.
+
+853 test geçti, `parser_fuzz_test.dart` dahil — Faz 5.4'ün yakaladığı
+`StateError: No element` bu şekilde yapısal olarak imkânsız, çünkü kuyruk
+kontrolü metodun ilk satırında (`_remainingCodeUnits == 0`).
+
+### Ölçüm: 6 serpiştirilmiş tur, aynı oturum
+
+| | sgr full | sgr parser | altscreen full | altscreen parser |
+|---|---|---|---|---|
+| taban | 65 65 64 65 64 65 | 98 101 99 98 100 98 | 137 137 138 135 137 137 | 229 229 229 226 228 228 |
+| deneme 3 | 64 64 64 61 64 64 | 99 100 100 100 98 99 | 136 134 136 134 135 134 | **221 222 222 222 222 221** |
+
+`sgr parser` başabaş, değer kümeleri örtüşüyor. `altscreen parser` **%2.8
+regresyon** ve değer kümeleri ayrık — gürültü değil. Faz 5.4'ün %12 ve
+%8.3'ünden çok daha iyi, ama hâlâ tabanın altında.
+
+### Neden — sayarak, ölçerek değil
+
+`script/csi_param_census.dart` toplu tarayıcının bahse girdiği şeyi sayıyor:
+kurulum **parametre başına** ödeniyor, kazanç ise ilk rakamdan **sonraki**
+her rakamda geliyor, çünkü ilk rakam parser'ı o dala sokan `consume()`'la
+zaten alınmış durumda.
+
+| workload | CSI baytı | parametre | ilk rakamdan sonrası | verimli çağrı |
+|---|---|---|---|---|
+| sgr | %33.5 | 779 | 630 | 482 (%61.9) |
+| altscreen | %11.4 | 300 | 191 | 141 (%47.0) |
+
+`altscreen`'de tarayıcı **191 `consume()` çağrısını kaldırmak için 300 çağrı
+yapıyor.** Bu bir takas değil. Parametrelerin %53'ü tek haneli, yani çağrıların
+yarısı hiçbir şey almadan dönüyor. `sgr` başabaş çıkıyor çünkü parametreleri
+uzun (%42.9 iki haneli, %19.0 üç haneli) — ölçümün verdiği sıralamanın
+aynısı, benchmark koşulmadan.
+
+Tavan da buradan okunuyor: `altscreen`'de CSI rakamları akışın **%5.1'i**.
+Rakam işlemenin tamamı bedava olsa bile üst sınır o. Faz 5.2'den sonra
+`consume()` zaten tek karşılaştırmalık bir fast path, yani gerçek kazanç o
+%5.1'in küçük bir kesri.
+
+### Cephenin durumu
+
+CSI parametre tarama üç uygulamayla, iki farklı tabanda reddedildi ve
+reddediliş artık ölçüme değil sayıma dayanıyor: parametreler 1–3 haneli
+olduğu sürece hiçbir uygulama şekli bunu kazandıramaz. Geriye tek şekil
+kalıyor — parametre başına değil **sekans başına** tek tarama (sgr'de ~2.7,
+altscreen'de 2 parametre/sekans) — ama o, ayraç, `_maxCsiParams` ve ara bayt
+işleyişini tarama döngüsünün içine kopyalamayı gerektiriyor, ve tavanı
+yukarıdaki %5.1. Açılmadı.
+
+Kod `master`'a girmedi. `script/csi_param_census.dart` girdi.
+
 ---
 
 ## Faz 6 — Scrollback maliyetinin kaynağı — **ÖLÇÜLDÜ, UYGULANMADI (2026-08-29)**
