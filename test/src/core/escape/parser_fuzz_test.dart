@@ -271,29 +271,38 @@ void main() {
     );
   }
 
-  group('regressions found by this fuzzer (bugs in lib/, not fixed here)', () {
-    // Both regressions below are RAW (unminimized) repros: they replay the
-    // exact same deterministic token/resize stream that _runFuzzSeed
-    // produces for the given seed, for exactly as many rounds as it takes to
-    // hit the bug. They were found by running this suite with
+  group('regressions found by this fuzzer', () {
+    // These are RAW (unminimized) repros: they replay the exact same
+    // deterministic token/resize stream that _runFuzzSeed produces for the
+    // given seed, for exactly as many rounds as it takes to reach the state
+    // that used to break. They were found by running this suite with
     // XTERM3_FUZZ_ROUNDS=5000 (the default of 400 rounds is too short to
-    // reach either one, which is why the tests above stay green in normal
-    // CI runs). Do not "fix" these by weakening the assertion - the buffer
-    // corruption is real; see the invariant helper in
-    // test/_support/terminal_invariants.dart for what's supposed to hold.
+    // reach any of them, which is why the tests above stay green in normal
+    // CI runs).
+    //
+    // Every one of them passes now. Each records a bug that was real, the
+    // state that produced it, and the fix that closed it, so that a change
+    // to the wide-cell handling has something concrete to fail against.
+    // Do not "fix" a failure here by weakening an assertion - see the
+    // invariant helper in test/_support/terminal_invariants.dart for what
+    // is supposed to hold.
 
     test(
-      'BUG: a width-2 cell can end up in the last column of a line with no '
-      'placeholder cell after it (seed 0xdeadbeef, round 506)',
+      'a width-2 cell no longer ends up in the last column of a line with '
+      'no placeholder cell after it (seed 0xdeadbeef, round 506)',
       () {
-        // Expected behaviour: every width-2 ("wide") cell must be followed
-        // by a width-0 placeholder cell with code point 0 (see
-        // Buffer.writeChar in lib/src/core/buffer/buffer.dart, which always
-        // writes the wide cell and its placeholder as a pair). Observed:
-        // after round 506 of this seed's stream, line 14 has a wide cell at
-        // column 59 that is the LAST cell of the line - there is no room for
-        // its placeholder at all, which breaks the pairing invariant and
-        // (see the next regression) can crash reflow on a later resize.
+        // Every width-2 ("wide") cell must be followed by a width-0
+        // placeholder cell with code point 0 - see Buffer.writeChar in
+        // lib/src/core/buffer/buffer.dart, which always writes the wide cell
+        // and its placeholder as a pair.
+        //
+        // This used to break: after round 506 of this seed's stream, line 14
+        // held a wide cell at column 59, the LAST cell of the line, with no
+        // room for its placeholder at all - and that dangling lead went on to
+        // crash reflow on a later resize (the next test). Closed by
+        // BufferLine._repairWideCellPairing, which keeps the pairing intact
+        // inside setCell itself rather than trusting each call site to clear
+        // the neighbouring half first.
         final random = Random(0xdeadbeef);
         final terminal = Terminal(maxLines: 500)..resize(80, 24);
 
@@ -312,7 +321,6 @@ void main() {
         }
 
         final line = terminal.buffer.lines[14];
-        // This is what SHOULD hold and currently does not.
         expect(line.getWidth(59), isNot(2),
             reason: 'a wide cell at the last column of the line has no '
                 'room for its placeholder cell');
@@ -320,21 +328,22 @@ void main() {
     );
 
     test(
-      'BUG: Buffer.resize throws RangeError(-1) during reflow after the '
-      'above corruption (seed 0xdeadbeef, round 2827)',
+      'Buffer.resize no longer throws RangeError(-1) during reflow after '
+      'the above corruption (seed 0xdeadbeef, round 2827)',
       () {
-        // Expected behaviour: resize (and the reflow it triggers) must
-        // never throw for any prior buffer content - at worst content is
-        // truncated or dropped. Observed: replaying this seed's stream for
-        // 2827 rounds and then calling terminal.resize(...) throws
-        // `RangeError (length): Invalid value: Not in inclusive range
-        // 0..511: -1` from BufferLine.getWidth, called via
-        // _LineReflow._addPart in lib/src/core/reflow.dart:142, via
-        // _LineReflow.add (reflow.dart:94), via reflow() (reflow.dart:224),
-        // via Buffer.resize (buffer.dart:1608). This is consistent with the
-        // dangling wide-cell-with-no-placeholder state from the regression
-        // above: reflow appears to read one column past where it expects a
-        // placeholder to exist and computes a negative index.
+        // Resize, and the reflow it triggers, must never throw for any
+        // prior buffer content - at worst content is truncated or dropped.
+        //
+        // This used to throw: replaying this seed's stream for 2827 rounds
+        // and then calling terminal.resize(...) raised `RangeError (length):
+        // Invalid value: Not in inclusive range 0..511: -1` from
+        // BufferLine.getWidth, via _LineReflow._addPart in
+        // lib/src/core/reflow.dart, _LineReflow.add, reflow(), and
+        // Buffer.resize. It was the dangling wide-cell-with-no-placeholder
+        // state from the test above reaching reflow, which read one column
+        // past where it expected a placeholder and computed a negative
+        // index. Fixing the pairing at its source closed this too - reflow
+        // never sees the state that produced the negative index.
         final random = Random(0xdeadbeef);
         final terminal = Terminal(maxLines: 500)..resize(80, 24);
 
