@@ -133,8 +133,8 @@ class _Census {
 
   /// What a bulk scanner would actually take: every digit but the first of
   /// each parameter, since the first is already consumed.
-  int get digitsPastFirst => paramsByLength.entries
-      .fold(0, (sum, e) => sum + (e.key - 1) * e.value);
+  int get digitsPastFirst =>
+      paramsByLength.entries.fold(0, (sum, e) => sum + (e.key - 1) * e.value);
 
   /// Calls that take at least one digit. The rest are setup for nothing.
   int get productiveCalls => paramsByLength.entries
