@@ -398,31 +398,47 @@ in 8 KiB chunks, 170x50 grid, Apple M1 Pro.
 
 | workload | full | parser | buffer% | no scrollback | no graphemes |
 |---|---|---|---|---|---|
-| ascii | 103 | 428 | 76% | 173 | 105 |
-| ascii-long-lines | 149 | 828 | 82% | 226 | 144 |
-| sgr | 76 | 99 | 23% | 87 | 76 |
-| utf8 | 58 | 266 | 78% | 86 | 68 |
-| cyrillic | 85 | 293 | 71% | 141 | 83 |
-| altscreen | 171 | 233 | 27% | 173 | 173 |
+| ascii | 108 | 439 | 75% | 143 | 108 |
+| ascii-long-lines | 125 | 699 | 82% | 174 | 126 |
+| sgr | 55 | 100 | 45% | 67 | 56 |
+| utf8 | 60 | 260 | 77% | 70 | 82 |
+| cyrillic | 87 | 286 | 70% | 116 | 88 |
+| altscreen | 136 | 226 | 40% | 138 | 138 |
 
 MiB/s. `full` is `Terminal.write`; `parser` is the same bytes through
 `EscapeParser` with a handler that does nothing; the other two columns turn off
 scrollback and DEC mode 2027 respectively.
 
-**The parser is not the bottleneck, except on `sgr`.** Plain text parses at
-435 MiB/s and the full path manages 92, so 79% of the time is what the terminal
-does per token. `sgr` is the exception: 96 MiB/s through the parser alone means
-CSI dispatch itself is the ceiling there, and no amount of buffer work will
-move it.
+Medians of three interleaved rounds, taken on `master` after phase 6.1. The
+absolute values are lower across the board than the tables further down this
+file, which were taken on a faster day on the same machine — day-to-day drift
+on this hardware runs to about 20%, so read a row against its own table and
+never across two of them.
 
-**Scrolling costs about 40%.** `ascii` at 103 against 173 with scrollback
-disabled, and `altscreen` — which never scrolls — runs at 171. A line of output
-allocates a `BufferLine`, and its cell storage is a `Uint32List` of three
-kilobytes at this width. Capacity rounding was the cheap part of that bill:
-`_calcCapacity` doubled from 64, so a 170-column line reserved 256 cells and
-addressed 170. Rounding to 32 instead took `ascii` from 92 to 103 MiB/s and
-long lines from 129 to 149. The rest is the allocation itself, and recycling
-the storage does not work — see below.
+**The parser is not the bottleneck, except on `sgr`.** Plain text parses at
+439 MiB/s and the full path manages 108, so 75% of the time is what the
+terminal does per token. `sgr` is the exception: 100 MiB/s through the parser
+alone means CSI dispatch itself is the ceiling there, and no amount of buffer
+work will move it. Three attempts at the CSI parameter loop confirmed that from
+the other side - see `RENDER_PLAN.md` phases 5.4 and 5.5, and
+`script/csi_param_census.dart` for why no fourth is worth writing.
+
+**Scrolling still costs about a third.** `ascii` at 108 against 143 with
+scrollback disabled, and `altscreen` — which never scrolls — runs at 136. A
+line of output allocates a `BufferLine`, and its cell storage is a
+`Uint32List`. Two things have been taken off that bill. Capacity rounding was
+the cheap part: `_calcCapacity` doubled from 64, so a 170-column line reserved
+256 cells and addressed 170; rounding to 32 instead took `ascii` from 92 to 103
+MiB/s and long lines from 129 to 149. The larger part was the size of the store
+itself, which phase 6.1 addressed by letting the first write size it instead of
+allocating at viewport width — `ascii` +18%, `cyrillic` +19%, `utf8` +24%, at
+the cost of 13% on `sgr`.
+
+What is left of the gap is not work a faster path can skip. It is the garbage
+collector holding the retained lines: `RENDER_PLAN.md` phase 7 measured that
+`IndexAwareCircularBuffer.push` does *less* work at a depth of 10000 than at
+50, and is slower anyway. Recycling the storage does not work either — see
+below.
 
 **Non-ASCII text used to run at a sixth of ASCII speed.** Both causes are
 fixed below; the table above is after those fixes.
