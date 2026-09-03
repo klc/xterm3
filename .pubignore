@@ -75,6 +75,9 @@ script/
 # only matter to someone who cloned the repo.
 example/assets/
 example/fonts/
+# The screenshot harness reads recordings out of example/assets/, which is
+# excluded above, so shipping it would ship something that cannot run.
+example/lib/screenshot.dart
 example/android/
 example/ios/
 example/linux/

@@ -1,0 +1,32 @@
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[Jmustafas-MacBook-Pro% [K[?2004heexport PS1='%F{cyan}xterm3%f %F{242}~/xterm3%f $ '[?2004l
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[36mxterm3[39m [38;5;242m~/xterm3[39m $ [K[?2004hcclear[?2004l
+[3J[H[2J[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[36mxterm3[39m [38;5;242m~/xterm3[39m $ [K[?2004hggit --no-pager log --oneline --graph --decorate -9 --color=always[?2004l
+* [33m9283469[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m, [m[1;33mtag: [m[1;33mv6.3.0[m[33m, [m[1;31morigin/master[m[33m, [m[1;31morigin/HEAD[m[33m)[m chore: release 6.3.0
+* [33m412e466[m style: format csi_param_census.dart
+*   [33m0ffba12[m Merge the refreshed write-path baseline
+[32m|[m[33m\[m  
+[32m|[m * [33mdc0a022[m docs(bench): retake the write-path baseline after phase 6.1
+[32m|[m[32m/[m  
+* [33m9918f89[m docs(plan): mark phase 6.1 merged and name the price it carries
+*   [33me6b8f6f[m Merge branch 'docs/phase-7-premise'
+[34m|[m[35m\[m  
+[34m|[m * [33mc2c90a7[m docs(plan): retire phase 7's premise, it was reading the wrong column
+* [35m|[m   [33mb6051c7[m Merge fuzz regression status correction
+[36m|[m[1;31m\[m [35m\[m  
+[36m|[m * [35m|[m [33m5d55a2c[m test(fuzz): say that the recorded wide-cell bugs are fixed
+[36m|[m [35m|[m[35m/[m  
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[36mxterm3[39m [38;5;242m~/xterm3[39m $ [K[?2004hpprintf 'wide \u65e5\u672c\u8a9e   emoji \U0001F680 \U0001F9EA   combining e\u0301  [K   cyrillic \u043f\u0440\u0438\u0432\u0435\u0442\n'[?2004l
+wide 日本語   emoji 🚀 🧪   combining é   cyrillic привет
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[36mxterm3[39m [38;5;242m~/xterm3[39m $ [K[?2004hggrep --color=always -n 'born\|store' lib/src/core/buffer/line.dart | head -6[?2004l
+44:  /// exactly one [01;31m[Kstore[m[K, sized to the text rather than to the viewport. A line
+45:  /// that later outgrows that [01;31m[Kstore[m[K jumps straight to its full [length]
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[36mxterm3[39m [38;5;242m~/xterm3[39m $ [K[?2004hlls -lG lib/src/core/buffer | head -8[?2004l
+total 224
+-rw-r--r--@ 1 mkilic  staff  58097 Aug 29 00:11 buffer.dart
+-rw-r--r--@ 1 mkilic  staff    290 Aug  8 18:53 cell_flags.dart
+-rw-r--r--@ 1 mkilic  staff   1167 Aug  8 18:53 cell_offset.dart
+-rw-r--r--@ 1 mkilic  staff  27960 Aug 30 18:33 line.dart
+-rw-r--r--@ 1 mkilic  staff   3026 Aug  8 18:53 range_block.dart
+-rw-r--r--@ 1 mkilic  staff   1831 Aug  8 18:53 range_line.dart
+-rw-r--r--@ 1 mkilic  staff   1283 Aug  8 18:53 range.dart
+[1m[7m%[27m[1m[0m                                                                                                    [0m[27m[24m[J[36mxterm3[39m [38;5;242m~/xterm3[39m $ [K[?2004h
