@@ -866,6 +866,80 @@ reason to expect this one to pay. And `PacedTerminalWriter`'s unbounded queue
 is real, but bounding it means either dropping output or a threshold mode with
 an API surface - recorded as Phase 7, not something to slip into a cleanup.
 
+## Against `xterm` and `xterm2` — 2026-09-03
+
+The tables above compare this tree against its own earlier commits. This one
+compares the published packages the line came from, which is the comparison a
+reader of the README is actually asking about.
+
+`script/cross_bench/` is its own package so that it can depend on all three at
+once. Each is driven through `package:<name>/core.dart` — the headless half,
+no Flutter — and all three expose the same `Terminal(maxLines:)`, `resize`,
+`write`, so one harness reaches them with nothing per-package in the measured
+path. Versions: `xterm` 4.0.0, `xterm2` 5.2.0 (the last published on that
+line), `xterm3` 6.3.0. Grid 170x50, 10000 lines of scrollback, 32 MiB per
+workload in 8 KiB chunks, AOT-compiled. Apple M1 Pro, macOS 26.5.1, Dart
+3.12.2. One package per process; three interleaved rounds, medians below. The
+spread across rounds was under 2% on every cell.
+
+### Throughput, MiB/s
+
+| workload | `xterm` 4.0.0 | `xterm2` 5.2.0 | `xterm3` 6.3.0 | vs `xterm` |
+|---|---|---|---|---|
+| ascii | 15.8 | 86.6 | **113.4** | 7.2x |
+| ascii-long-lines | 16.6 | 117.8 | **135.5** | 8.2x |
+| sgr | 18.8 | **60.8** | 57.4 | 3.1x |
+| utf8 (Turkish) | 15.4 | 14.2 | **63.5** | 4.1x |
+| cyrillic | 14.8 | 5.5 | **90.4** | 6.1x |
+| altscreen | 19.2 | 133.2 | **139.1** | 7.2x |
+
+`sgr` is the one row where `xterm3` is behind `xterm2`, by 6%, and it is a
+known price rather than a surprise: 6.3.0's born-small `BufferLine` sizes a
+line's store from its first write, and an SGR-heavy line arrives as several
+short runs between colour changes, so a later run has to grow the store. The
+6.3.0 changelog records the two alternatives measured against it, at -22% and
+-14% elsewhere.
+
+`utf8` and `cyrillic` are where the distance is real rather than incremental.
+Both older packages leave the batched write path at the first non-ASCII letter,
+so a language not written in ASCII never batches at all — `xterm2` is *slower*
+than `xterm` on Cyrillic because the rest of its write path got faster around a
+per-code-point loop that did not.
+
+### Scrollback residency, MiB
+
+10000 lines of `ls -l`-shaped output retained at a 170-column window, resident
+set after the collector has been given its chances, minus the same process
+before the terminal existed. Medians of five.
+
+| | `xterm` 4.0.0 | `xterm2` 5.2.0 | `xterm3` 6.3.0 |
+|---|---|---|---|
+| scrollback RSS | 85.8 | 79.3 | **52.8** |
+
+Lines here are about 90 columns wide in a 170-column window, so this is the
+case born-small storage was built for: the line no longer reserves the 80
+columns it never reaches.
+
+### Resize reflow, ms
+
+One narrow-and-restore pair (170 → 80 → 170 columns) with the scrollback full,
+which rewraps all 10000 retained lines twice. Median of three runs of ten.
+
+| | `xterm` 4.0.0 | `xterm2` 5.2.0 | `xterm3` 6.3.0 |
+|---|---|---|---|
+| per resize pair | 10.6 | 4.7 | **4.6** |
+
+`xterm3` and `xterm2` are level here; the 2.3x is against `xterm`. Reflow has
+not been worked on since, and this row is here to say so.
+
+### What this does not measure
+
+Everything above the terminal core. No renderer, no Flutter, no PTY — the
+`flood` workload in the tables above is what says whether output starves the
+frame pipeline, and it only exists for this tree. A cross-package render
+comparison would need three example apps whose cell metrics agree, and cell
+metrics are the thing this file already records as not stable across builds.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and

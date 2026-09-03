@@ -1,0 +1,29 @@
+[?1049h[>4;2m[?1h=[?2004h[1;30r[?12h[?12l[22;2t[22;1t[27m[23m[29m[m[H[2J[?25l[30;1H"lib/src/core/buffer/line.dart" 905 lines, 27960 bytes[2;1H▽[6n[2;1H  [3;1HPzz\[0%m[6n[3;1H           [1;1H[>c[27m[23m[29m[m[H[2J[1;1H[93m  1 [m[93mimport[m [95m'dart:collection'[m;
+[93m  2 [m[93mimport[m [95m'dart:math'[m [93mshow[m min;
+[93m  3 [m[93mimport[m [95m'dart:typed_data'[m;
+[93m  4 
+  5 [m[93mimport[m [95m'package:meta/meta.dart'[m;
+[93m  6 [m[93mimport[m [95m'package:xterm3/src/core/buffer/cell_offset.dart'[m;
+[93m  7 [m[93mimport[m [95m'package:xterm3/src/core/cell.dart'[m;
+[93m  8 [m[93mimport[m [95m'package:xterm3/src/core/cursor.dart'[m;
+[93m  9 [m[93mimport[m [95m'package:xterm3/src/utils/circular_buffer.dart'[m;
+[93m 10 [m[93mimport[m [95m'package:xterm3/src/utils/single_cell_text.dart'[m;
+[93m 11 [m[93mimport[m [95m'package:xterm3/src/utils/unicode_v11.dart'[m;
+[93m 12 
+ 13 [m[93mconst[m _cellSize = 4;
+[93m 14 
+ 15 [m[96m/// Storage for a line nothing has written to yet. Shared, so creating a line[m
+[93m 16 [m[96m/// - which scrolling does once per line of output - allocates nothing at all.[m
+[93m 17 [m[93mfinal[m _noCells = Uint32List(0);
+[93m 18 
+ 19 [m[93mconst[m _cellForeground = 0;
+[93m 20 
+ 21 [m[93mconst[m _cellBackground = 1;
+[93m 22 
+ 23 [m[93mconst[m _cellAttributes = 2;
+[93m 24 
+ 25 [m[93mconst[m _cellContent = 3;
+[93m 26 
+ 27 [m[93mconst[m _maxCombiningCharactersPerCell = 16;
+[93m 28 [m
+[1m[7mlib/src/core/buffer/line.dart                                                               1:1  Top[1;5H[?25h[?4m

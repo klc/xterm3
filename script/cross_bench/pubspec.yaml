@@ -1,0 +1,21 @@
+# Its own package, because it depends on three terminal packages at once and
+# xterm3 itself cannot depend on its own ancestors.
+#
+#   cd script/cross_bench
+#   dart pub get
+#   dart compile exe bin/xbench.dart -o /tmp/xbench
+#   /tmp/xbench xterm3            # throughput, MiB/s per workload
+#   /tmp/xbench xterm3 memory     # settled scrollback RSS, MiB
+#   /tmp/xbench xterm3 reflow     # ms per narrow-and-restore resize
+name: cross_bench
+description: Write-path benchmark run against xterm, xterm2 and xterm3.
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  xterm: ^4.0.0
+  xterm2: ^5.2.0
+  xterm3:
+    path: ../..
