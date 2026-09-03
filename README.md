@@ -21,59 +21,147 @@
 [Changelog](https://pub.dev/packages/xterm3/changelog) ·
 [Source](https://github.com/klc/xterm3)
 
-`xterm3` continues the line that started with
+**xterm3** is a terminal emulator for Flutter applications, on mobile and
+desktop. It ships a headless emulation core with no Flutter dependency and a
+renderer on top of it, so the terminal can be driven — and tested — without a
+widget tree.
+
+It continues the line that started with
 [`xterm`](https://pub.dev/packages/xterm) from
 [`TerminalStudio/xterm.dart`](https://github.com/TerminalStudio/xterm.dart) and
 was kept alive as [`xterm2`](https://pub.dev/packages/xterm2). The original
-package is unmaintained, and `xterm2` has since diverged far enough — rewritten
-renderer, reworked buffer and reflow, new input and search paths — that it
-continues here under its own name. `xterm2` users migrate by changing the
-dependency and the package in imports; the public API is unchanged.
+package is unmaintained, and `xterm2` has since diverged far enough —
+rewritten renderer, reworked buffer and reflow, new input and search paths —
+that it continues here under its own name. `xterm2` users migrate by changing
+the dependency and the package in imports; the public API is unchanged.
 
-**xterm3** is a fast and fully-featured terminal emulator for Flutter applications, with support for mobile and desktop platforms.
+> Requires Flutter >= 3.19.0
 
-> This package requires Flutter version >=3.19.0
+## Performance
+
+Same workloads, same harness, three packages. Every number below is
+reproducible from `script/cross_bench/`, which depends on all three at once and
+drives each through its headless `core.dart` — so nothing per-package sits in
+the measured path.
+
+`xterm` 4.0.0 · `xterm2` 5.2.0 · `xterm3` 6.3.0. Grid 170x50, 10000 lines of
+scrollback, 32 MiB per workload in 8 KiB chunks, AOT-compiled, one package per
+process, three interleaved rounds. Apple M1 Pro, macOS 26.5.1, Dart 3.12.2.
+
+**Write throughput, MiB/s** — higher is better:
+
+| workload | `xterm` | `xterm2` | `xterm3` | vs `xterm` |
+|---|---|---|---|---|
+| plain ASCII output | 15.8 | 86.6 | **113.4** | **7.2x** |
+| lines wider than the window | 16.6 | 117.8 | **135.5** | **8.2x** |
+| SGR-heavy (coloured) output | 18.8 | **60.8** | 57.4 | 3.1x |
+| UTF-8 (Turkish) | 15.4 | 14.2 | **63.5** | **4.1x** |
+| Cyrillic | 14.8 | 5.5 | **90.4** | **6.1x** |
+| alt-screen TUI redraw | 19.2 | 133.2 | **139.1** | **7.2x** |
+
+**Scrollback residency, MiB** — 10000 lines of `ls -l`-shaped output retained
+at a 170-column window; lower is better:
+
+| | `xterm` | `xterm2` | `xterm3` |
+|---|---|---|---|
+| resident scrollback | 85.8 | 79.3 | **52.8** |
+
+**Resize reflow, ms** — one 170 → 80 → 170 column pair with the scrollback
+full, rewrapping all 10000 retained lines twice; lower is better:
+
+| | `xterm` | `xterm2` | `xterm3` |
+|---|---|---|---|
+| per resize | 10.6 | 4.7 | **4.6** |
+
+Two rows are worth reading honestly rather than as a scoreboard. **SGR output
+is 6% slower than `xterm2`** — a known price of sizing line storage from what a
+line actually writes, which is what buys the scrollback row; the alternatives
+were measured at -22% and -14% elsewhere. And **reflow is level with `xterm2`**;
+the 2.3x there is against `xterm`, not against the immediate predecessor.
+
+The large gaps are on non-ASCII text, and they are structural: both older
+packages leave the batched write path at the first accented letter, so a
+language not written in ASCII never batches at all. `xterm2` is *slower* than
+`xterm` on Cyrillic for that reason — the rest of its write path got faster
+around a per-code-point loop that did not.
+
+Renderer frame times, the workloads behind them, and every change that was
+measured and **rejected** are in [BENCHMARKS.md](BENCHMARKS.md). Nothing in
+this package is accepted on the argument that it ought to be faster.
 
 ## Screenshots
 
+Every image below is a real frame painted by `TerminalView`, produced by
+`example/lib/screenshot.dart` from PTY recordings in
+`example/assets/screenshots/` — so they can be regenerated rather than
+retouched. Grid 100x30, Cascadia Mono at 13pt.
+
 <table>
   <tr>
-    <td>
-		<img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-shell.png">
+    <td align="center">
+      <a href="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-shell.png">
+        <img width="380px" alt="A zsh session showing a coloured git graph, CJK and emoji, combining marks and Cyrillic"
+             src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-shell.png">
+      </a>
+      <br><sub>Shell — SGR colour, CJK, emoji, combining marks, Cyrillic</sub>
     </td>
-    <td>
-       <img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-vim.png">
+    <td align="center">
+      <a href="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-htop.png">
+        <img width="380px" alt="htop drawing CPU and memory meters with block elements and 256-colour bars"
+             src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-htop.png">
+      </a>
+      <br><sub>htop — block elements and meters, drawn procedurally</sub>
     </td>
-  <tr>
   </tr>
-    <td>
-       <img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-htop.png">
+  <tr>
+    <td align="center">
+      <a href="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-vim.png">
+        <img width="380px" alt="vim editing a Dart source file with syntax highlighting and a status line"
+             src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-vim.png">
+      </a>
+      <br><sub>vim — full-screen redraw on the alternate screen</sub>
     </td>
-    <td>
-       <img width="200px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-dialog.png">
+    <td align="center">
+      <a href="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-search.png">
+        <img width="380px" alt="The same shell session with search matches highlighted and one active match"
+             src="https://raw.githubusercontent.com/klc/xterm3/master/media/demo-search.png">
+      </a>
+      <br><sub>Search — every match in the scrollback, one of them active</sub>
     </td>
   </tr>
 </table>
 
 ## Features
 
-- 📦 **Works out of the box** No special configuration required.
-- 🚀 **Fast** Renders at 60fps.
-- 😀 **Wide character support** Supports CJK and emojis.
-- ✂️ **Customizable** 
-- 🔗 **Ligatures** Opt-in via `TerminalStyle(enableLigatures: true)`, with a
-  ligature-capable font such as Fira Code, JetBrains Mono or Iosevka. Ligatures
-  are drawn only where they fill exactly the cells they cover, so the grid never
-  shifts; anything else falls back to per-cell painting.
-- ✔ **Frontend independent**: The terminal core can work without flutter frontend.
-
-**What's new in 3.0.0:**
-
-- 📱 Enhanced support for **mobile** platforms.
-- ⌨️ Integrates with Flutter's **shortcut** system.
-- 🎨 Allows changing **theme** at runtime.
-- 💪 Better **performance**. No tree rebuilds anymore.
-- 🈂️ Works with **IMEs**.
+- 📦 **Works out of the box.** No special configuration required.
+- ✔ **Frontend independent.** The emulation core runs without Flutter —
+  `package:xterm3/core.dart` has no `dart:ui` on any path.
+- 😀 **Unicode 17.** Wide characters, grapheme clusters, emoji sequences, and
+  a batched write path that covers Latin, Greek, Cyrillic and Armenian rather
+  than ASCII alone.
+- 🔍 **Search.** Bounded, Unicode-aware, across soft wraps, with a distinct
+  active match — `Terminal.search`.
+- 🔗 **Hyperlinks.** OSC 8, plus plain `http(s)://` and `www.` text detected in
+  the buffer. Modifier-click on desktop, tap on touch.
+- 🎨 **Procedural glyphs.** Box drawing, blocks, mosaics, Braille and Powerline
+  drawn directly, so they tile without font seams at any cell size.
+- 🔤 **Ligatures.** Opt-in via `TerminalStyle(enableLigatures: true)` with a
+  ligature-capable font such as Fira Code, JetBrains Mono or Iosevka. A
+  ligature is drawn only where it fills exactly the cells it covers, so the
+  grid never shifts; anything else falls back to per-cell painting.
+- 🖱 **Mouse reporting.** DEC modes 1000/1002/1003 with normal, UTF-8, SGR,
+  SGR-pixel and urxvt encodings; extended buttons, horizontal wheel, and
+  Shift+wheel scrollback that survives an application grabbing the mouse.
+- ⌨️ **Modern key encoding.** Kitty keyboard protocol, fixterms chords, and
+  correct modified arrows, function keys, Enter and Escape.
+- 🈂️ **IME-aware.** Composition is held back until the keyboard commits it, in
+  both delete-detection modes — Turkish and CJK text arrives once, correctly.
+- 🧭 **Semantic prompts.** OSC 133/633 anchors tracked across scrollback and
+  reflow, with shortcuts to jump between them.
+- ⏱ **Paced writing.** `PacedTerminalWriter` feeds PTY output a frame's worth
+  at a time: a burst drains ~50% slower and stays at 75fps instead of 37.
+- 🎛 **Runtime theming**, synchronized output (DEC 2026), DECSCUSR cursor
+  shapes, focus reporting, and OSC 7 working-directory updates.
 
 ## Getting Started
 
@@ -88,7 +176,7 @@ or add it to your package's pubspec.yaml file by hand:
 ```yml
 dependencies:
   ...
-  xterm3: ^6.0.1
+  xterm3: ^6.3.0
 ```
 
 **2.** Create the terminal:
@@ -132,10 +220,24 @@ terminal.write('Hello, world!');
 
 - Write a SSH client in ~100 lines of code with [dartssh2]:
   https://github.com/klc/xterm3/blob/master/example/lib/ssh.dart
-  
-  <img width="400px" src="https://raw.githubusercontent.com/klc/xterm3/master/media/example-ssh.png">
+
+- Regenerate the screenshots above:
+  `python3 script/screenshots/record.py`, then
+  `cd example && flutter run --release -d macos -t lib/screenshot.dart`
 
 For the original package history, see [TerminalStudio/xterm.dart].
+
+## Migrating from `xterm2`
+
+The public API is unchanged. Three mechanical edits:
+
+- `xterm2: ^5.3.0` becomes `xterm3: ^6.3.0` in `pubspec.yaml`.
+- `package:xterm2/...` becomes `package:xterm3/...` in imports. The entry point
+  keeps its name: `import 'package:xterm3/xterm.dart';`.
+- `XTERM2_FUZZ_ROUNDS` becomes `XTERM3_FUZZ_ROUNDS`.
+
+Note the licence change below: `xterm2` 5.3.0 and earlier are MIT, `xterm3`
+6.0.0 and later are AGPL.
 
 ## Features and bugs
 
