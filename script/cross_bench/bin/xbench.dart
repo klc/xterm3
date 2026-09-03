@@ -46,11 +46,14 @@ Term _buildTerm(String package) {
 Writer _build(String package) {
   switch (package) {
     case 'xterm':
-      return (v1.Terminal(maxLines: _scrollback)..resize(_columns, _rows)).write;
+      return (v1.Terminal(maxLines: _scrollback)..resize(_columns, _rows))
+          .write;
     case 'xterm2':
-      return (v2.Terminal(maxLines: _scrollback)..resize(_columns, _rows)).write;
+      return (v2.Terminal(maxLines: _scrollback)..resize(_columns, _rows))
+          .write;
     case 'xterm3':
-      return (v3.Terminal(maxLines: _scrollback)..resize(_columns, _rows)).write;
+      return (v3.Terminal(maxLines: _scrollback)..resize(_columns, _rows))
+          .write;
   }
   throw ArgumentError('unknown package: $package');
 }
@@ -115,7 +118,8 @@ void _memory(String package) {
     if (rss < low) low = rss;
   }
   final after = low;
-  print('$package\trss\t${((after - before) / 1024 / 1024).toStringAsFixed(1)}');
+  print(
+      '$package\trss\t${((after - before) / 1024 / 1024).toStringAsFixed(1)}');
   // Keep the terminal alive past the measurement.
   if (identityHashCode(write) == 0) print('unreachable');
 }

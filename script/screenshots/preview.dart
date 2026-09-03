@@ -12,7 +12,8 @@ import 'package:xterm3/core.dart';
 
 void main(List<String> args) {
   final terminal = Terminal(maxLines: 10000)..resize(100, 30);
-  terminal.write(utf8.decode(File(args.first).readAsBytesSync(), allowMalformed: true));
+  terminal.write(
+      utf8.decode(File(args.first).readAsBytesSync(), allowMalformed: true));
 
   final buffer = terminal.buffer;
   final top = buffer.height - terminal.viewHeight;
