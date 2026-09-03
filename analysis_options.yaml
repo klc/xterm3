@@ -1,5 +1,16 @@
 include: package:lints/recommended.yaml
 
+analyzer:
+  exclude:
+    # Its own package, depending on xterm and xterm2 so that one harness can
+    # measure all three (see script/cross_bench/). `flutter analyze` resolves
+    # the root package and `example/`, but not an arbitrary nested one, so
+    # from here its imports look unresolvable. Wiring two pub.dev packages
+    # into every CI run to lint a benchmark would make CI fail for reasons
+    # that have nothing to do with this package; the harness is checked by
+    # running it.
+    - script/cross_bench/**
+
 linter:
   rules:
     prefer_function_declarations_over_variables: false
