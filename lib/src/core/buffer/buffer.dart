@@ -935,7 +935,7 @@ class Buffer {
   void _scrollDownFullWidth(int count) {
     for (var i = absoluteMarginBottom; i >= absoluteMarginTop; i--) {
       if (i >= absoluteMarginTop + count) {
-        lines[i] = lines[i - count];
+        lines.move(i - count, i);
       } else {
         lines[i] = _newEmptyLine();
       }
@@ -953,7 +953,7 @@ class Buffer {
 
     for (var i = absoluteMarginTop; i <= absoluteMarginBottom; i++) {
       if (i <= absoluteMarginBottom - count) {
-        lines[i] = lines[i + count];
+        lines.move(i + count, i);
       } else {
         lines[i] = _newEmptyLine();
       }
@@ -1568,7 +1568,7 @@ class Buffer {
 
     for (var i = 0; i < linesToMove; i++) {
       final index = absoluteCursorY + i;
-      lines[index] = lines[index + count];
+      lines.move(index + count, index);
     }
 
     for (var i = 0; i < count; i++) {

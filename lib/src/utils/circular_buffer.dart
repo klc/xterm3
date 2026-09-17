@@ -282,6 +282,23 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     _length = copyLength;
   }
 
+  /// Moves the element at [from] to [to], leaving [from] empty.
+  ///
+  /// The caller must refill [from] before anything reads it, which is what the
+  /// scroll paths do: they shift a block of elements and then write fresh ones
+  /// into the slots they vacated.
+  ///
+  /// Assigning `list[to] = list[from]` instead leaves the same element in both
+  /// slots. Overwriting the stale slot later detaches the element it still
+  /// holds — an element that is by then living at [to] and is very much still
+  /// in the list.
+  void move(int from, int to) {
+    RangeError.checkValueInInterval(from, 0, length - 1, 'from');
+    RangeError.checkValueInInterval(to, 0, length - 1, 'to');
+    if (from == to) return;
+    _moveChild(from, to);
+  }
+
   /// Replaces the element at [index] with [value] and returns the replaced
   /// item.
   T swap(int index, T value) {

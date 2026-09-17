@@ -539,4 +539,86 @@ void main() {
       expect(terminal.buffer.lines[2].toString(), '789');
     });
   });
+
+  group('Buffer scrolling keeps its lines in the list', () {
+    // Shifting a block of lines used to be written as `lines[to] = lines[from]`,
+    // which left the same line in both slots. Overwriting the stale slot later
+    // detached a line that was by then living at [to] and still on screen, and
+    // a detached line cannot carry an anchor — so the selection built on it
+    // silently became null and nothing could be highlighted or copied.
+    //
+    // The alt screen is where this bit: the main buffer scrolls by pushing new
+    // lines onto the scrollback and never takes this path, so `cat` stayed
+    // selectable while an editor did not.
+    int detachedLines(Terminal terminal) {
+      var detached = 0;
+      for (var i = 0; i < terminal.buffer.lines.length; i++) {
+        if (!terminal.buffer.lines[i].attached) detached++;
+      }
+      return detached;
+    }
+
+    Terminal altScreen() {
+      final terminal = Terminal(maxLines: 200)..resize(20, 10);
+      terminal.write('\x1b[?1049h\x1b[H');
+      for (var i = 0; i < 9; i++) {
+        terminal.write('line $i\r\n');
+      }
+      return terminal;
+    }
+
+    test('scrolling the alt screen up', () {
+      final terminal = altScreen();
+      for (var i = 0; i < 60; i++) {
+        terminal.write('more $i\r\n');
+      }
+
+      expect(detachedLines(terminal), 0);
+    });
+
+    test('scrolling the alt screen down with reverse index', () {
+      final terminal = altScreen()..write('\x1b[H');
+      for (var i = 0; i < 30; i++) {
+        terminal.write('\x1bM');
+      }
+
+      expect(detachedLines(terminal), 0);
+    });
+
+    test('deleting lines', () {
+      final terminal = altScreen()..write('\x1b[3;1H');
+      for (var i = 0; i < 20; i++) {
+        terminal.write('\x1b[2M');
+      }
+
+      expect(detachedLines(terminal), 0);
+    });
+
+    test('inserting lines', () {
+      final terminal = altScreen()..write('\x1b[3;1H');
+      for (var i = 0; i < 20; i++) {
+        terminal.write('\x1b[2L');
+      }
+
+      expect(detachedLines(terminal), 0);
+    });
+
+    test('a selection made after scrolling is a real selection', () {
+      final terminal = altScreen();
+      for (var i = 0; i < 40; i++) {
+        terminal.write('more $i\r\n');
+      }
+      final controller = TerminalController();
+      addTearDown(controller.dispose);
+
+      final buffer = terminal.buffer;
+      controller.setSelection(
+        buffer.createAnchor(0, 2),
+        buffer.createAnchor(4, 2),
+      );
+
+      expect(controller.selection, isNotNull);
+      expect(controller.selectionFor(terminal.buffer), isNotNull);
+    });
+  });
 }
