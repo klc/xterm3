@@ -1,3 +1,25 @@
+## [6.3.1] - 2026-09-17
+
+* Text stays selectable on the alternate screen. The three full-width scroll
+  paths shifted a block of lines by assigning `lines[to] = lines[from]`, which
+  leaves the same `BufferLine` in two slots of the circular buffer; overwriting
+  the stale slot later detached a line that was by then on screen at `to` and
+  holding anchors. A detached line cannot answer for an anchor, so
+  `TerminalController` reported no selection at all — nothing highlighted and
+  nothing to copy — and each scrolled line took another one down with it, so a
+  session degraded the longer it ran. The main buffer scrolls by pushing lines
+  onto the scrollback and never reached this code, which is why the same text
+  was selectable out of `cat` but not out of an editor. `IndexAwareCircularBuffer`
+  gains `move`, which clears the source slot, and the scroll paths use it.
+
+* A press that lands on blank space starts a selection instead of nothing.
+  `selectWord` gave up when the cell under the pointer was a separator or an
+  empty cell, and since it is the entry point for touch selection and double
+  click, a long press on the empty half of a short line selected nothing and
+  could not recover — every later move update re-read the same blank starting
+  cell and gave up again. Such a cell now selects itself, at both ends of the
+  range.
+
 ## [6.3.0] - 2026-08-30
 
 * A `BufferLine` no longer sizes its cell storage to the terminal's width the
