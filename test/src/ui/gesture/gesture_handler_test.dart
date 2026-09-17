@@ -418,6 +418,46 @@ void main() {
       await gesture.up();
       controller.dispose();
     });
+
+    testWidgets(
+      'long press on blank space selects that cell and still extends',
+      (tester) async {
+        // Most of a full-screen editor is blank: short lines leave the right
+        // of the window empty and everything past the end of the file is
+        // filler. A long press there used to select nothing, and because
+        // every move update re-read the same blank starting cell, the drag
+        // could never grow a selection either.
+        final terminal = Terminal(maxLines: 20)..resize(20, 5);
+        terminal.write('hello world');
+        final controller = TerminalController();
+
+        await tester
+            .pumpWidget(harness(terminal: terminal, controller: controller));
+        await tester.pump();
+
+        final rt = viewKey.currentState!.renderTerminal;
+        final gesture = await tester.startGesture(
+          globalOf(tester, cellCenter(rt, 15, 0)),
+          kind: PointerDeviceKind.touch,
+        );
+        await tester.pump(
+          kLongPressTimeout + const Duration(milliseconds: 50),
+        );
+
+        // The blank cell carries no text of its own, but it is a real
+        // selection, which is what the drag below needs to grow from.
+        expect(controller.selection, isNotNull);
+        expect(terminal.buffer.getText(controller.selection), isEmpty);
+
+        await gesture.moveTo(globalOf(tester, cellCenter(rt, 2, 0)));
+        await tester.pump();
+
+        expect(terminal.buffer.getText(controller.selection), 'hello world');
+
+        await gesture.up();
+        controller.dispose();
+      },
+    );
   });
 
   group('TerminalGestureHandler drag selection', () {

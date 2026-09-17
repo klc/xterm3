@@ -485,10 +485,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   }
 
   /// Selects entire words in the terminal that contains [from] and [to].
+  ///
+  /// A cell that is not part of a word — a space, a separator, or one of the
+  /// empty cells that make up most of a sparse screen — selects itself rather
+  /// than selecting nothing. This is the entry point for touch selection, and
+  /// bailing out left a long press on blank space with no selection at all and
+  /// no way to grow one: every later drag update re-reads the same blank
+  /// starting cell and bails again.
   void selectWord(Offset from, [Offset? to]) {
-    final fromOffset = getCellOffset(from);
-    final fromBoundary = _terminal.buffer.getWordBoundary(fromOffset);
-    if (fromBoundary == null) return;
+    final fromBoundary = _wordOrCellBoundary(getCellOffset(from));
     if (to == null) {
       _controller.setSelection(
         _terminal.buffer.createAnchorFromOffset(fromBoundary.begin),
@@ -496,9 +501,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         mode: SelectionMode.line,
       );
     } else {
-      final toOffset = getCellOffset(to);
-      final toBoundary = _terminal.buffer.getWordBoundary(toOffset);
-      if (toBoundary == null) return;
+      final toBoundary = _wordOrCellBoundary(getCellOffset(to));
       final range = fromBoundary.merge(toBoundary);
       _controller.setSelection(
         _terminal.buffer.createAnchorFromOffset(range.begin),
@@ -506,6 +509,17 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         mode: SelectionMode.line,
       );
     }
+  }
+
+  /// The word [position] is part of, or the single cell it lands on when it is
+  /// part of none.
+  BufferRangeLine _wordOrCellBoundary(CellOffset position) {
+    final boundary = _terminal.buffer.getWordBoundary(position);
+    if (boundary != null) return boundary;
+    return BufferRangeLine(
+      _cellSelectionStart(position),
+      _cellSelectionEnd(position),
+    );
   }
 
   /// Selects entire visual lines in the terminal that contain [from] and [to].
