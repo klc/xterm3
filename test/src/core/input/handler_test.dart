@@ -606,6 +606,57 @@ void main() {
       expect(output, ['\x1b[27;6;72~', '\x1b[27;3;56~', '\x08']);
     });
 
+    test('modifyOtherKeys mode 2 sends Option-composed text as typed on macOS',
+        () {
+      final output = <String>[];
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.macos,
+      );
+
+      terminal.write('\x1b[>4;2m');
+      // Turkish Q: Option+Q is `@`. Claude Code and other Ink apps turn this
+      // mode on, and read `CSI 27;3;64~` as Alt+@, so `@` was never typed.
+      terminal.keyInput(TerminalKey.keyQ, alt: true, text: '@');
+      // Option on a key that composes nothing is still Alt.
+      terminal.keyInput(TerminalKey.digit8, alt: true, text: '8');
+      // Ctrl or Cmd with Option is a shortcut, not composition.
+      terminal.keyInput(TerminalKey.keyQ, alt: true, ctrl: true, text: '@');
+      // Any Option layer, not just Q: Option+8 is `[` on Turkish Q, and
+      // Option+Shift+7 is `\\`.
+      terminal.keyInput(TerminalKey.digit8, alt: true, text: '[');
+      terminal.keyInput(
+        TerminalKey.digit7,
+        alt: true,
+        shift: true,
+        text: '\\',
+      );
+      // A key the US layout has no character for, such as Turkish `ş`.
+      terminal.keyInput(TerminalKey.none, alt: true, text: '¶');
+
+      expect(output, [
+        '@',
+        '\x1b[27;3;56~',
+        '\x1b[27;7;64~',
+        '[',
+        '\\',
+        '¶',
+      ]);
+    });
+
+    test('modifyOtherKeys mode 2 keeps Alt as Alt off macOS', () {
+      final output = <String>[];
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.linux,
+      );
+
+      terminal.write('\x1b[>4;2m');
+      terminal.keyInput(TerminalKey.keyQ, alt: true, text: '@');
+
+      expect(output, ['\x1b[27;3;64~']);
+    });
+
     test('encodes every legacy arrow-key modifier combination', () {
       final output = <String>[];
       final terminal = Terminal(

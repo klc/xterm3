@@ -1,6 +1,7 @@
 export 'package:xterm3/src/core/input/event.dart';
 export 'package:xterm3/src/core/input/kitty_handler.dart';
 
+import 'package:xterm3/src/core/input/composed_text.dart';
 import 'package:xterm3/src/core/input/event.dart';
 import 'package:xterm3/src/core/input/keys.dart';
 import 'package:xterm3/src/utils/char_code.dart';
@@ -136,6 +137,9 @@ class ModifyOtherKeysInputHandler implements TerminalInputHandler {
   String? call(TerminalKeyboardEvent event) {
     if (event.type == TerminalKeyEventType.release) return null;
     if (event.state.modifyOtherKeysMode != 2) return null;
+    // A character Option composed is text, not Alt plus a key: send it as
+    // typed.
+    if (isMacOptionComposedText(event)) return event.text;
 
     final codepoint = _codepoint(event);
     if (codepoint == null) return null;

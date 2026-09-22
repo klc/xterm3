@@ -1,6 +1,6 @@
+import 'package:xterm3/src/core/input/composed_text.dart';
 import 'package:xterm3/src/core/input/event.dart';
 import 'package:xterm3/src/core/input/keys.dart';
-import 'package:xterm3/src/core/platform.dart';
 
 /// Translates key presses using Kitty's progressive keyboard protocol.
 ///
@@ -137,33 +137,14 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
     return event.ctrl || event.alt || event.superKey;
   }
 
-  /// Whether the platform composed a character out of a modified key press, so
-  /// the modifier is part of the layout rather than a modifier to report.
-  ///
-  /// macOS composes with Option unless the app opts into option-as-meta: on a
-  /// Turkish Q layout Option+Q is how `@` is typed. Reporting that as
-  /// `CSI 113;3u` (alt+q) loses the `@` entirely. A client that asked for all
-  /// keys as escape codes wants the raw key regardless.
+  /// Whether the platform composed a character out of a modified key press;
+  /// see [isMacOptionComposedText]. A client that asked for all keys as escape
+  /// codes wants the raw key regardless.
   bool _isComposedTextEvent(TerminalKeyboardEvent event, int mode) {
     if (mode & _reportAllKeysAsEscapeCodes != 0) {
       return false;
     }
-    if (event.platform != TerminalTargetPlatform.macos) {
-      return false;
-    }
-    if (!event.alt || event.ctrl || event.superKey) {
-      return false;
-    }
-    final text = event.text;
-    if (text == null || text.runes.length != 1) {
-      return false;
-    }
-    final composed = text.runes.first;
-    if (_isControlCodepoint(composed)) {
-      return false;
-    }
-    final base = _layoutCharacterCode(event.key);
-    return base != null && base != composed;
+    return isMacOptionComposedText(event);
   }
 
   bool _shouldUseLegacyControlCode(TerminalKeyboardEvent event, int mode) {
@@ -243,7 +224,7 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
   }
 
   int? _characterKeyCode(TerminalKeyboardEvent event) {
-    final mappedCode = _layoutCharacterCode(event.key);
+    final mappedCode = usLayoutCodepoint(event.key);
     if (mappedCode != null) {
       return mappedCode;
     }
@@ -258,35 +239,6 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       false => character,
     };
     return unshiftedCharacter.runes.first;
-  }
-
-  /// The code point a key carries on a US layout, independent of the text the
-  /// platform produced for this event.
-  int? _layoutCharacterCode(TerminalKey key) {
-    if (key.index >= TerminalKey.keyA.index &&
-        key.index <= TerminalKey.keyZ.index) {
-      return key.index - TerminalKey.keyA.index + 97;
-    }
-    if (key.index >= TerminalKey.digit1.index &&
-        key.index <= TerminalKey.digit9.index) {
-      return key.index - TerminalKey.digit1.index + 49;
-    }
-    return switch (key) {
-      TerminalKey.digit0 => 48,
-      TerminalKey.space => 32,
-      TerminalKey.minus => 45,
-      TerminalKey.equal => 61,
-      TerminalKey.bracketLeft => 91,
-      TerminalKey.bracketRight => 93,
-      TerminalKey.backslash || TerminalKey.intlBackslash => 92,
-      TerminalKey.semicolon => 59,
-      TerminalKey.quote => 39,
-      TerminalKey.backquote => 96,
-      TerminalKey.comma => 44,
-      TerminalKey.period => 46,
-      TerminalKey.slash => 47,
-      _ => null,
-    };
   }
 
   int? _alternateCharacterCode(
@@ -309,7 +261,7 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
     if (alternateCode == characterCode) {
       return null;
     }
-    if (_isControlCodepoint(alternateCode)) {
+    if (isControlCodepoint(alternateCode)) {
       return null;
     }
     return alternateCode;
@@ -329,15 +281,11 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       return null;
     }
     final codepoints = text.runes.toList(growable: false);
-    final hasControlCharacter = codepoints.any(_isControlCodepoint);
+    final hasControlCharacter = codepoints.any(isControlCodepoint);
     if (hasControlCharacter) {
       return null;
     }
     return codepoints.join(':');
-  }
-
-  bool _isControlCodepoint(int codepoint) {
-    return codepoint < 0x20 || (codepoint >= 0x7f && codepoint <= 0x9f);
   }
 
   String? _functionalSequence(TerminalKeyboardEvent event, int mode) {

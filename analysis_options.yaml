@@ -10,6 +10,7 @@ analyzer:
     # that have nothing to do with this package; the harness is checked by
     # running it.
     - script/cross_bench/**
+    - build/**
 
 linter:
   rules:
