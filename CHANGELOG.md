@@ -1,3 +1,18 @@
+## [6.3.2] - 2026-09-23
+
+* Option-composed characters type under xterm's modifyOtherKeys mode 2 on
+  macOS. Option composes characters there unless option-as-meta is on — on a
+  Turkish Q layout Option+Q is `@`, Option+8 is `[` — and with mode 2 enabled,
+  which Claude Code and other Ink apps turn on to tell Shift+Enter apart, such
+  a press was encoded as `CSI 27;3;<char>~`, Alt plus the character. The
+  application read a modified key, and the character could not be typed at
+  all. The check the kitty encoder already made now lives in one place and
+  both encoders use it: an Option-only press that produced a printable
+  character other than the key's own is sent as that text. It also covers keys
+  with no US-layout character to compare against, such as Turkish `ş`, which
+  the kitty encoder previously reported as Alt. Option with Ctrl or Cmd, and
+  every other platform, are unchanged.
+
 ## [6.3.1] - 2026-09-17
 
 * Text stays selectable on the alternate screen. The three full-width scroll
