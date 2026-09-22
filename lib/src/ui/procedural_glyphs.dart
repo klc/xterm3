@@ -1734,12 +1734,30 @@ bool _paintProceduralGlyph(
       ]);
       return true;
     case 0x279c:
-      path([
-        Offset(x + width * 0.82, centerY),
-        Offset(x + width * 0.28, y + height * 0.18),
-        Offset(x + width * 0.48, centerY),
-        Offset(x + width * 0.28, y + height * 0.82),
-      ], close: true);
+      // HEAVY ROUND-TIPPED RIGHTWARDS ARROW: a heavy shaft and head with
+      // round ends. The head alone reads as `>`, which is what an oh-my-zsh
+      // prompt showed here while every font draws an arrow.
+      final heavyStroke = Paint()
+        ..color = paint.color
+        ..strokeWidth = max(1.5, min(width, height) * 0.2)
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..isAntiAlias = true;
+      final tipX = x + width * 0.80;
+      final wing = min(width * 0.34, height * 0.22);
+      canvas.drawLine(
+        Offset(x + width * 0.18, centerY),
+        Offset(tipX, centerY),
+        heavyStroke,
+      );
+      canvas.drawPath(
+        Path()
+          ..moveTo(tipX - wing, centerY - wing)
+          ..lineTo(tipX, centerY)
+          ..lineTo(tipX - wing, centerY + wing),
+        heavyStroke,
+      );
       return true;
     case 0x2500:
       horizontal(x, x + width, thin);

@@ -951,6 +951,35 @@ void main() {
     picture.dispose();
   });
 
+  test('U+279C is an arrow with a shaft, not a bare arrowhead', () async {
+    // Drawn as only a head it read as `>`: the oh-my-zsh prompt showed
+    // `> ~` where every other terminal shows an arrow.
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
+    final paint = Paint()..color = const Color(0xffffffff);
+    paintProceduralGlyph(
+        canvas, Offset.zero, const Size(20, 40), 0x279c, paint);
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(20, 40);
+    final bytes = await image.toByteData(format: ImageByteFormat.rawRgba);
+    if (bytes == null) fail('Expected arrow image bytes');
+
+    // The shaft runs along the middle row from the left third to the tip.
+    for (final x in [5, 8, 11, 14]) {
+      expect(
+        bytes.getUint8((20 * 20 + x) * 4 + 3),
+        greaterThan(0),
+        reason: 'shaft pixel at x=$x on the centre row',
+      );
+    }
+    // And it stays a single arrow: nothing in the top and bottom quarters.
+    expect(_hasAnyAlphaInCell(bytes, 20, 0, 0, 20, 8), isFalse);
+    expect(_hasAnyAlphaInCell(bytes, 20, 0, 32, 20, 8), isFalse);
+
+    image.dispose();
+    picture.dispose();
+  });
+
   test('procedural glyph rendering covers legacy computing blocks', () {
     final recorder = PictureRecorder();
     final canvas = Canvas(recorder);
