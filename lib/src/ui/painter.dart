@@ -1046,7 +1046,23 @@ class TerminalPainter {
         _cellSize.height,
       ),
     );
-    canvas.drawParagraph(paragraph, offset);
+    final glyphWidth = paragraph.maxIntrinsicWidth;
+    if (cellSpan == 2 && glyphWidth > glyphClipWidth) {
+      // A wide character is almost always an emoji, drawn from a color emoji
+      // font whose advance (about 1.25em for Apple Color Emoji) exceeds two
+      // cells of most monospace faces. Clipping it shaves off its right edge,
+      // so shrink it to the two cells instead, keeping it vertically centred
+      // on where it would have been drawn.
+      final scale = glyphClipWidth / glyphWidth;
+      canvas.translate(
+        offset.dx,
+        offset.dy + paragraph.height * (1 - scale) / 2,
+      );
+      canvas.scale(scale);
+      canvas.drawParagraph(paragraph, Offset.zero);
+    } else {
+      canvas.drawParagraph(paragraph, offset);
+    }
     canvas.restore();
     _paintFrameDecoration(
       canvas,

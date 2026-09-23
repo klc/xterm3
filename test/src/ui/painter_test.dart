@@ -739,6 +739,91 @@ void main() {
     painter.dispose();
   });
 
+  test('paintCellForeground shrinks an overflowing wide glyph to its cells',
+      () async {
+    final painter = TerminalPainter(
+      theme: TerminalThemes.whiteOnBlack,
+      textStyle: const TerminalStyle(fontSize: 40, height: 1),
+      textScaler: TextScaler.noScaling,
+    );
+    // The test font draws every glyph as a one-cell square, so no single
+    // character overflows two cells here the way a color emoji does on a
+    // real system. A four-glyph cluster in a wide cell is twice as wide as
+    // its cells and takes the same path.
+    final cell = CellData.empty()
+      ..content = 0x58 | (2 << CellContent.widthShift);
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+
+    painter.paintCellForeground(
+      canvas,
+      Offset.zero,
+      cell,
+      combiningCharacters: 'XXX',
+    );
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(200, 60);
+    picture.dispose();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    final byteData = bytes;
+    if (byteData == null) {
+      fail('Expected glyph image bytes');
+    }
+
+    final cellWidth = painter.cellSize.width;
+    final cellHeight = painter.cellSize.height;
+    final spanEnd = (cellWidth * 2).ceil();
+    // The last glyph of the cluster reaches the second cell instead of being
+    // clipped away past it.
+    expect(
+      _hasAnyAlphaInRect(
+        byteData,
+        image.width,
+        (cellWidth * 1.5).round(),
+        0,
+        spanEnd,
+        image.height,
+      ),
+      isTrue,
+    );
+    expect(
+      _hasAnyAlphaInRect(
+        byteData,
+        image.width,
+        spanEnd,
+        0,
+        image.width,
+        image.height,
+      ),
+      isFalse,
+    );
+    // Shrunk to half size and centred, the glyphs leave the top and bottom
+    // quarter of the cell empty; clipped at full size they would fill it.
+    expect(
+      _hasAnyAlphaInRect(
+        byteData,
+        image.width,
+        0,
+        0,
+        spanEnd,
+        (cellHeight / 4).floor() - 1,
+      ),
+      isFalse,
+    );
+    expect(
+      _alphaAt(
+        byteData,
+        image.width,
+        (cellWidth / 4).round(),
+        (cellHeight / 2).round(),
+      ),
+      greaterThan(0),
+    );
+    image.dispose();
+    painter.dispose();
+  });
+
   test('TerminalStyle combines text decorations', () {
     final style = const TerminalStyle().toTextStyle(
       decorationColor: const ui.Color(0xFFFF0000),
