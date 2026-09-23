@@ -1,3 +1,18 @@
+## [6.3.3] - 2026-09-23
+
+* Wide glyphs that overflow their two cells are shrunk to fit instead of
+  clipped. A wide character is almost always an emoji, drawn from a color
+  emoji font whose advance — about 1.25em for Apple Color Emoji — exceeds two
+  cells of most monospace faces, and the painter clipped it to those cells:
+  every ✅ and ❌ lost its right edge. The glyph is now scaled down to the
+  cells it owns and centred vertically on where it would have been drawn.
+  Glyphs that fit, and glyphs in narrow cells, are painted as before.
+
+* U+279C HEAVY ROUND-TIPPED RIGHTWARDS ARROW, the oh-my-zsh prompt symbol,
+  is drawn as an arrow. The procedural path was a notched head with no shaft,
+  which at terminal sizes read as `>`; it is now a heavy shaft and head with
+  round caps and joins, the shape Menlo and the Nerd Fonts give it.
+
 ## [6.3.2] - 2026-09-23
 
 * Option-composed characters type under xterm's modifyOtherKeys mode 2 on
