@@ -447,9 +447,63 @@ void main() {
       terminal.write('\x1b[=1u');
       terminal.keyInput(TerminalKey.f13);
       terminal.keyInput(TerminalKey.numpad0, alt: true);
-      terminal.keyInput(TerminalKey.numpadComma);
+      terminal.keyInput(TerminalKey.numpadEnter, shift: true);
 
-      expect(output, ['\x1b[57376u', '\x1b[57399;3u', '\x1b[57416u']);
+      expect(output, ['\x1b[57376u', '\x1b[57399;3u', '\x1b[57414;2u']);
+    });
+
+    test('keeps unmodified keypad Enter as a carriage return', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.write('\x1b[>3u');
+      terminal.keyInput(TerminalKey.numpadEnter);
+      expect(
+        terminal.keyInput(
+          TerminalKey.numpadEnter,
+          type: TerminalKeyEventType.release,
+        ),
+        isFalse,
+      );
+      terminal.write('\x1b[=8u');
+      terminal.keyInput(TerminalKey.numpadEnter);
+
+      expect(output, ['\r', '\x1b[57414u']);
+    });
+
+    test('keeps text-producing keypad keys as plain text under disambiguate',
+        () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.write('\x1b[>3u');
+      expect(
+        terminal.keyInput(TerminalKey.numpad1, text: '1', numLock: true),
+        isFalse,
+      );
+      expect(terminal.keyInput(TerminalKey.numpadAdd, text: '+'), isFalse);
+      expect(
+        terminal.keyInput(
+          TerminalKey.numpad1,
+          numLock: true,
+          type: TerminalKeyEventType.release,
+        ),
+        isFalse,
+      );
+      terminal.keyInput(TerminalKey.numpad1, ctrl: true, text: '1');
+
+      expect(output, ['\x1b[57400;5u']);
+    });
+
+    test('reports text-producing keypad keys when all keys are escape codes',
+        () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.write('\x1b[>8u');
+      terminal.keyInput(TerminalKey.numpad1, text: '1', numLock: true);
+
+      expect(output, ['\x1b[57400;129u']);
     });
 
     test('reports Kitty super and keyboard lock modifiers', () {
@@ -526,6 +580,21 @@ void main() {
       terminal.write('\x1b[=11u');
       terminal.keyInput(TerminalKey.altLeft, alt: true);
       expect(output, ['\x1b[57443;3u']);
+    });
+
+    test('reports lock keys only when all keys are escape codes', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      terminal.write('\x1b[>3u');
+      expect(terminal.keyInput(TerminalKey.numLock), isFalse);
+      expect(terminal.keyInput(TerminalKey.capsLock), isFalse);
+      expect(terminal.keyInput(TerminalKey.scrollLock), isFalse);
+      expect(output, isEmpty);
+
+      terminal.write('\x1b[=8u');
+      terminal.keyInput(TerminalKey.numLock);
+      expect(output, ['\x1b[57360u']);
     });
 
     test('keeps macOS Option-composed text out of Kitty encoding', () {

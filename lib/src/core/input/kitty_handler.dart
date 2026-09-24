@@ -48,8 +48,28 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
       return _sequence(specialCode, event);
     }
 
+    // "Additionally, all non text keypad keys will be reported as separate
+    // keys" — a keypad key that types a character (a digit with Num Lock on,
+    // or any operator) follows the same rules as other text keys. The key
+    // decides this rather than the event text, which releases never carry.
     final numpadCode = _numpadKeyCode(event.key);
     if (numpadCode != null) {
+      // Keypad Enter keeps the legacy carriage return like the main Enter key.
+      // kitty and Ghostty send CSI 57414 u here, but clients that only push
+      // "disambiguate" (Cursor's agent CLI among them) do not decode it and
+      // insert U+E046 instead of submitting.
+      if (event.key == TerminalKey.numpadEnter &&
+          mode & _reportAllKeysAsEscapeCodes == 0 &&
+          !(event.ctrl || event.alt || event.shift || event.superKey)) {
+        return switch (event.type) {
+          TerminalKeyEventType.release => null,
+          _ => '\r',
+        };
+      }
+      if (event.key != TerminalKey.numpadEnter &&
+          !_shouldEncodeCharacter(event, mode)) {
+        return null;
+      }
       if (!_reportsRelease(event, mode)) {
         return null;
       }
@@ -335,8 +355,13 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
     };
   }
 
+  /// Kitty counts the lock keys as modifiers too, so a Num Lock or Caps Lock
+  /// press is only reported when every key is an escape code.
   bool _isModifierKey(TerminalKey key) {
     return switch (key) {
+      TerminalKey.capsLock ||
+      TerminalKey.numLock ||
+      TerminalKey.scrollLock ||
       TerminalKey.shiftLeft ||
       TerminalKey.controlLeft ||
       TerminalKey.altLeft ||
