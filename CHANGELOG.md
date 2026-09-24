@@ -1,3 +1,22 @@
+## [6.3.4] - 2026-09-24
+
+* Keypad keys type under the kitty keyboard protocol's "disambiguate" flag.
+  Cursor's agent CLI pushes only that flag (`CSI >1u`) and does not decode
+  keypad key codes, and every numpad digit or operator went out as
+  `CSI 57400;129u` and the like, so the CLI inserted private-use characters
+  instead of `1`. The spec encodes only non-text keypad keys under
+  disambiguate: digits and operators are now plain text unless Ctrl, Alt or
+  Super is held or every key is reported as an escape code.
+
+* Caps Lock, Num Lock and Scroll Lock are reported only when every key is an
+  escape code, as kitty does; they count as modifier keys. Num Lock (Clear on
+  a Mac keyboard) no longer inserts a character in disambiguate clients.
+
+* Unmodified keypad Enter sends a carriage return like the main Enter key
+  unless every key is reported as an escape code. kitty and Ghostty send
+  `CSI 57414u` here, which leaves the key dead in clients that only ask for
+  disambiguate; with a modifier it is still encoded.
+
 ## [6.3.3] - 2026-09-23
 
 * Wide glyphs that overflow their two cells are shrunk to fit instead of
