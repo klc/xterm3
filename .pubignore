@@ -69,6 +69,10 @@ media/
 
 # Benchmark inputs and scratch scripts.
 script/
+# Profiling notes, and a benchmark that would otherwise be published as one of
+# the package's executables.
+doc/benchmarks/
+bin/review_bench.dart
 
 # Example app: pub.dev shows lib/ and pubspec.yaml on the example tab; the
 # per-platform scaffolding, the 4 MB suggestion corpus and the bundled font
