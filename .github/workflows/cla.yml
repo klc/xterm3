@@ -1,0 +1,191 @@
+name: CLA
+
+# Checks that everyone who authored a pull request has signed CLA.md, and
+# records signatures. Signatures live in signatures/cla.json on the
+# cla-signatures branch, keyed by GitHub account id.
+#
+# pull_request_target runs this file as it is on master, with a token that can
+# write, for pull requests from forks too. It must never check out or run code
+# from the pull request, and nothing from the event may be interpolated into
+# the script: read it from `context` instead.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write # the signatures branch
+  pull-requests: write # the comment on the pull request
+  statuses: write # the CLA status on the head commit
+
+# One run at a time, so two signatures never race on signatures/cla.json.
+concurrency:
+  group: cla
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    # A comment runs the check only on a pull request, and only when it signs
+    # or asks for a recheck.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+       (contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA') ||
+        github.event.comment.body == 'recheck'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const PHRASE = 'I have read the CLA Document and I hereby sign the CLA';
+            const BRANCH = 'cla-signatures';
+            const FILE = 'signatures/cla.json';
+            const MARKER = '<!-- xterm3-cla -->';
+            const { owner, repo } = context.repo;
+            const defaultBranch = context.payload.repository.default_branch;
+            const claUrl = `https://github.com/${owner}/${repo}/blob/${defaultBranch}/CLA.md`;
+
+            // The agreement is with the repository owner, who does not sign it.
+            const isExempt = (user) =>
+              user.type === 'Bot' || user.login.toLowerCase() === owner.toLowerCase();
+
+            const pull_number = context.payload.pull_request?.number ?? context.payload.issue.number;
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+
+            // Who has to sign: the author of the pull request and of every commit
+            // in it. A commit whose author email belongs to no GitHub account
+            // cannot be matched to a signature, so it holds the check until the
+            // email is linked or the commit re-authored.
+            const required = new Map();
+            const unlinked = new Set();
+            const requireUser = (user) => {
+              if (!isExempt(user)) required.set(user.id, user.login);
+            };
+            requireUser(pr.user);
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner, repo, pull_number, per_page: 100,
+            });
+            for (const commit of commits) {
+              if (commit.author) {
+                requireUser(commit.author);
+              } else {
+                const { name, email } = commit.commit.author ?? {};
+                unlinked.add(`${name} <${email}>`);
+              }
+            }
+
+            let fileSha;
+            let signatures = [];
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner, repo, path: FILE, ref: BRANCH,
+              });
+              fileSha = data.sha;
+              signatures = JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'))
+                .signedContributors;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            const signed = new Set(signatures.map((signature) => signature.id));
+
+            // A signature is a comment that is the phrase and nothing else, from
+            // someone who has to sign. Quoting the phrase in a longer comment
+            // does not sign.
+            if (context.eventName === 'issue_comment') {
+              const { comment } = context.payload;
+              const normalize = (text) =>
+                text.trim().replace(/\s+/g, ' ').replace(/\.$/, '').toLowerCase();
+              const signs = normalize(comment.body) === normalize(PHRASE);
+              if (signs && required.has(comment.user.id) && !signed.has(comment.user.id)) {
+                const { data: cla } = await github.rest.repos.getContent({
+                  owner, repo, path: 'CLA.md', ref: defaultBranch,
+                });
+                signatures.push({
+                  name: comment.user.login,
+                  id: comment.user.id,
+                  comment_id: comment.id,
+                  comment_url: comment.html_url,
+                  pull_request: pull_number,
+                  created_at: comment.created_at,
+                  cla_sha: cla.sha,
+                });
+                const content = `${JSON.stringify({ signedContributors: signatures }, null, 2)}\n`;
+                await github.rest.repos.createOrUpdateFileContents({
+                  owner, repo, path: FILE, branch: BRANCH, sha: fileSha,
+                  message: `Record CLA signature of ${comment.user.login} (#${pull_number})`,
+                  content: Buffer.from(content).toString('base64'),
+                });
+                signed.add(comment.user.id);
+              }
+            }
+
+            const missing = [...required].filter(([id]) => !signed.has(id));
+            const ok = missing.length === 0 && unlinked.size === 0;
+
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha: pr.head.sha, context: 'CLA',
+              state: ok ? 'success' : 'failure',
+              description: ok
+                ? 'Every author has signed the CLA'
+                : 'Waiting for authors to sign the CLA',
+              target_url: claUrl,
+            });
+
+            // One comment per pull request, kept up to date. None is posted when
+            // everyone had already signed.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pull_number, per_page: 100,
+            });
+            const previous = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(MARKER),
+            );
+
+            // Commit author names and emails come from the pull request; keep
+            // them inert.
+            const inert = (text) => text.replace(/[`\r\n]/g, ' ').slice(0, 200);
+            let body;
+            if (ok) {
+              if (!previous) return;
+              body = `${MARKER}\nEvery author has signed the [CLA](${claUrl}). Thank you!`;
+            } else {
+              const lines = [
+                MARKER,
+                `Thank you for your pull request! Before it can be merged, everyone who authored it signs the [Contributor License Agreement](${claUrl}) once. You keep the copyright in your work; the agreement lets the maintainer ship it in xterm3 under the AGPL and under other terms as well.`,
+                '',
+                'To sign, post a comment on this pull request that reads exactly:',
+                '',
+                '```',
+                PHRASE,
+                '```',
+              ];
+              if (required.size > 0) {
+                lines.push('');
+                for (const [id, login] of required) {
+                  lines.push(`- [${signed.has(id) ? 'x' : ' '}] @${login}`);
+                }
+              }
+              if (unlinked.size > 0) {
+                lines.push(
+                  '',
+                  'These commit authors have no GitHub account the check can match. Add the email to your GitHub account, or re-author the commits, then comment `recheck`:',
+                  '',
+                  ...[...unlinked].map((author) => `- \`${inert(author)}\``),
+                );
+              }
+              lines.push('', '<sub>Comment `recheck` to run the check again.</sub>');
+              body = lines.join('\n');
+            }
+
+            if (previous) {
+              if (previous.body !== body) {
+                await github.rest.issues.updateComment({
+                  owner, repo, comment_id: previous.id, body,
+                });
+              }
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull_number, body,
+              });
+            }

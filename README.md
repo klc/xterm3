@@ -243,7 +243,8 @@ Note the licence change below: `xterm2` 5.3.0 and earlier are MIT, `xterm3`
 
 Please file feature requests and bugs at the [issue tracker](https://github.com/klc/xterm3/issues).
 
-Contributions are always welcome!
+Contributions are always welcome! See [CONTRIBUTING.md](CONTRIBUTING.md); pull
+requests need a one-time signature of the [Contributor License Agreement](CLA.md).
 
 ## License
 
