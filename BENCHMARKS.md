@@ -1,9 +1,10 @@
 # Benchmarks
 
 Baseline numbers for the render pipeline, and the procedure that produced them.
-Every phase of the work in `RENDER_PLAN.md` is accepted or rejected against this
-table — a change that does not move a number here has not been shown to do
-anything.
+Every phase of the render plan was accepted or rejected against this table — a
+change that does not move a number here has not been shown to do anything. The
+plan itself, which the phase numbers below refer to, is retired and kept in
+history: `git show 50f0211:RENDER_PLAN.md`.
 
 ## Running
 
@@ -109,14 +110,14 @@ most of that 1.6ms, but 1.6ms out of 16.7ms is headroom that is already there.
 **`boxdraw` is the most expensive workload, not `fullscreen`.** 2.4ms UI /
 3.3ms raster, at a 97.1% glyph cache hit rate. The 2.9% miss rate is doing real
 work: procedural glyphs rebuild vector paths on a miss. Raising that hit rate
-is a cheaper, more targeted win than any of the phases in `RENDER_PLAN.md`.
+is a cheaper, more targeted win than any of the render plan's phases.
 
 **The flood number is the one that looks wrong.** 49.2 fps during a write burst
 means output starves the frame pipeline — that is the unbounded parse-per-write
 path, not the paint path. No amount of render work fixes it.
 
 Taken together: the render pipeline plan targets a bottleneck the measurements
-do not show. Phase 4 of `RENDER_PLAN.md` — "measure, then decide" — can be
+do not show. Phase 4 of the render plan — "measure, then decide" — can be
 answered now rather than after building phases 1 through 3.
 
 ## Phase 1 — revision counters — 2026-08-05 — **not merged**
@@ -420,7 +421,7 @@ never across two of them.
 terminal does per token. `sgr` is the exception: 100 MiB/s through the parser
 alone means CSI dispatch itself is the ceiling there, and no amount of buffer
 work will move it. Three attempts at the CSI parameter loop confirmed that from
-the other side - see `RENDER_PLAN.md` phases 5.4 and 5.5, and
+the other side - see phases 5.4 and 5.5 of the render plan, and
 `script/csi_param_census.dart` for why no fourth is worth writing.
 
 **Scrolling still costs about a third.** `ascii` at 108 against 143 with
@@ -435,7 +436,7 @@ allocating at viewport width — `ascii` +18%, `cyrillic` +19%, `utf8` +24%, at
 the cost of 13% on `sgr`.
 
 What is left of the gap is not work a faster path can skip. It is the garbage
-collector holding the retained lines: `RENDER_PLAN.md` phase 7 measured that
+collector holding the retained lines: phase 7 of the render plan measured that
 `IndexAwareCircularBuffer.push` does *less* work at a depth of 10000 than at
 50, and is slower anyway. Recycling the storage does not work either — see
 below.
