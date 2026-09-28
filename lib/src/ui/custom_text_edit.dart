@@ -10,6 +10,7 @@ class CustomTextEdit extends StatefulWidget {
     required this.onDelete,
     required this.onComposing,
     required this.onAction,
+    this.onCommand,
     required this.onKeyEvent,
     required this.focusNode,
     this.autofocus = false,
@@ -35,6 +36,11 @@ class CustomTextEdit extends StatefulWidget {
   final void Function(String?) onComposing;
 
   final void Function(TextInputAction) onAction;
+
+  /// Called with the editing command (a macOS selector such as
+  /// `cancelOperation:`) for a key the input method passed through instead of
+  /// consuming. See [TextInputClient.performSelector].
+  final void Function(String selector)? onCommand;
 
   final KeyEventResult Function(FocusNode, KeyEvent) onKeyEvent;
 
@@ -77,6 +83,15 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// text - a real preview) from one that has been replaced by an unrelated
   /// fresh range at the same base (a trapped keystroke, see f6568e1).
   int? _pendingComposingBase;
+
+  /// The committed text of the platform's editing value that has already
+  /// been sent as input, while the editing value is cleared lazily (see
+  /// [_clearsLazily]).
+  ///
+  /// It is tracked by content, not by length. The next value is compared
+  /// against it, so only what is new is sent. The comparison stays right when
+  /// an input method rewrites text it had committed.
+  String _committedText = '';
 
   @override
   void initState() {
@@ -164,11 +179,18 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
-    if (_currentEditingState.composing.isCollapsed) {
-      return widget.onKeyEvent(focusNode, event);
+    if (!_currentEditingState.composing.isCollapsed) {
+      return KeyEventResult.skipRemainingHandlers;
     }
 
-    return KeyEventResult.skipRemainingHandlers;
+    final result = widget.onKeyEvent(focusNode, event);
+    if (result == KeyEventResult.handled) {
+      // Handled here, the key never reaches the input method, and whatever
+      // it produced for earlier keys has already arrived: nothing can be
+      // composing. See [_clearsLazily].
+      _clearIfIdle();
+    }
+    return result;
   }
 
   void _openOrCloseInputConnectionIfNeeded() {
@@ -176,6 +198,67 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       _openInputConnection();
     } else if (!widget.focusNode.hasFocus) {
       _closeInputConnectionIfNeeded();
+      _dropComposition();
+    }
+  }
+
+  /// Whether the platform's editing value keeps committed text until a point
+  /// where no input method can be composing, instead of being cleared as
+  /// soon as a composition resolves.
+  ///
+  /// Clearing it as soon as a composition resolves races the input method.
+  /// A Korean input method commits one syllable and starts composing the
+  /// next in the same keystroke (`insertText:` `한`, then `setMarkedText:`
+  /// `ㄱ`). The clear sent in reply to the commit therefore reaches the
+  /// platform while it is composing again. On macOS that makes the embedder
+  /// call `discardMarkedText`, which ends the new composition: `한글` turns
+  /// into `한ㄱㅡㄹ`. This happens at every syllable boundary, not
+  /// occasionally.
+  ///
+  /// On desktop every keystroke reaches the framework as a key event before
+  /// any text input it produces, so a key the terminal handles itself is a
+  /// point where the input method is idle ([_onKeyEvent]); so is an input
+  /// action ([performAction]). Soft keyboards send no key events. There, and
+  /// on the web, the value is still cleared as soon as a composition
+  /// resolves.
+  bool get _clearsLazily {
+    if (kIsWeb || widget.deleteDetection) {
+      return false;
+    }
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.macOS ||
+      TargetPlatform.linux ||
+      TargetPlatform.windows =>
+        true,
+      _ => false,
+    };
+  }
+
+  /// Clears the platform's editing value if it holds anything. Call only
+  /// where no input method can be composing (see [_clearsLazily]).
+  void _clearIfIdle() {
+    if (!_clearsLazily || _currentEditingState == _initEditingState) {
+      return;
+    }
+    _resetEditingState();
+  }
+
+  /// Forgets an open composition when the input connection goes away.
+  ///
+  /// The input method's session ends with the connection, and nothing it
+  /// held was sent. Without this the preview stays drawn at the cursor, and
+  /// the next key after focus returns would be handed to an input method
+  /// that is no longer composing ([_onKeyEvent]).
+  void _dropComposition() {
+    final hadComposition = !_currentEditingState.composing.isCollapsed ||
+        _pendingComposingText != null;
+    _currentEditingState = _initEditingState;
+    _committedText = '';
+    _actionCommittedText = null;
+    _pendingComposingText = null;
+    _pendingComposingBase = null;
+    if (hadComposition && mounted) {
+      widget.onComposing(null);
     }
   }
 
@@ -205,6 +288,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
       // setEditableRect(Rect.zero, Rect.zero);
 
+      _currentEditingState = _initEditingState;
+      _committedText = '';
       _connection!.setEditingState(_initEditingState);
     }
   }
@@ -244,6 +329,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     if (widget.deleteDetection) {
       _updateEditingValueWithDeleteDetection(value);
+      return;
+    }
+
+    if (_clearsLazily) {
+      _updateEditingValueKeepingText(value);
       return;
     }
 
@@ -301,6 +391,74 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     if (_currentEditingState.composing.isCollapsed &&
         _currentEditingState.text != _initEditingState.text) {
       _resetEditingState();
+    }
+  }
+
+  /// Handles [updateEditingValue] where the platform's editing value is
+  /// cleared lazily ([_clearsLazily]).
+  ///
+  /// The value keeps committed text until a key the terminal handles clears
+  /// it. Text is therefore sent as it is committed: the part of the value
+  /// before the composing range, minus what earlier values already sent.
+  void _updateEditingValueKeepingText(TextEditingValue value) {
+    final text = value.text;
+    final composing = value.composing;
+    final isComposing = composing.isValid &&
+        !composing.isCollapsed &&
+        composing.end <= text.length;
+    final committed = isComposing ? text.substring(0, composing.start) : text;
+
+    // A composition an action committed may be echoed by the input method on
+    // the very next value, if at all. It was sent with the action (see
+    // [_commitComposingTextForAction]), so its echo is not new input.
+    final actionCommittedText = _actionCommittedText;
+    _actionCommittedText = null;
+    if (actionCommittedText != null &&
+        _committedText.isEmpty &&
+        committed.startsWith(actionCommittedText)) {
+      _committedText = actionCommittedText;
+    }
+
+    _sendCommittedChange(committed);
+    widget.onComposing(isComposing ? composing.textInside(text) : null);
+  }
+
+  /// Sends how [committed], the committed text of the latest editing value,
+  /// differs from what was already sent.
+  ///
+  /// Normally it only grows, and the new text is sent. It shrinks or diverges
+  /// when the platform rewrites text it had committed: the macOS accent menu
+  /// replaces the `e` it typed with `é`. The program has already received
+  /// the old text, so the change is replayed: one backspace for each
+  /// character that went away, then the text that replaced it.
+  void _sendCommittedChange(String committed) {
+    final sent = _committedText;
+    _committedText = committed;
+
+    if (committed.startsWith(sent)) {
+      final added = committed.substring(sent.length);
+      if (added.isNotEmpty) {
+        widget.onInsert(added);
+      }
+      return;
+    }
+
+    var common = 0;
+    final sentCharacters = sent.characters.iterator;
+    final committedCharacters = committed.characters.iterator;
+    while (sentCharacters.moveNext() &&
+        committedCharacters.moveNext() &&
+        sentCharacters.current == committedCharacters.current) {
+      common += sentCharacters.current.length;
+    }
+
+    final removed = sent.substring(common).characters.length;
+    for (var i = 0; i < removed; i++) {
+      widget.onDelete();
+    }
+    final added = committed.substring(common);
+    if (added.isNotEmpty) {
+      widget.onInsert(added);
     }
   }
 
@@ -453,6 +611,14 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void performAction(TextInputAction action) {
     _commitComposingTextForAction();
     widget.onAction(action);
+    // An action arrives once the input method has finished with the key
+    // that caused it, so nothing is composing (see [_clearsLazily]).
+    _clearIfIdle();
+  }
+
+  @override
+  void performSelector(String selectorName) {
+    widget.onCommand?.call(selectorName);
   }
 
   /// Commits a pending IME composition as terminal input, and reports whether
@@ -486,7 +652,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return false;
     }
 
-    final textDelta = _textDelta(_currentEditingState);
+    final textDelta = widget.deleteDetection
+        ? _textDelta(_currentEditingState)
+        : _unsentText(_currentEditingState);
     widget.onComposing(null);
 
     if (textDelta.isNotEmpty) {
@@ -498,8 +666,18 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     return true;
   }
 
+  /// The part of [value]'s text not sent yet: what follows the committed
+  /// text already sent ([_committedText], empty unless [_clearsLazily]).
+  String _unsentText(TextEditingValue value) {
+    final text = value.text;
+    return text.startsWith(_committedText)
+        ? text.substring(_committedText.length)
+        : text;
+  }
+
   void _resetEditingState() {
     _currentEditingState = _initEditingState;
+    _committedText = '';
     _pendingComposingText = null;
     _pendingComposingBase = null;
     _connection?.setEditingState(_initEditingState);
@@ -517,7 +695,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void connectionClosed() {
-    // print('connectionClosed');
+    _dropComposition();
   }
 
   @override

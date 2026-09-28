@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:xterm3/src/core/buffer/cell_offset.dart';
 import 'package:xterm3/src/core/color_scheme.dart';
+import 'package:xterm3/src/core/input/composed_text.dart';
 import 'package:xterm3/src/core/input/event.dart';
 import 'package:xterm3/src/core/input/keys.dart';
 import 'package:xterm3/src/core/platform.dart';
@@ -530,6 +531,7 @@ class TerminalViewState extends State<TerminalView> {
             widget.terminal.keyInput(TerminalKey.enter);
           }
         },
+        onCommand: _onInputMethodCommand,
         onKeyEvent: _handleKeyEvent,
         readOnly: widget.readOnly,
         child: child,
@@ -803,6 +805,33 @@ class TerminalViewState extends State<TerminalView> {
     setState(() => _composingText = text);
   }
 
+  /// Keys an input method passed through while it was composing.
+  ///
+  /// The macOS input method commits the composition when such a key is
+  /// pressed, then reports the key as an editing command. Enter arrives as a
+  /// [TextInputAction] instead. The key reached the input method only because
+  /// a composition was open, so the terminal gets it after the committed
+  /// text, just as it would have got the key had nothing been composing.
+  /// Commands that edit the text input's own buffer are left alone; the
+  /// input method has already acted on its composition.
+  void _onInputMethodCommand(String selector) {
+    final (key, shift) = switch (selector) {
+      'cancelOperation:' => (TerminalKey.escape, false),
+      'insertTab:' => (TerminalKey.tab, false),
+      'insertBacktab:' => (TerminalKey.tab, true),
+      'moveLeft:' => (TerminalKey.arrowLeft, false),
+      'moveRight:' => (TerminalKey.arrowRight, false),
+      'moveUp:' => (TerminalKey.arrowUp, false),
+      'moveDown:' => (TerminalKey.arrowDown, false),
+      _ => (null, false),
+    };
+    if (key == null) {
+      return;
+    }
+    _scrollToBottom();
+    widget.terminal.keyInput(key, shift: shift);
+  }
+
   KeyEventResult _handleKeyEvent(FocusNode focusNode, KeyEvent event) {
     _updateHyperlinkModifierState();
 
@@ -871,12 +900,68 @@ class TerminalViewState extends State<TerminalView> {
           eventType,
           altGraphActive: altGraphActive,
         )) {
+      // The platform text input produces this text itself. Leaving the key
+      // to it is what lets an input method compose; see
+      // [_shouldLeaveTextToInputMethod].
+      if (_shouldLeaveTextToInputMethod(event)) {
+        return KeyEventResult.ignored;
+      }
       widget.terminal.textInput(fallbackText);
       _scrollToBottom();
       return KeyEventResult.handled;
     }
 
     return KeyEventResult.ignored;
+  }
+
+  /// Whether a key that types text should be left to the platform text input
+  /// instead of being written from the key event.
+  ///
+  /// Desktop embedders hand a key to the framework first and to the platform
+  /// text input, where input methods live, only when the framework leaves it
+  /// unhandled. Writing [KeyEvent.character] here and reporting the key
+  /// handled means an input method never sees it. With macOS 2-Set Korean,
+  /// `한글` then reaches the program as the bare compatibility jamo
+  /// `ㅎㅏㄴㄱㅡㄹ`. ibus on Linux never gets the Latin keys it composes from.
+  ///
+  /// A key goes to the text input only when that text input will produce its
+  /// text: an input connection is open, the platform attached a printable
+  /// character to the event, and no modifier other than Shift is held. The
+  /// text then arrives through [_onInsert], composed.
+  ///
+  /// Everything else keeps the direct path:
+  /// - keys without a character (the shifted-symbol fallback),
+  /// - Option- and AltGr-composed text,
+  /// - chords,
+  /// - [TerminalView.hardwareKeyboardOnly], which has no text input.
+  ///
+  /// A repeated ASCII key stays direct as well. Holding it then repeats it in
+  /// the terminal (vi's `hjkl`) instead of opening the macOS accent menu,
+  /// which opens only when the text input receives the repeats. A key pressed
+  /// while an input method is composing never gets here: [CustomTextEdit]
+  /// hands every key to the input method until the composition resolves.
+  bool _shouldLeaveTextToInputMethod(KeyEvent event) {
+    if (widget.hardwareKeyboardOnly || !hasInputConnection) {
+      return false;
+    }
+    final character = event.character;
+    if (character == null || character.isEmpty) {
+      return false;
+    }
+    if (character.runes.any(isControlCodepoint)) {
+      return false;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isControlPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isMetaPressed) {
+      return false;
+    }
+    if (event is KeyRepeatEvent &&
+        character.codeUnits.every((unit) => unit < 0x80)) {
+      return false;
+    }
+    return true;
   }
 
   bool _shouldInsertTextFallback(

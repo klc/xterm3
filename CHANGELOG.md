@@ -1,3 +1,32 @@
+## [Unreleased]
+
+* Text typed through a desktop input method arrives composed. On macOS 2-Set
+  Korean, `한글테스트` reached the program as `ㅎㅏㄴㄱㅡㄹㅌㅔㅅㅡㅌㅡ`
+  (SoFluffyOS/lumide#64). Desktop embedders give a key to the framework first
+  and to the platform text input only if the framework leaves it unhandled,
+  and the text fallback added for shifted symbols wrote every printable key
+  itself and reported it handled, so no input method ever saw one. A key the
+  platform attaches a character to, with no modifier but Shift, is now left
+  to the text input while an input connection is open. Keys without a
+  character, Option- and AltGr-composed text, chords,
+  `hardwareKeyboardOnly`, and repeats of ASCII keys keep the direct path.
+
+* The editing value is no longer cleared the moment a composition resolves
+  on desktop. A Korean input method commits one syllable and starts the next
+  in the same keystroke, so that clear always reached macOS mid-composition,
+  and `discardMarkedText` split the next syllable (`한글` → `한ㄱㅡㄹ`). It is
+  now cleared where no input method can be composing — after a key the
+  terminal handles itself, and after an input action — and committed text is
+  tracked by content, so a letter typed twice is sent twice and a character
+  the platform rewrites (the accent menu's `e` → `é`) is replayed. Mobile,
+  web and `deleteDetection` keep clearing as before.
+
+* Escape, arrow keys and Tab pressed while composing reach the terminal after
+  the committed text when the macOS input method passes them on; they were
+  dropped. A composition is dropped when focus leaves or the connection
+  closes instead of lingering at the cursor, and `commitComposing()` sends
+  only text not already sent.
+
 ## [6.3.4] - 2026-09-24
 
 * Keypad keys type under the kitty keyboard protocol's "disambiguate" flag.
