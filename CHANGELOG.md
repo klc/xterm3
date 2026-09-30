@@ -1,3 +1,19 @@
+## [6.3.5] - 2026-09-30
+
+* A drag selection keeps its start where it was pressed while the view
+  scrolls. The press was kept as a pixel offset in the viewport and read
+  again on every move, so scrolling with the wheel, or through the edge
+  auto-scroller, moved the start by as many lines as the view had moved and
+  text longer than one screen could not be selected. The start is now held
+  as an anchor on its cell, which also survives scrollback being trimmed
+  during the drag. Long-press selection on touch is fixed the same way.
+
+* Keypad Enter with a modifier is encoded as the main Enter key under the
+  kitty keyboard protocol's "disambiguate" flag: Shift+keypad Enter sends
+  `CSI 13;2u` instead of `CSI 57414;2u`. Cursor's agent CLI does not decode
+  keypad key codes and inserted U+E046 where Shift+Enter starts a new line.
+  With every key reported as an escape code, keypad Enter keeps its own code.
+
 ## [6.3.4] - 2026-09-24
 
 * Keypad keys type under the kitty keyboard protocol's "disambiguate" flag.
