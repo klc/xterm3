@@ -1769,6 +1769,9 @@ void main() {
 
       expect(scrollController.offset, greaterThan(0));
       expect(controller.selection, isNotNull);
+      // The rows the auto-scroller brought in extend the selection; they do
+      // not move where it started.
+      expect(controller.selection!.normalized.begin, const CellOffset(1, 1));
 
       await gesture.up();
       await tester.pumpAndSettle();
@@ -1793,6 +1796,10 @@ void main() {
         ),
       );
 
+      final upwardStartRow = renderTerminal
+          .getCellOffset(renderTerminal.globalToLocal(upwardStart))
+          .y;
+
       final upwardGesture = await tester.createGesture(
         kind: PointerDeviceKind.mouse,
       );
@@ -1803,10 +1810,177 @@ void main() {
       }
 
       expect(scrollController.offset, lessThan(offsetBeforeUpwardDrag));
+      expect(controller.selection!.normalized.end.y, upwardStartRow);
 
       await upwardGesture.up();
       await tester.pumpAndSettle();
 
+      controller.dispose();
+      scrollController.dispose();
+    });
+
+    testWidgets('scrolling during a drag keeps where the selection started', (
+      tester,
+    ) async {
+      final terminal = Terminal(maxLines: 100)..resize(20, 5);
+      final controller = TerminalController();
+      final scrollController = ScrollController();
+      terminal.write(List.generate(40, (index) => 'line $index\r\n').join());
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 400,
+              height: 120,
+              child: TerminalView(
+                terminal,
+                controller: controller,
+                scrollController: scrollController,
+                autoResize: false,
+              ),
+            ),
+          ),
+        ),
+      );
+      scrollController.jumpTo(0);
+      await tester.pump();
+
+      final renderTerminal = tester
+          .state<TerminalViewState>(find.byType(TerminalView))
+          .renderTerminal;
+      final cell = renderTerminal.cellSize;
+      final start = renderTerminal.localToGlobal(
+        Offset(cell.width, renderTerminal.lineHeight * 1.5),
+      );
+
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.down(start);
+      await gesture.moveTo(start + Offset(cell.width * 3, cell.height));
+      await tester.pump();
+      expect(controller.selection!.normalized.begin, const CellOffset(1, 1));
+
+      // What a wheel does while the button is held: the viewport moves and the
+      // pointer stays where it is on screen.
+      scrollController.jumpTo(renderTerminal.lineHeight * 10);
+      await tester.pump();
+      await gesture.moveTo(start + Offset(cell.width * 4, cell.height));
+      await tester.pump();
+
+      final selection = controller.selection!.normalized;
+      expect(selection.begin, const CellOffset(1, 1));
+      expect(selection.end.y, 12);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      controller.dispose();
+      scrollController.dispose();
+    });
+
+    testWidgets('a drag keeps its start line when scrollback is trimmed', (
+      tester,
+    ) async {
+      final terminal = Terminal(maxLines: 40)..resize(20, 5);
+      final controller = TerminalController();
+      terminal.write(List.generate(40, (index) => 'line $index\r\n').join());
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 400,
+              height: 120,
+              child: TerminalView(
+                terminal,
+                controller: controller,
+                autoResize: false,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final renderTerminal = tester
+          .state<TerminalViewState>(find.byType(TerminalView))
+          .renderTerminal;
+      final cell = renderTerminal.cellSize;
+      final localStart = Offset(cell.width, renderTerminal.lineHeight * 1.5);
+      final startText = terminal
+          .buffer.lines[renderTerminal.getCellOffset(localStart).y]
+          .getText();
+      final start = renderTerminal.localToGlobal(localStart);
+
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.down(start);
+      await gesture.moveTo(start + Offset(cell.width * 3, 0));
+      await tester.pump();
+
+      // The buffer is full, so every new line drops one off the top and
+      // shifts the index of every line below it.
+      terminal.write('more 0\r\nmore 1\r\nmore 2\r\n');
+      await tester.pump();
+      await gesture.moveTo(start + Offset(cell.width * 4, 0));
+      await tester.pump();
+
+      final selection = controller.selection!.normalized;
+      expect(terminal.buffer.lines[selection.begin.y].getText(), startText);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      controller.dispose();
+    });
+
+    testWidgets('scrolling during a long press keeps where it started', (
+      tester,
+    ) async {
+      final terminal = Terminal(maxLines: 100)..resize(20, 5);
+      final controller = TerminalController();
+      final scrollController = ScrollController();
+      terminal.write(List.generate(40, (index) => 'line $index\r\n').join());
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 400,
+              height: 120,
+              child: TerminalView(
+                terminal,
+                controller: controller,
+                scrollController: scrollController,
+                autoResize: false,
+              ),
+            ),
+          ),
+        ),
+      );
+      scrollController.jumpTo(0);
+      await tester.pump();
+
+      final renderTerminal = tester
+          .state<TerminalViewState>(find.byType(TerminalView))
+          .renderTerminal;
+      final cell = renderTerminal.cellSize;
+      final start = renderTerminal.localToGlobal(
+        Offset(cell.width, renderTerminal.lineHeight * 1.5),
+      );
+
+      final gesture = await tester.startGesture(start);
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      expect(controller.selection!.normalized.begin, const CellOffset(0, 1));
+
+      scrollController.jumpTo(renderTerminal.lineHeight * 10);
+      await tester.pump();
+      await gesture.moveTo(start + Offset(cell.width * 4, cell.height));
+      await tester.pump();
+
+      final selection = controller.selection!.normalized;
+      expect(selection.begin, const CellOffset(0, 1));
+      expect(selection.end.y, 12);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
       controller.dispose();
       scrollController.dispose();
     });

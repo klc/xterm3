@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:xterm3/src/core/buffer/line.dart';
 import 'package:xterm3/src/core/mouse/button.dart';
 import 'package:xterm3/src/core/mouse/button_state.dart';
 import 'package:xterm3/src/core/mouse/mode.dart';
@@ -69,7 +70,10 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   RenderTerminal get renderTerminal => terminalView.renderTerminal;
 
-  DragStartDetails? _lastDragStartDetails;
+  /// The cell a drag selection started on. Held as an anchor, not as the
+  /// press's pixel offset, so that scrolling during the drag — the wheel, or
+  /// the edge auto-scroller — does not move the start of the selection.
+  CellAnchor? _dragStartAnchor;
 
   Offset? _lastDragPosition;
 
@@ -79,7 +83,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   final Map<int, int> _reportedMouseButtons = {};
 
-  LongPressStartDetails? _lastLongPressStartDetails;
+  /// The cell a long-press selection started on; see [_dragStartAnchor].
+  CellAnchor? _longPressStartAnchor;
 
   EdgeDraggingAutoScroller? _selectionAutoScroller;
 
@@ -88,6 +93,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   @override
   void dispose() {
     _stopSelectionAutoScroll();
+    _dragStartAnchor?.dispose();
+    _longPressStartAnchor?.dispose();
     super.dispose();
   }
 
@@ -111,7 +118,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         onTertiaryTapUp: onTertiaryTapUp,
         onLongPressStart: onLongPressStart,
         onLongPressMoveUpdate: onLongPressMoveUpdate,
-        // onLongPressUp: onLongPressUp,
+        onLongPressUp: onLongPressUp,
         onDragStart: onDragStart,
         onDragUpdate: onDragUpdate,
         onDragEnd: onDragEnd,
@@ -360,27 +367,33 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void onLongPressStart(LongPressStartDetails details) {
-    _lastLongPressStartDetails = details;
+    _longPressStartAnchor?.dispose();
+    _longPressStartAnchor = renderTerminal.createAnchorAt(
+      details.localPosition,
+    );
     renderTerminal.selectWord(details.localPosition);
   }
 
   void onLongPressMoveUpdate(LongPressMoveUpdateDetails details) {
-    final startDetails = _lastLongPressStartDetails;
-    if (startDetails == null) return;
-    renderTerminal.selectWord(
-      startDetails.localPosition,
-      details.localPosition,
-    );
+    final startAnchor = _longPressStartAnchor;
+    if (startAnchor == null) return;
+    renderTerminal.selectWordFrom(startAnchor, details.localPosition);
   }
 
-  // void onLongPressUp() {}
+  void onLongPressUp() {
+    _longPressStartAnchor?.dispose();
+    _longPressStartAnchor = null;
+  }
 
   void onDragStart(DragStartDetails details) {
     _stopSelectionAutoScroll();
-    _lastDragStartDetails = details;
+    _dragStartAnchor?.dispose();
+    _dragStartAnchor = null;
     _lastDragPosition = details.localPosition;
     _applicationOwnsPointerDrag = _applicationHandlesTap;
     if (_applicationOwnsPointerDrag) return;
+
+    _dragStartAnchor = renderTerminal.createAnchorAt(details.localPosition);
 
     if (details.kind != PointerDeviceKind.mouse) {
       renderTerminal.selectWord(details.localPosition);
@@ -410,11 +423,11 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void _updateDragSelection() {
-    final startDetails = _lastDragStartDetails;
+    final startAnchor = _dragStartAnchor;
     final dragPosition = _lastDragPosition;
-    if (startDetails == null || dragPosition == null) return;
-    renderTerminal.selectCharacters(
-      startDetails.localPosition,
+    if (startAnchor == null || dragPosition == null) return;
+    renderTerminal.selectCharactersFrom(
+      startAnchor,
       dragPosition,
       _dragSelectionMode,
     );
@@ -442,7 +455,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   void _finishDragSelection() {
     _stopSelectionAutoScroll();
     _applicationOwnsPointerDrag = false;
-    _lastDragStartDetails = null;
+    _dragStartAnchor?.dispose();
+    _dragStartAnchor = null;
     _lastDragPosition = null;
   }
 

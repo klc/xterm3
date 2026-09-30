@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:xterm3/src/core/buffer/buffer.dart';
 import 'package:xterm3/src/core/buffer/cell_offset.dart';
+import 'package:xterm3/src/core/buffer/line.dart';
 import 'package:xterm3/src/core/buffer/range.dart';
 import 'package:xterm3/src/core/buffer/range_line.dart';
 import 'package:xterm3/src/core/buffer/segment.dart';
@@ -457,6 +458,14 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     );
   }
 
+  /// A [CellAnchor] on the cell that [offset] is in, in the active buffer.
+  ///
+  /// Unlike [offset], the anchor keeps naming that cell when the viewport
+  /// scrolls or scrollback is trimmed. The caller owns it and disposes it.
+  CellAnchor createAnchorAt(Offset offset) {
+    return _terminal.buffer.createAnchorFromOffset(getCellOffset(offset));
+  }
+
   /// Get the viewport-local [CellOffset] of the cell that [offset] is in.
   ///
   /// Mouse reports are screen-relative, not scrollback-buffer-relative.
@@ -493,7 +502,24 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// no way to grow one: every later drag update re-reads the same blank
   /// starting cell and bails again.
   void selectWord(Offset from, [Offset? to]) {
-    final fromBoundary = _wordOrCellBoundary(getCellOffset(from));
+    _selectWordCells(
+        getCellOffset(from), to == null ? null : getCellOffset(to));
+  }
+
+  /// Selects entire words from the cell [from] holds to the cell under [to].
+  ///
+  /// The press that started the selection is held as an anchor rather than as
+  /// a pixel offset: a pixel names a different line as soon as the viewport
+  /// scrolls, and resolving it again on every move dragged the start of the
+  /// selection along with the scroll. Does nothing when [from] no longer
+  /// belongs to the active buffer.
+  void selectWordFrom(CellAnchor from, Offset to) {
+    if (!_terminal.buffer.ownsAnchor(from)) return;
+    _selectWordCells(from.offset, getCellOffset(to));
+  }
+
+  void _selectWordCells(CellOffset from, CellOffset? to) {
+    final fromBoundary = _wordOrCellBoundary(from);
     if (to == null) {
       _controller.setSelection(
         _terminal.buffer.createAnchorFromOffset(fromBoundary.begin),
@@ -501,7 +527,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         mode: SelectionMode.line,
       );
     } else {
-      final toBoundary = _wordOrCellBoundary(getCellOffset(to));
+      final toBoundary = _wordOrCellBoundary(to);
       final range = fromBoundary.merge(toBoundary);
       _controller.setSelection(
         _terminal.buffer.createAnchorFromOffset(range.begin),
@@ -556,17 +582,40 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     Offset? to,
     SelectionMode mode = SelectionMode.line,
   ]) {
-    final fromPosition = getCellOffset(from);
+    _selectCharacterCells(
+      getCellOffset(from),
+      to == null ? null : getCellOffset(to),
+      mode,
+    );
+  }
+
+  /// Selects characters from the cell [from] holds to the cell under [to].
+  ///
+  /// See [selectWordFrom] for why the start is an anchor. Does nothing when
+  /// [from] no longer belongs to the active buffer.
+  void selectCharactersFrom(
+    CellAnchor from,
+    Offset to, [
+    SelectionMode mode = SelectionMode.line,
+  ]) {
+    if (!_terminal.buffer.ownsAnchor(from)) return;
+    _selectCharacterCells(from.offset, getCellOffset(to), mode);
+  }
+
+  void _selectCharacterCells(
+    CellOffset fromPosition,
+    CellOffset? toPosition,
+    SelectionMode mode,
+  ) {
     final fromStart = _cellSelectionStart(fromPosition);
     final fromEnd = _cellSelectionEnd(fromPosition);
-    if (to == null) {
+    if (toPosition == null) {
       _controller.setSelection(
         _terminal.buffer.createAnchorFromOffset(fromStart),
         _terminal.buffer.createAnchorFromOffset(fromEnd),
         mode: mode,
       );
     } else {
-      final toPosition = getCellOffset(to);
       if (toPosition.isAfterOrSame(fromPosition)) {
         _controller.setSelection(
           _terminal.buffer.createAnchorFromOffset(fromStart),
