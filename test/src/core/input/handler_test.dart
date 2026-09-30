@@ -447,9 +447,45 @@ void main() {
       terminal.write('\x1b[=1u');
       terminal.keyInput(TerminalKey.f13);
       terminal.keyInput(TerminalKey.numpad0, alt: true);
+      terminal.write('\x1b[=8u');
       terminal.keyInput(TerminalKey.numpadEnter, shift: true);
 
       expect(output, ['\x1b[57376u', '\x1b[57399;3u', '\x1b[57414;2u']);
+    });
+
+    test('encodes modified keypad Enter as the main Enter key', () {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      // Cursor's agent CLI pushes only "disambiguate" and inserted U+E046 for
+      // CSI 57414;2u where Shift+Enter starts a new line.
+      terminal.write('\x1b[>1u');
+      terminal.keyInput(TerminalKey.numpadEnter, shift: true);
+      terminal.keyInput(TerminalKey.enter, shift: true);
+      terminal.keyInput(TerminalKey.numpadEnter, shift: true, numLock: true);
+      terminal.keyInput(TerminalKey.numpadEnter, ctrl: true);
+      expect(
+        terminal.keyInput(
+          TerminalKey.numpadEnter,
+          shift: true,
+          type: TerminalKeyEventType.release,
+        ),
+        isFalse,
+      );
+      terminal.write('\x1b[=3u');
+      terminal.keyInput(
+        TerminalKey.numpadEnter,
+        shift: true,
+        type: TerminalKeyEventType.release,
+      );
+
+      expect(output, [
+        '\x1b[13;2u',
+        '\x1b[13;2u',
+        '\x1b[13;130u',
+        '\x1b[13;5u',
+        '\x1b[13;2:3u',
+      ]);
     });
 
     test('keeps unmodified keypad Enter as a carriage return', () {

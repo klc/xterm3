@@ -54,17 +54,15 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
     // decides this rather than the event text, which releases never carry.
     final numpadCode = _numpadKeyCode(event.key);
     if (numpadCode != null) {
-      // Keypad Enter keeps the legacy carriage return like the main Enter key.
+      // Keypad Enter is encoded as the main Enter key unless every key is an
+      // escape code: a carriage return, or CSI 13 u once a modifier is held.
       // kitty and Ghostty send CSI 57414 u here, but clients that only push
       // "disambiguate" (Cursor's agent CLI among them) do not decode it and
-      // insert U+E046 instead of submitting.
+      // insert U+E046 instead of submitting, or, with Shift, instead of
+      // starting a new line.
       if (event.key == TerminalKey.numpadEnter &&
-          mode & _reportAllKeysAsEscapeCodes == 0 &&
-          !(event.ctrl || event.alt || event.shift || event.superKey)) {
-        return switch (event.type) {
-          TerminalKeyEventType.release => null,
-          _ => '\r',
-        };
+          mode & _reportAllKeysAsEscapeCodes == 0) {
+        return call(event.copyWith(key: TerminalKey.enter));
       }
       if (event.key != TerminalKey.numpadEnter &&
           !_shouldEncodeCharacter(event, mode)) {
