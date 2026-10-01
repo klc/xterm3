@@ -21,6 +21,21 @@ bool get isDesktop {
   ].contains(defaultTargetPlatform);
 }
 
+/// The terminal's platform decides how keys such as Option are encoded.
+/// Left as [TerminalTargetPlatform.unknown], Option+3 on a Turkish layout
+/// sends `ESC #` instead of typing `#`.
+TerminalTargetPlatform get terminalPlatform {
+  if (kIsWeb) return TerminalTargetPlatform.web;
+  return switch (defaultTargetPlatform) {
+    TargetPlatform.android => TerminalTargetPlatform.android,
+    TargetPlatform.iOS => TerminalTargetPlatform.ios,
+    TargetPlatform.fuchsia => TerminalTargetPlatform.fuchsia,
+    TargetPlatform.linux => TerminalTargetPlatform.linux,
+    TargetPlatform.macOS => TerminalTargetPlatform.macos,
+    TargetPlatform.windows => TerminalTargetPlatform.windows,
+  };
+}
+
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -44,6 +59,7 @@ class Home extends StatefulWidget {
 class _HomeState extends State<Home> {
   final terminal = Terminal(
     maxLines: 10000,
+    platform: terminalPlatform,
   );
 
   final terminalController = TerminalController();
