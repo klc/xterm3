@@ -1,4 +1,4 @@
-## [Unreleased]
+## [6.3.6] - 2026-10-02
 
 * Input methods compose on macOS. A pressed key that carries its character
   was inserted by the text fallback and reported as handled, and the macOS
