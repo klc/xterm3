@@ -1,6 +1,21 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+
+/// Whether the embedder on this platform hands a key to the input method only
+/// when the framework left it unhandled.
+///
+/// The macOS embedder sends every key event to the framework first and passes
+/// it on to the platform input method (NSTextInputContext) only if nothing
+/// handled it. Consuming a key in the framework therefore keeps it away from
+/// the IME, so composition (Hangul, kana, pinyin, dead keys) never starts.
+/// Windows delivers IME input through its own messages and mobile and web have
+/// no such ordering, so none of them is affected. Linux has the same ordering
+/// but does not serialize key events, so text updates can arrive after a
+/// reset; it is left as it was until that can be tested on a device.
+bool get platformInputMethodNeedsUnhandledKeys =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
 class CustomTextEdit extends StatefulWidget {
   CustomTextEdit({
@@ -78,6 +93,37 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// fresh range at the same base (a trapped keystroke, see f6568e1).
   int? _pendingComposingBase;
 
+  /// The part of the platform's editing text that the terminal has received,
+  /// in desktop mode - see [_updateEditingValueDesktop]. A prefix of the
+  /// platform text, except while the input method rewrites sent characters.
+  String _sent = '';
+
+  /// The trailing Hangul character of the platform text, which the terminal
+  /// has not received yet and the view shows as the composing preview.
+  String _held = '';
+
+  /// Whether the platform text should be cleared at the next safe moment.
+  ///
+  /// It is never cleared from inside [updateEditingValue]: an input method
+  /// can commit and open a new mark within one keystroke, the embedder then
+  /// reports both as separate values, and a reset sent for the first would
+  /// land after the platform has already made the second (and discard its
+  /// marked text). Between keystrokes nothing is in flight, so the clear
+  /// waits for the next key event, an action, or the end of the connection.
+  bool _resetPending = false;
+
+  /// Whether editing values take the desktop path.
+  ///
+  /// The macOS input methods differ from the mobile ones: Korean
+  /// does not mark the syllable being composed. It inserts the jamo and then
+  /// rewrites the last character of the document (`ㅎ`, `하`, `한`), using
+  /// the document text as its context. Clearing the document while such a
+  /// character is still open makes the next jamo start from nothing, so the
+  /// document is only reset when no Hangul character is at its end, and what
+  /// was sent is tracked by content rather than by length.
+  bool get _desktopMode =>
+      platformInputMethodNeedsUnhandledKeys && !widget.deleteDetection;
+
   @override
   void initState() {
     widget.focusNode.addListener(_onFocusChange);
@@ -105,6 +151,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   @override
   void dispose() {
     widget.focusNode.removeListener(_onFocusChange);
+    // What the user saw on screen as typed must not be lost with the view.
+    _flushHeld();
     _closeInputConnectionIfNeeded();
     super.dispose();
   }
@@ -130,13 +178,14 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   void closeKeyboard() {
-    if (hasInputConnection) {
-      _connection?.close();
-    }
+    _closeInputConnectionIfNeeded();
   }
 
   void setEditingState(TextEditingValue value) {
     _currentEditingState = value;
+    _sent = '';
+    _held = '';
+    _resetPending = false;
     _connection?.setEditingState(value);
   }
 
@@ -144,6 +193,16 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void resetEditingState() {
     widget.onComposing(null);
     _resetEditingState();
+  }
+
+  /// Sends a Hangul character the view is still holding back, so that input
+  /// from outside the keyboard (a paste) does not overtake it. Does nothing on
+  /// platforms that do not hold characters back.
+  void commitHeld() {
+    if (_desktopMode && hasInputConnection && _held.isNotEmpty) {
+      _flushHeld();
+      _resetEditingState();
+    }
   }
 
   void setEditableRect(Rect rect, Rect caretRect) {
@@ -164,11 +223,63 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   }
 
   KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent event) {
-    if (_currentEditingState.composing.isCollapsed) {
-      return widget.onKeyEvent(focusNode, event);
+    final desktop = _desktopMode;
+    if (desktop && !hasInputConnection) {
+      // No input method to hand keys to; nothing typed may be left waiting.
+      _flushHeld();
+      _currentEditingState = _initEditingState;
     }
 
-    return KeyEventResult.skipRemainingHandlers;
+    if (!_currentEditingState.composing.isCollapsed) {
+      return KeyEventResult.skipRemainingHandlers;
+    }
+
+    if (desktop && _held.isEmpty && _resetPending && event is! KeyUpEvent) {
+      // Nothing is composing and no Hangul character is open, so clearing
+      // the platform text cannot cost the input method any context.
+      _resetEditingState();
+    }
+
+    if (desktop && _held.isNotEmpty) {
+      switch (_routeWhileHolding(event)) {
+        case _HeldKeyRoute.ime:
+          // The input method may still rewrite the held character, and the
+          // terminal must not see the key before it does.
+          return KeyEventResult.skipRemainingHandlers;
+        case _HeldKeyRoute.flush:
+          // The terminal handles this key itself, so the input method will
+          // not see it: what was typed has to arrive first, and the platform
+          // text is no longer needed as the input method's context.
+          _flushHeld();
+          _resetEditingState();
+        case _HeldKeyRoute.neutral:
+          break;
+      }
+    }
+
+    return widget.onKeyEvent(focusNode, event);
+  }
+
+  _HeldKeyRoute _routeWhileHolding(KeyEvent event) {
+    if (event is KeyUpEvent) return _HeldKeyRoute.neutral;
+    final key = event.logicalKey;
+    if (_modifierKeys.contains(key)) return _HeldKeyRoute.neutral;
+
+    // A chord is the terminal's, whatever key it is on.
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isAltPressed) {
+      return _HeldKeyRoute.flush;
+    }
+    if (key == LogicalKeyboardKey.backspace) return _HeldKeyRoute.ime;
+
+    final character = event.character;
+    if (character != null && character.isNotEmpty) {
+      final unit = character.codeUnitAt(0);
+      if (unit >= 0x20 && unit != 0x7f) return _HeldKeyRoute.ime;
+    }
+    return _HeldKeyRoute.flush;
   }
 
   void _openOrCloseInputConnectionIfNeeded() {
@@ -205,14 +316,21 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
       // setEditableRect(Rect.zero, Rect.zero);
 
+      _forgetDesktopState();
+      _currentEditingState = _initEditingState;
       _connection!.setEditingState(_initEditingState);
     }
   }
 
   void _closeInputConnectionIfNeeded() {
     if (_connection != null && _connection!.attached) {
+      _flushHeld();
       _connection!.close();
       _connection = null;
+    }
+    _forgetDesktopState();
+    if (_desktopMode) {
+      _currentEditingState = _initEditingState;
     }
   }
 
@@ -244,6 +362,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
     if (widget.deleteDetection) {
       _updateEditingValueWithDeleteDetection(value);
+      return;
+    }
+
+    if (_desktopMode) {
+      _updateEditingValueDesktop(value);
       return;
     }
 
@@ -449,6 +572,126 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     }
   }
 
+  /// Handles [updateEditingValue] on macOS and Linux, see [_desktopMode].
+  ///
+  /// The platform text is compared with what the terminal already has:
+  /// appended text is sent as it is, and characters the input method rewrote
+  /// after they were sent are taken back with a backspace each. A trailing
+  /// Hangul character is not sent but shown as the composing preview, since
+  /// that is the one the input method keeps rewriting (`ㅎ`, `하`, `한`, and
+  /// `한` + `ㅏ` becoming `하나`); it is sent once something follows it, or on
+  /// [_flushHeld]. Other text is sent at once, so single-key commands do not
+  /// wait. An input method that marks its text (kana, pinyin) sets a
+  /// composing range, which is shown as the preview as ever.
+  void _updateEditingValueDesktop(TextEditingValue value) {
+    final text = value.text;
+    final composing = value.composing;
+
+    if (!composing.isCollapsed) {
+      _syncSent(text.substring(0, composing.start.clamp(0, text.length)));
+      _held = '';
+      widget.onComposing(composing.textInside(text));
+      return;
+    }
+
+    final actionCommittedText = _actionCommittedText;
+    _actionCommittedText = null;
+    if (actionCommittedText != null && text == actionCommittedText) {
+      widget.onComposing(null);
+      _resetPending = true;
+      return;
+    }
+
+    final endsInHangul =
+        text.isNotEmpty && _isHangul(text.codeUnitAt(text.length - 1));
+    _held = endsInHangul ? text.substring(text.length - 1) : '';
+    _syncSent(endsInHangul ? text.substring(0, text.length - 1) : text);
+    widget.onComposing(endsInHangul ? _held : null);
+
+    if (!endsInHangul && text.isNotEmpty) {
+      // Nothing the input method could still rewrite is left in the text.
+      _resetPending = true;
+    }
+  }
+
+  /// Makes the terminal's copy of the platform text equal to [target].
+  String _syncSent(String target) {
+    final sent = _sent;
+    var common = 0;
+    final limit = sent.length < target.length ? sent.length : target.length;
+    while (common < limit &&
+        sent.codeUnitAt(common) == target.codeUnitAt(common)) {
+      common++;
+    }
+    // Never split a surrogate pair.
+    if (common > 0 && _isHighSurrogate(sent.codeUnitAt(common - 1))) {
+      common--;
+    }
+    _sent = target;
+    final removed = sent.substring(common).runes.length;
+    for (var i = 0; i < removed; i++) {
+      widget.onDelete();
+    }
+    final added = target.substring(common);
+    if (added.isNotEmpty) {
+      widget.onInsert(added);
+    }
+    return added;
+  }
+
+  /// Sends the held Hangul character and drops the preview.
+  void _flushHeld() {
+    if (_held.isEmpty) return;
+    final held = _held;
+    _held = '';
+    _sent = '';
+    _clearPreview();
+    widget.onInsert(held);
+  }
+
+  /// Takes the composing preview away. Closing the connection can happen
+  /// while the framework builds (a read-only toggle) or tears the view down,
+  /// when the preview's owner may not be told synchronously.
+  void _clearPreview() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onComposing(null);
+      });
+    } else {
+      widget.onComposing(null);
+    }
+  }
+
+  void _forgetDesktopState() {
+    _sent = '';
+    _held = '';
+    _resetPending = false;
+  }
+
+  static bool _isHighSurrogate(int unit) => unit >= 0xD800 && unit <= 0xDBFF;
+
+  /// Hangul syllables and the conjoining and compatibility jamo.
+  static bool _isHangul(int unit) =>
+      (unit >= 0xAC00 && unit <= 0xD7A3) ||
+      (unit >= 0x1100 && unit <= 0x11FF) ||
+      (unit >= 0x3130 && unit <= 0x318F) ||
+      (unit >= 0xA960 && unit <= 0xA97F) ||
+      (unit >= 0xD7B0 && unit <= 0xD7FF) ||
+      (unit >= 0xFFA0 && unit <= 0xFFDC);
+
+  @override
+  void performSelector(String selectorName) {
+    // The macOS plugin turns the keys it has no handler for into selectors.
+    // Backspace from a source that does not compose (ABC after Korean) comes
+    // this way, and the held syllable is what it deletes: it was never sent.
+    if (_desktopMode && _held.isNotEmpty && selectorName == 'deleteBackward:') {
+      _held = '';
+      _clearPreview();
+      _resetEditingState();
+    }
+  }
+
   @override
   void performAction(TextInputAction action) {
     _commitComposingTextForAction();
@@ -483,14 +726,26 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// there was nothing composing.
   bool _commitComposingTextForAction() {
     if (_currentEditingState.composing.isCollapsed) {
+      if (_desktopMode && (_held.isNotEmpty || _resetPending)) {
+        final hadHeld = _held.isNotEmpty;
+        _flushHeld();
+        _resetEditingState();
+        return hadHeld;
+      }
       return false;
     }
 
-    final textDelta = _textDelta(_currentEditingState);
+    final String textDelta;
+    if (_desktopMode) {
+      // Everything before the composing range has been sent already.
+      textDelta = _syncSent(_currentEditingState.text);
+    } else {
+      textDelta = _textDelta(_currentEditingState);
+    }
     widget.onComposing(null);
 
     if (textDelta.isNotEmpty) {
-      widget.onInsert(textDelta);
+      if (!_desktopMode) widget.onInsert(textDelta);
       _actionCommittedText = textDelta;
     }
 
@@ -502,6 +757,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     _currentEditingState = _initEditingState;
     _pendingComposingText = null;
     _pendingComposingBase = null;
+    _sent = '';
+    _held = '';
+    _resetPending = false;
     _connection?.setEditingState(_initEditingState);
   }
 
@@ -517,7 +775,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void connectionClosed() {
-    // print('connectionClosed');
+    _flushHeld();
+    _forgetDesktopState();
   }
 
   @override
@@ -540,3 +799,29 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     // print('showToolbar');
   }
 }
+
+/// What a key does while a Hangul character is held back.
+enum _HeldKeyRoute {
+  /// The input method gets it, possibly rewriting the held character.
+  ime,
+
+  /// The terminal handles it; the held character goes first.
+  flush,
+
+  /// Not a key that decides anything, such as a modifier or a key release.
+  neutral,
+}
+
+final _modifierKeys = <LogicalKeyboardKey>{
+  LogicalKeyboardKey.shiftLeft,
+  LogicalKeyboardKey.shiftRight,
+  LogicalKeyboardKey.controlLeft,
+  LogicalKeyboardKey.controlRight,
+  LogicalKeyboardKey.altLeft,
+  LogicalKeyboardKey.altRight,
+  LogicalKeyboardKey.altGraph,
+  LogicalKeyboardKey.metaLeft,
+  LogicalKeyboardKey.metaRight,
+  LogicalKeyboardKey.capsLock,
+  LogicalKeyboardKey.fn,
+};

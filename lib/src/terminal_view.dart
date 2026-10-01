@@ -551,6 +551,7 @@ class TerminalViewState extends State<TerminalView> {
       controller: _controller,
       getScrollPosition: () => _scrollableKey.currentState?.position,
       getLineHeight: () => renderTerminal.lineHeight,
+      beforePaste: () => _customTextEditKey.currentState?.commitHeld(),
       child: child,
     );
 
@@ -870,6 +871,7 @@ class TerminalViewState extends State<TerminalView> {
           fallbackText,
           eventType,
           altGraphActive: altGraphActive,
+          event: event,
         )) {
       widget.terminal.textInput(fallbackText);
       _scrollToBottom();
@@ -883,8 +885,25 @@ class TerminalViewState extends State<TerminalView> {
     String text,
     TerminalKeyEventType eventType, {
     required bool altGraphActive,
+    required KeyEvent event,
   }) {
     if (eventType == TerminalKeyEventType.release) {
+      return false;
+    }
+    // Where the embedder offers a key to the input method only when the
+    // framework did not handle it, a pressed key that already carries its
+    // character is left to the IME: inserting the character here would hand
+    // the terminal the raw key (a Hangul jamo, a kana) and the IME would
+    // never compose it. Repeats stay with us, as a held key must keep
+    // repeating (an IME shows an accent picker instead), and a key without a
+    // character has nothing for the IME to compose. Without an attached input
+    // connection (read-only, or just closed) there is no IME to hand the key
+    // to, so it would be lost.
+    if (platformInputMethodNeedsUnhandledKeys &&
+        !widget.deleteDetection &&
+        hasInputConnection &&
+        event is KeyDownEvent &&
+        (event.character?.isNotEmpty ?? false)) {
       return false;
     }
     if (!altGraphActive && HardwareKeyboard.instance.isControlPressed) {

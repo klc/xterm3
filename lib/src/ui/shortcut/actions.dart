@@ -36,6 +36,7 @@ class TerminalActions extends StatelessWidget {
     required this.getScrollPosition,
     required this.getLineHeight,
     required this.child,
+    this.beforePaste,
   });
 
   final Terminal terminal;
@@ -46,6 +47,10 @@ class TerminalActions extends StatelessWidget {
 
   final double Function() getLineHeight;
 
+  /// Called before a paste reads the clipboard, so that typed text the view is
+  /// still holding back reaches the terminal ahead of what is pasted.
+  final VoidCallback? beforePaste;
+
   final Widget child;
 
   @override
@@ -54,6 +59,7 @@ class TerminalActions extends StatelessWidget {
       actions: {
         PasteTextIntent: CallbackAction<PasteTextIntent>(
           onInvoke: (intent) async {
+            beforePaste?.call();
             final data = await Clipboard.getData(Clipboard.kTextPlain);
             final text = data?.text;
             if (text != null) {

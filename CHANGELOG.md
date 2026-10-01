@@ -1,3 +1,28 @@
+## [Unreleased]
+
+* Input methods compose on macOS. A pressed key that carries its character
+  was inserted by the text fallback and reported as handled, and the macOS
+  embedder offers a key to the platform input method only when the framework
+  leaves it unhandled, so Korean, Japanese and Chinese IMEs never saw it:
+  typing `한글테스트` on the 2-Set Korean layout sent
+  `ㅎㅏㄴㄱㅡㄹㅌㅔㅅㅡㅌㅡ`. Such keys are now left to the input method while
+  an input connection is attached; key repeats, keys without a character
+  (shifted symbols) and chords are unchanged. Linux is unchanged for now: its
+  embedder does not serialize key events, so this needs a device to verify.
+
+* The macOS Korean input method does not mark the syllable it composes: it
+  rewrites the last character of the editing text in place (`ㅎ`, `하`, `한`)
+  and reads the previous character from that text. The text is therefore not
+  cleared while a Hangul character ends it, and never from inside an editing
+  update (an input method may commit and open a new mark in one keystroke);
+  what was sent is tracked by content, and the trailing Hangul character is
+  shown as the composing preview and sent once something follows it, or
+  before a key the terminal handles itself (Enter, arrows, chords, Option,
+  Cmd), a paste, on focus loss, when the keyboard is closed or the view is
+  disposed. Backspace edits the held character jamo by jamo, and from another
+  input source drops it. Latin and other text is still sent at once. Mobile,
+  web, Windows, Linux and `deleteDetection` are unchanged.
+
 ## [6.3.5] - 2026-09-30
 
 * A drag selection keeps its start where it was pressed while the view
