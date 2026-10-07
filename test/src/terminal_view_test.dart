@@ -1819,6 +1819,102 @@ void main() {
       scrollController.dispose();
     });
 
+    testWidgets(
+      'dragging inside an offset terminal does not trigger upward auto scroll',
+      (tester) async {
+        final terminal = Terminal(maxLines: 100)..resize(20, 5);
+        final controller = TerminalController();
+        final scrollController = ScrollController();
+
+        terminal.write(
+          List.generate(40, (index) => 'line $index\r\n').join(),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.only(top: 100),
+                child: SizedBox(
+                  width: 400,
+                  height: 120,
+                  child: TerminalView(
+                    terminal,
+                    controller: controller,
+                    scrollController: scrollController,
+                    autoResize: false,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        scrollController.jumpTo(scrollController.position.maxScrollExtent);
+        await tester.pump();
+        final initialOffset = scrollController.offset;
+        expect(initialOffset, greaterThan(0));
+
+        final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+        final renderTerminal = state.renderTerminal;
+
+        // Position inside the terminal (line 2), well below the top edge.
+        // Local y is lineHeight * 2 (approx 30px, while top padding is 100px).
+        final dragStart = renderTerminal.localToGlobal(
+          Offset(
+            renderTerminal.cellSize.width * 2,
+            renderTerminal.lineHeight * 2,
+          ),
+        );
+        final dragMove = renderTerminal.localToGlobal(
+          Offset(
+            renderTerminal.cellSize.width * 3,
+            renderTerminal.lineHeight * 2,
+          ),
+        );
+
+        final gesture = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+        );
+        await gesture.down(dragStart);
+        await gesture.moveTo(dragMove);
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 40));
+        }
+
+        // Without the fix, localPosition (y < 100) is compared against globalRect.top (100),
+        // incorrectly triggering upward auto-scroll.
+        expect(scrollController.offset, equals(initialOffset));
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+
+        // Dragging beyond the top of the terminal (into the padding area) SHOULD trigger upward auto-scroll.
+        final beyondTop = renderTerminal.localToGlobal(
+          Offset(
+            renderTerminal.cellSize.width * 2,
+            -renderTerminal.lineHeight * 2,
+          ),
+        );
+        final upwardGesture = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+        );
+        await upwardGesture.down(dragStart);
+        await upwardGesture.moveTo(beyondTop);
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 40));
+        }
+
+        expect(scrollController.offset, lessThan(initialOffset));
+
+        await upwardGesture.up();
+        await tester.pumpAndSettle();
+
+        controller.dispose();
+        scrollController.dispose();
+      },
+    );
+
     testWidgets('scrolling during a drag keeps where the selection started', (
       tester,
     ) async {
