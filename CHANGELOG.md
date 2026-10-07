@@ -1,3 +1,13 @@
+## [Unreleased]
+
+* Auto-scrolling during drag selection uses global pointer coordinates.
+  The gesture handler passed local coordinates to the edge auto-scroller,
+  which compares the drag target against the scrollable's global bounds.
+  When the terminal was placed below the top of the screen (such as under
+  an app bar, tab bar, or top padding), dragging in the upper portion of the
+  terminal was misinterpreted as being above the viewport, prematurely
+  triggering upward auto-scroll.
+
 ## [6.3.6] - 2026-10-02
 
 * Input methods compose on macOS. A pressed key that carries its character
