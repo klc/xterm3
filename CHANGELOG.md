@@ -1,4 +1,4 @@
-## [Unreleased]
+## [6.3.7] - 2026-10-08
 
 * Auto-scrolling during drag selection uses global pointer coordinates.
   The gesture handler passed local coordinates to the edge auto-scroller,
