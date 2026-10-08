@@ -1855,7 +1855,8 @@ void main() {
         final initialOffset = scrollController.offset;
         expect(initialOffset, greaterThan(0));
 
-        final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+        final state =
+            tester.state<TerminalViewState>(find.byType(TerminalView));
         final renderTerminal = state.renderTerminal;
 
         // Position inside the terminal (line 2), well below the top edge.
