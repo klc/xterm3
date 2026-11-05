@@ -37,6 +37,20 @@ the dependency and the package in imports; the public API is unchanged.
 
 > Requires Flutter >= 3.19.0
 
+## Built with xterm3
+
+**[ShellVibe](https://shellvibe.dev)** is a cross-platform terminal, SSH/SFTP
+client and remote infrastructure workstation for iOS, Android, macOS, Windows
+and Linux, from the same author. Every terminal pane in it is an xterm3
+`TerminalView`, so it is where this package is exercised daily against real
+shells, TUIs and IMEs. [shellvibe.dev](https://shellvibe.dev) ·
+[GitHub](https://github.com/klc/shellvibe)
+
+<a href="https://shellvibe.dev">
+  <img width="760px" alt="ShellVibe with two split terminal panes running a git log and htop side by side"
+       src="https://raw.githubusercontent.com/klc/shellvibe/main/docs/screenshots/terminal-split.png">
+</a>
+
 ## Performance
 
 Same workloads, same harness, three packages. Every number below is
