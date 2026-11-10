@@ -2407,7 +2407,7 @@ void main() {
     terminal.write('\x1b[21t');
 
     expect(titles, ['first', 'second;draft']);
-    expect(output, ['\x1b]lfirst\x1b\\', '\x1b]lsecond;draft\x1b\\']);
+    expect(output, ['\x1b]l\x1b\\', '\x1b]l\x1b\\']);
   });
 
   test('Terminal preserves semicolon-rich OSC text payloads', () {
@@ -2852,7 +2852,7 @@ void main() {
     terminal.paste('escaped \x1b😀 remains valid');
 
     expect(output, [
-      'a\rb\r\rc ',
+      'a\rb\rc ',
       '\x1b[200~safe    \x1b[201~',
       '\x1b[200~xyz\x1b[201~',
       '\x1b[200~c1 31m 52;c;AAAA \x1b[201~',
@@ -3317,7 +3317,8 @@ void main() {
 
   test('Terminal applies and reports page size sequences', () {
     final output = <String>[];
-    final terminal = Terminal(onOutput: output.add)..resize(80, 24);
+    final terminal = Terminal(onOutput: output.add, allowRemoteResize: true)
+      ..resize(80, 24);
 
     terminal.write('\x1b[100\$|\x1bP\$q\$|\x1b\\');
     terminal.write('\x1b[30t\x1bP\$qt\x1b\\');

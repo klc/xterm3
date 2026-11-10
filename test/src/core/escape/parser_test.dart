@@ -11,7 +11,8 @@ void main() {
     test('can parse window manipulation', () {
       final parser = EscapeParser(MockEscapeHandler());
       parser.write('\x1b[8;24;80t');
-      verify(parser.handler.resize(80, 24));
+      verify(parser.handler.setLinesPerPage(24));
+      verify(parser.handler.setColumnsPerPage(80));
     });
 
     test('parses DECSCUSR with its space intermediate', () {
