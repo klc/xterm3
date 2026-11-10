@@ -135,31 +135,40 @@ class ZModemMux {
   }
 
   void _handleZModem(Uint8List chunk) async {
-    for (final event in _session!.receive(chunk)) {
-      /// remote is sz
-      if (event is ZFileOfferedEvent) {
-        _handleZFileOfferedEvent(event);
-      } else if (event is ZFileDataEvent) {
-        _handleZFileDataEvent(event);
-      } else if (event is ZFileEndEvent) {
-        await _handleZFileEndEvent(event);
-      } else if (event is ZSessionFinishedEvent) {
-        await _handleZSessionFinishedEvent(event);
-      }
+    try {
+      for (final event in _session!.receive(chunk)) {
+        /// remote is sz
+        if (event is ZFileOfferedEvent) {
+          _handleZFileOfferedEvent(event);
+        } else if (event is ZFileDataEvent) {
+          _handleZFileDataEvent(event);
+        } else if (event is ZFileEndEvent) {
+          await _handleZFileEndEvent(event);
+        } else if (event is ZSessionFinishedEvent) {
+          await _handleZSessionFinishedEvent(event);
+        }
 
-      /// remote is rz
-      else if (event is ZReadyToSendEvent) {
-        await _handleFileRequestEvent(event);
-      } else if (event is ZFileAcceptedEvent) {
-        await _handleFileAcceptedEvent(event);
-      } else if (event is ZFileSkippedEvent) {
-        _handleFileSkippedEvent(event);
+        /// remote is rz
+        else if (event is ZReadyToSendEvent) {
+          await _handleFileRequestEvent(event);
+        } else if (event is ZFileAcceptedEvent) {
+          await _handleFileAcceptedEvent(event);
+        } else if (event is ZFileSkippedEvent) {
+          _handleFileSkippedEvent(event);
+        }
+
+        _flush();
       }
 
       _flush();
+    } catch (_) {
+      // Not a ZModem stream after all (or a broken one): drop the session so
+      // the terminal and keyboard work again, and show the bytes instead of
+      // swallowing them.
+      _session = null;
+      _terminalSink.add(chunk);
+      await _reset();
     }
-
-    _flush();
   }
 
   void _handleZFileOfferedEvent(ZFileOfferedEvent event) {
@@ -293,7 +302,7 @@ extension ListExtension on List<int> {
     if (other.length + start > length) {
       return null;
     }
-    for (var i = start; i < length - other.length; i++) {
+    for (var i = start; i <= length - other.length; i++) {
       if (this[i] == other[0]) {
         var found = true;
         for (var j = 1; j < other.length; j++) {

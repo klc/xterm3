@@ -287,8 +287,6 @@ class TerminalViewState extends State<TerminalView> {
 
   late final void Function(String, String) _clipboardStore = _storeClipboard;
 
-  late final Future<String?> Function(String) _clipboardQuery = _queryClipboard;
-
   RenderTerminal get renderTerminal {
     final context = _viewportKey.currentContext;
     if (context == null) {
@@ -399,29 +397,22 @@ class TerminalViewState extends State<TerminalView> {
     }
   }
 
+  /// Installs the OSC 52 clipboard write handler. Clipboard reads are not
+  /// installed: they would let any remote output read the user's clipboard,
+  /// so an embedder that wants them sets [Terminal.onClipboardQuery] itself.
   void _installClipboardHandlers(Terminal terminal) {
     terminal.onClipboardStore ??= _clipboardStore;
-    terminal.onClipboardQuery ??= _clipboardQuery;
   }
 
   void _removeClipboardHandlers(Terminal terminal) {
     if (terminal.onClipboardStore == _clipboardStore) {
       terminal.onClipboardStore = null;
     }
-    if (terminal.onClipboardQuery == _clipboardQuery) {
-      terminal.onClipboardQuery = null;
-    }
   }
 
   void _storeClipboard(String selector, String text) {
     if (!_focusNode.hasFocus) return;
     unawaited(Clipboard.setData(ClipboardData(text: text)));
-  }
-
-  Future<String?> _queryClipboard(String selector) async {
-    if (!_focusNode.hasFocus) return null;
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    return data?.text;
   }
 
   int? _resolveColorQuery(int code, int? index) {
@@ -552,6 +543,7 @@ class TerminalViewState extends State<TerminalView> {
       getScrollPosition: () => _scrollableKey.currentState?.position,
       getLineHeight: () => renderTerminal.lineHeight,
       beforePaste: () => _customTextEditKey.currentState?.commitHeld(),
+      readOnly: widget.readOnly,
       child: child,
     );
 
@@ -827,6 +819,10 @@ class TerminalViewState extends State<TerminalView> {
       return shortcutResult;
     }
 
+    if (widget.readOnly) {
+      return KeyEventResult.ignored;
+    }
+
     final key = keyToTerminalKey(event.logicalKey);
     var text = _printableTextForKeyEvent(event);
     if (text != null && isKittyModifierKeyCharacter(text)) {
@@ -897,7 +893,7 @@ class TerminalViewState extends State<TerminalView> {
     // never compose it. Repeats stay with us, as a held key must keep
     // repeating (an IME shows an accent picker instead), and a key without a
     // character has nothing for the IME to compose. Without an attached input
-    // connection (read-only, or just closed) there is no IME to hand the key
+    // connection (just closed) there is no IME to hand the key
     // to, so it would be lost.
     if (platformInputMethodNeedsUnhandledKeys &&
         !widget.deleteDetection &&

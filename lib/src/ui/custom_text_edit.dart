@@ -358,6 +358,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
 
   @override
   void updateEditingValue(TextEditingValue value) {
+    final previousText = _currentEditingState.text;
     _currentEditingState = value;
 
     if (widget.deleteDetection) {
@@ -414,8 +415,10 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       // there is nothing left for a backspace to shorten. Some soft
       // keyboards still emit this exact no-op editing value for that
       // keypress instead of staying silent - treat it as the delete it
-      // represents rather than as an empty insert.
-      widget.onDelete();
+      // represents rather than as an empty insert. Coming from an
+      // uncommitted composition it is a cancel, not a delete: nothing was
+      // sent that could be deleted.
+      if (previousText == _initEditingState.text) widget.onDelete();
     } else {
       widget.onInsert(textDelta);
     }
