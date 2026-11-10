@@ -57,6 +57,7 @@ class Terminal
   static const _kittyKeyboardModeMask = 0x1f;
   static const _specialColorBaseIndex = 256;
   static const _specialColorCount = 5;
+  static const _maxRemoteResize = 1000;
 
   /// The number of lines that the scrollback buffer can hold. If the buffer
   /// exceeds this size, the lines at the top of the buffer will be removed.
@@ -256,6 +257,7 @@ class Terminal
     this.onUnknownSequence,
     this.reflowEnabled = true,
     this.wordSeparators,
+    this.allowRemoteResize = false,
   });
 
   late final _parser = EscapeParser(this);
@@ -542,6 +544,14 @@ class Terminal
   @override
   bool reflowEnabled;
 
+  /// Whether the application may resize the terminal through escape
+  /// sequences (`CSI 8 ; rows ; cols t`, `CSI Ps t` with Ps >= 24, DECSCPP
+  /// and DECSNLS). false by default, matching xterm's `allowWindowOps`: such
+  /// requests are ignored and only [resize] called by the embedder changes the
+  /// size. When enabled, requested sizes are clamped to 1..1000 columns and
+  /// rows.
+  bool allowRemoteResize;
+
   /// Writes the data from the underlying program to the terminal. Calling this
   /// updates the states of the terminal and emits events such as [onBell] or
   /// [onTitleChange] when the escape sequences in [data] request it.
@@ -701,7 +711,7 @@ class Terminal
       onOutput?.call(sanitizedText);
       return;
     }
-    onOutput?.call(sanitizedText.replaceAll('\n', '\r'));
+    onOutput?.call(sanitizedText.replaceAll(_pasteLineBreak, '\r'));
   }
 
   /// Returns whether [text] is safe enough to paste without user confirmation.
@@ -819,12 +829,14 @@ class Terminal
 
   @override
   void setColumnsPerPage(int cols) {
-    resize(cols, _viewHeight);
+    if (!allowRemoteResize) return;
+    resize(cols.clamp(1, _maxRemoteResize), _viewHeight);
   }
 
   @override
   void setLinesPerPage(int rows) {
-    resize(_viewWidth, rows);
+    if (!allowRemoteResize) return;
+    resize(_viewWidth, rows.clamp(1, _maxRemoteResize));
   }
 
   @override
@@ -977,6 +989,9 @@ class Terminal
     _cursorStyle.hyperlinkId = 0;
     _cursorStyle.semanticAttrs = 0;
     _modes.reset();
+    _savedDecModes.clear();
+    _assignedColors.clear();
+    _resetColorOverrides();
     _title = null;
     _iconTitle = null;
     _clipboardCapture.reset();
@@ -989,6 +1004,18 @@ class Terminal
     _tabStops.reset();
     _mainBuffer.reset();
     _altBuffer.reset();
+  }
+
+  void _resetColorOverrides() {
+    _colors._indexedColorOverrides.clear();
+    _colors._specialColorOverrides.clear();
+    _colors._auxiliaryDynamicColorOverrides.clear();
+    _colors._foregroundColorOverride = null;
+    _colors._backgroundColorOverride = null;
+    _colors._cursorColorOverride = null;
+    _colors._selectionColorOverride = null;
+    _colors._selectionForegroundColorOverride = null;
+    _colors._colorRevision++;
   }
 
   @override
@@ -1076,6 +1103,8 @@ class Terminal
       return;
     }
 
+    // Repeating more than a screenful is indistinguishable from a screenful.
+    count = min(count, _viewWidth * _viewHeight);
     for (var i = 0; i < count; i++) {
       _buffer.writeChar(_precedingCodepoint);
     }
@@ -1088,12 +1117,16 @@ class Terminal
 
   @override
   void setCursorX(int x) {
-    _buffer.setCursorX(x);
+    _buffer.setCursorX(_modes._originMode ? x + _buffer.marginLeft : x);
   }
 
   @override
   void setCursorY(int y) {
-    _buffer.setCursor(_buffer.cursorX, y);
+    // setCursor treats x as relative to the left margin in origin mode.
+    final x = _modes._originMode
+        ? _buffer.cursorX - _buffer.marginLeft
+        : _buffer.cursorX;
+    _buffer.setCursor(x, y);
   }
 
   @override
@@ -1742,6 +1775,12 @@ class Terminal
     if (size != 94 && size != 96) return;
     if (charsetFinal.isEmpty) return;
     if (charsetFinal.length > 2) return;
+    // Optional intermediates (0x20-0x2F) followed by one final (0x30-0x7E).
+    final codeUnits = charsetFinal.codeUnits;
+    for (var i = 0; i < codeUnits.length - 1; i++) {
+      if (codeUnits[i] < 0x20 || codeUnits[i] > 0x2f) return;
+    }
+    if (codeUnits.last < 0x30 || codeUnits.last > 0x7e) return;
 
     _settings.preferredSupplementalSetSize = size;
     _settings.preferredSupplementalSetFinal = charsetFinal;
@@ -2377,7 +2416,9 @@ class Terminal
 
   @override
   void reportTitle() {
-    _replySink?.call('\x1b]l${_title ?? ''}\x1b\\');
+    // Echoing the title would inject attacker-controlled text into the input
+    // stream, so the reply is always empty.
+    _replySink?.call('\x1b]l\x1b\\');
   }
 
   @override
@@ -3232,6 +3273,7 @@ int? _parseOscColorComponents(List<String> components) {
   var color = 0;
   for (final component in components) {
     if (component.isEmpty || component.length > 4) return null;
+    if (!_isHexDigits(component)) return null;
     final value = int.tryParse(component, radix: 16);
     if (value == null) return null;
     final maximum = (1 << (component.length * 4)) - 1;
@@ -3239,6 +3281,11 @@ int? _parseOscColorComponents(List<String> components) {
   }
   return color;
 }
+
+final _hexDigits = RegExp(r'^[0-9a-fA-F]+$');
+
+/// Unlike [int.tryParse], rejects a leading sign.
+bool _isHexDigits(String value) => _hexDigits.hasMatch(value);
 
 String _formatOscColor(int color) {
   String component(int shift) {

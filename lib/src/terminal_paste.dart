@@ -26,6 +26,8 @@ const _pasteControlReplacements = {
   0x7f, // DEL
 };
 
+final _pasteLineBreak = RegExp(r'\r\n?|\n');
+
 bool _isPasteSafe(String text) {
   if (text.contains('\n') || text.contains('\r')) return false;
   if (text.contains('\x1b[201~')) return false;

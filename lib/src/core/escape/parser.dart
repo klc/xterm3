@@ -1814,7 +1814,8 @@ class EscapeParser {
         }
         final rows = _csi.params[1];
         final cols = _csi.params[2];
-        handler.resize(cols, rows);
+        handler.setLinesPerPage(rows);
+        handler.setColumnsPerPage(cols);
         return;
       // Window handling is currently no in the scope of the package.
       case 9: // Maximize Terminal Window

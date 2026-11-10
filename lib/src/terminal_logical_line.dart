@@ -137,6 +137,9 @@ LogicalLine buildLogicalLine(
       line,
       lineIndex,
       includeFullWidth: continuesToNext,
+      skipWideCharPadding: continuesToNext &&
+          _endsWithWideCharPadding(line, buffer.viewWidth) &&
+          buffer.lines[nextLineIndex].getWidth(0) == 2,
       viewWidth: buffer.viewWidth,
     );
     lineIndex = nextLineIndex;
@@ -150,16 +153,25 @@ LogicalLine buildLogicalLine(
   );
 }
 
+/// Whether the last cell of [line] is the empty cell left behind when a wide
+/// character did not fit at the end of the row and wrapped to the next one.
+bool _endsWithWideCharPadding(BufferLine line, int viewWidth) {
+  final last = viewWidth - 1;
+  if (last < 1) return false;
+  return line.getCodePoint(last) == 0 && line.getWidth(last - 1) != 2;
+}
+
 void _appendLogicalLineText(
   StringBuffer text,
   LogicalLineCells cells,
   BufferLine line,
   int lineIndex, {
   required bool includeFullWidth,
+  required bool skipWideCharPadding,
   required int viewWidth,
 }) {
   final end = switch (includeFullWidth) {
-    true => viewWidth,
+    true => skipWideCharPadding ? viewWidth - 1 : viewWidth,
     false => line.getTrimmedLength(viewWidth),
   };
   for (var column = 0; column < end; column++) {

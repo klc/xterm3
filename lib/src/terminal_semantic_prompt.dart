@@ -189,6 +189,8 @@ String? _parseSemanticPromptCommandLine(Map<String, String> options) {
     return Uri.decodeFull(commandLineUrl);
   } on FormatException {
     return null;
+  } on ArgumentError {
+    return null;
   }
 }
 

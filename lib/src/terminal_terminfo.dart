@@ -13,8 +13,9 @@ String? _hexDecode(String value) {
   if (value.length.isOdd) return null;
   final buffer = StringBuffer();
   for (var i = 0; i < value.length; i += 2) {
-    final byte = int.tryParse(value.substring(i, i + 2), radix: 16);
-    if (byte == null) return null;
+    final digits = value.substring(i, i + 2);
+    if (!_isHexDigits(digits)) return null;
+    final byte = int.parse(digits, radix: 16);
     buffer.writeCharCode(byte);
   }
   return buffer.toString();
