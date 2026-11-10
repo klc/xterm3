@@ -274,7 +274,7 @@ void main() {
       expect(output, ['\x03']);
     });
 
-    macTest('types without an input connection', (tester) async {
+    macTest('readOnly sends nothing to the terminal', (tester) async {
       final output = <String>[];
       final terminal = Terminal(
         onOutput: output.add,
@@ -293,7 +293,9 @@ void main() {
       );
       await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA);
 
-      expect(output, ['a']);
+      // readOnly sends no input; typing without a connection is covered by
+      // 'closeKeyboard sends the syllable and releases the keys'.
+      expect(output, isEmpty);
     });
   });
 

@@ -37,6 +37,7 @@ class TerminalActions extends StatelessWidget {
     required this.getLineHeight,
     required this.child,
     this.beforePaste,
+    this.readOnly = false,
   });
 
   final Terminal terminal;
@@ -51,6 +52,9 @@ class TerminalActions extends StatelessWidget {
   /// still holding back reaches the terminal ahead of what is pasted.
   final VoidCallback? beforePaste;
 
+  /// True if pasting should do nothing.
+  final bool readOnly;
+
   final Widget child;
 
   @override
@@ -59,6 +63,7 @@ class TerminalActions extends StatelessWidget {
       actions: {
         PasteTextIntent: CallbackAction<PasteTextIntent>(
           onInvoke: (intent) async {
+            if (readOnly) return null;
             beforePaste?.call();
             final data = await Clipboard.getData(Clipboard.kTextPlain);
             final text = data?.text;

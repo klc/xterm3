@@ -152,7 +152,9 @@ class Terminal
 
   /// Called when the application requests clipboard contents through OSC 52.
   ///
-  /// Return null to deny the request. The result may be asynchronous.
+  /// Leave this unset to deny clipboard reads: `TerminalView` does not install
+  /// a default, since any remote output could then read the user's clipboard.
+  /// Return null to deny a request. The result may be asynchronous.
   FutureOr<String?> Function(String selector)? onClipboardQuery;
 
   /// Function that is called when the terminal emits data to the underlying

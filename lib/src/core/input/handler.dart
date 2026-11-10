@@ -183,9 +183,10 @@ class ModifyOtherKeysInputHandler implements TerminalInputHandler {
     };
   }
 
+  /// Like xterm: an unmodified key is sent as text, and Shift alone only
+  /// modifies a key whose shifted form is not distinct text (Space).
   bool _shouldModify(TerminalKeyboardEvent event, int codepoint) {
-    if (codepoint >= 0x40 && codepoint <= 0x7f) return true;
-    if (event.ctrl || event.alt) return true;
+    if (event.ctrl || event.alt || event.superKey) return true;
     return event.shift && codepoint == 0x20;
   }
 
@@ -194,6 +195,7 @@ class ModifyOtherKeysInputHandler implements TerminalInputHandler {
     if (event.shift) modifiers += 1;
     if (event.alt) modifiers += 2;
     if (event.ctrl) modifiers += 4;
+    if (event.superKey) modifiers += 8;
     return modifiers;
   }
 }
