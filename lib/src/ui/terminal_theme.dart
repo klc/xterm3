@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/widgets.dart';
 
 class TerminalTheme {
@@ -54,4 +55,40 @@ class TerminalTheme {
   final Color searchHitBackground;
   final Color searchHitBackgroundCurrent;
   final Color searchHitForeground;
+
+  List<Color> get _fields => [
+        cursor,
+        selection,
+        foreground,
+        background,
+        black,
+        red,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
+        white,
+        brightBlack,
+        brightRed,
+        brightGreen,
+        brightYellow,
+        brightBlue,
+        brightMagenta,
+        brightCyan,
+        brightWhite,
+        searchHitBackground,
+        searchHitBackgroundCurrent,
+        searchHitForeground,
+      ];
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! TerminalTheme) return false;
+    return listEquals(_fields, other._fields);
+  }
+
+  @override
+  int get hashCode => Object.hashAll(_fields);
 }

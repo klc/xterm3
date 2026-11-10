@@ -235,8 +235,17 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   Buffer? _lastTerminalBuffer;
 
+  /// The max scroll extent last applied to [_offset]. The scroll position
+  /// clamps to this, not to the live [_maxScrollExtent], until the next layout.
+  var _appliedMaxScrollExtent = 0.0;
+
+  /// The line list and its trim count as of the last layout, used to keep a
+  /// scrolled-up view on the same text while a full scrollback drops lines.
+  Object? _layoutLines;
+  var _layoutTrimmedLines = 0;
+
   void _onScroll() {
-    _stickToBottom = _scrollOffset >= _maxScrollExtent;
+    _stickToBottom = _scrollOffset >= _appliedMaxScrollExtent;
     markNeedsLayout();
     _markEditableRectDirty();
   }
@@ -260,6 +269,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
     final needsLayout = forceScrollToBottom ||
         _terminal.buffer.lines.length != _lastTerminalLineCount ||
+        (!_stickToBottom &&
+            _terminal.buffer.lines.absoluteStartIndex != _layoutTrimmedLines) ||
         _terminal.viewWidth != _lastTerminalWidth ||
         _terminal.viewHeight != _lastTerminalHeight;
     _recordTerminalLayoutState();
@@ -417,9 +428,17 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     _updateScrollOffset();
 
+    final lines = _terminal.buffer.lines;
     if (_stickToBottom) {
       _offset.correctBy(_maxScrollExtent - _scrollOffset);
+    } else if (identical(lines, _layoutLines)) {
+      final trimmed = lines.absoluteStartIndex - _layoutTrimmedLines;
+      if (trimmed > 0) {
+        _offset.correctBy(-min(trimmed * lineHeight, _scrollOffset));
+      }
     }
+    _layoutLines = lines;
+    _layoutTrimmedLines = lines.absoluteStartIndex;
   }
 
   /// Total height of the terminal in pixels. Includes scrollback buffer.
@@ -471,7 +490,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// Mouse reports are screen-relative, not scrollback-buffer-relative.
   CellOffset _getViewportCellOffset(Offset offset) {
     final x = offset.dx - _padding.left;
-    final y = offset.dy - _padding.top;
+    final y = _viewportY(offset.dy);
     final row = y ~/ _painter.cellSize.height;
     final col = x ~/ _painter.cellSize.width;
     return CellOffset(
@@ -480,9 +499,20 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     );
   }
 
+  /// Distance from the top of the screen (buffer row [Buffer.scrollBack]) to
+  /// [dy], using the same mapping as [getCellOffset]. Once there is
+  /// scrollback the content is bottom-aligned, so the screen does not start at
+  /// the top padding.
+  double _viewportY(double dy) {
+    return dy -
+        _padding.top +
+        _scrollOffset -
+        _terminal.buffer.scrollBack * _painter.cellSize.height;
+  }
+
   CellOffset _getViewportPixelOffset(Offset offset) {
     final x = (offset.dx - _padding.left).floor();
-    final y = (offset.dy - _padding.top).floor();
+    final y = _viewportY(offset.dy).floor();
     final maxX =
         max(0, (_terminal.viewWidth * _painter.cellSize.width).floor());
     final maxY =
@@ -753,7 +783,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// be called in [performLayout] after the viewport size has been updated.
   void _updateScrollOffset() {
     _offset.applyViewportDimension(_viewportHeight);
-    _offset.applyContentDimensions(0, _maxScrollExtent);
+    _appliedMaxScrollExtent = _maxScrollExtent;
+    _offset.applyContentDimensions(0, _appliedMaxScrollExtent);
   }
 
   bool get _isComposingText {
