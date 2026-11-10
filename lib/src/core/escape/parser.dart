@@ -17,6 +17,8 @@ class EscapeParser {
 
   static const _maxCsiParams = 32;
 
+  static const _maxCsiParamValue = 65535;
+
   static const _maxOscRawLength = 8192;
 
   static const _maxOscParams = 256;
@@ -35,9 +37,15 @@ class EscapeParser {
     return value >= 0 && value <= 0xff;
   }
 
+  /// Index of the red component for `38/48/58 : 2 : ...`. In the colon form
+  /// the colour-space field is present only when the sub-parameter group has
+  /// at least four values after the mode.
   int _sgrTrueColorStart(int modeIndex) {
-    if (_csi.separatorAfter(modeIndex) == Ascii.colon &&
-        modeIndex + 4 < _csi.params.length) {
+    var subParams = 0;
+    while (_csi.separatorAfter(modeIndex + subParams) == Ascii.colon) {
+      subParams++;
+    }
+    if (subParams >= 4) {
       return modeIndex + 2;
     }
     return modeIndex + 1;
@@ -276,7 +284,10 @@ class EscapeParser {
     }
     if (char == Ascii.DEL) return true;
 
-    final escapeHandler = _escHandlers[char];
+    var escapeHandler = _escHandlers[char];
+    if (escapeHandler == null && char <= Ascii.slash) {
+      escapeHandler = _escHandleIntermediate;
+    }
     if (escapeHandler == null) {
       _pendingEscape = false;
       handler.unknownEscape(char);
@@ -422,6 +433,20 @@ class EscapeParser {
     }
     handler.unknownEscape(command);
     return true;
+  }
+
+  /// Unrecognised `ESC` with intermediate bytes (0x20-0x2F): consume any
+  /// further intermediates and the final byte, then discard the sequence.
+  bool _escHandleIntermediate() {
+    while (true) {
+      final char = _consumeEscFinalByte();
+      if (char == _escFinalIncomplete) return false;
+      if (char == _escFinalCancelled) return true;
+      if (char > Ascii.slash) {
+        handler.unknownEscape(char);
+        return true;
+      }
+    }
   }
 
   /// `ESC M` Reverse Index (RI)
@@ -644,8 +669,8 @@ class EscapeParser {
 
       if (char >= Ascii.num0 && char <= Ascii.num9) {
         hasParam = true;
-        param *= 10;
-        param += char - Ascii.num0;
+        param = param * 10 + char - Ascii.num0;
+        if (param > _maxCsiParamValue) param = _maxCsiParamValue;
         continue;
       }
 
@@ -2818,15 +2843,6 @@ class EscapeParser {
       final char = _queue.consume();
       rawLength++;
 
-      if (rawLength > _maxOscRawLength) {
-        _osc.clear();
-        _oscOverflowed = true;
-        _discardingOsc = true;
-        _discardOscSawEscape = char == Ascii.ESC;
-        _discardOscInput();
-        return true;
-      }
-
       // OSC terminates with BEL
       if (char == Ascii.BEL) {
         _osc.add(param.toString());
@@ -2865,6 +2881,15 @@ class EscapeParser {
         _queue.rollback(2);
         _osc.clear();
         _oscOverflowed = true;
+        return true;
+      }
+
+      if (rawLength > _maxOscRawLength) {
+        _osc.clear();
+        _oscOverflowed = true;
+        _discardingOsc = true;
+        _discardOscSawEscape = false;
+        _discardOscInput();
         return true;
       }
 
