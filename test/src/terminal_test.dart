@@ -3147,8 +3147,8 @@ void main() {
       '\x1b[?6c',
       '\x1b[?6c',
       '\x1b[?6c',
-      '\x1b[>0;60307;1c',
-      '\x1b[>0;60307;1c',
+      '\x1b[>0;60400;1c',
+      '\x1b[>0;60400;1c',
     ]);
   });
 
@@ -3209,7 +3209,7 @@ void main() {
     terminal.write('\x1b[>0q');
 
     expect(output, [
-      '\x1bP>|xterm3 6.3.7\x1b\\',
+      '\x1bP>|xterm3 6.4.0\x1b\\',
       '\x1bP>|lumide-term 1.0\x1b\\',
     ]);
   });

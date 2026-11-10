@@ -1,3 +1,127 @@
+## [6.4.0] - 2026-11-11
+
+This release comes out of a full review of the package against hostile and
+malformed terminal output. Four defaults change; each is listed first.
+
+### Changed defaults
+
+* Applications can no longer resize the terminal through escape sequences
+  (`CSI 8 ; rows ; cols t`, `CSI Ps t` with Ps >= 24, DECSCPP, DECSNLS)
+  unless the new `Terminal(allowRemoteResize: true)` is set. Any output
+  could shrink the terminal to 1x1, where it stayed until the window was
+  resized, or grow it to hundreds of thousands of rows. When allowed, sizes
+  are clamped to 1..1000, and `CSI 8 ; rows ; cols t` fires `onResize`
+  twice (rows, then columns).
+
+* `TerminalView` no longer answers OSC 52 clipboard reads by default. It
+  installed its own query handler, so any remote output could read the
+  user's clipboard while the view had focus. An embedder that wants this
+  sets `Terminal.onClipboardQuery` itself. Clipboard writes are unchanged.
+
+* The window title report (`CSI 21 t`) always returns an empty title. It
+  echoed the application-set title into the input stream, which let output
+  place text on the shell's command line.
+
+* `TerminalView(readOnly: true)` blocks hardware keyboard input and paste,
+  as documented. Only the soft keyboard was blocked before. Copy and
+  select-all still work. On web, `readOnly` still opens an input
+  connection, so typed text can reach the terminal there.
+
+### Escape parser and terminal
+
+* CSI numeric parameters are capped at 65535. Larger values overflowed,
+  threw a `RangeError` out of `write()` and dropped the rest of the chunk
+  (`CSI 18446744073709551615 L`); a huge REP count stalled the terminal.
+  REP also repeats at most one screenful.
+
+* Malformed OSC 133 `cmdline_url`, XTGETTCAP and OSC colour values no
+  longer throw from `write()` or produce negative colours. DECAUPSS ignores
+  malformed designators, so DECRQUPSS cannot echo control characters.
+
+* Unrecognised ESC sequences with intermediate bytes (`ESC % G`,
+  `ESC SP F`, `ESC $ ( D`) are discarded instead of printing their final
+  character.
+
+* Colon-form truecolor SGR without a colour-space field (`38:2:R:G:B`) is
+  parsed correctly when more parameters follow.
+
+* An OSC whose terminator arrives exactly at the 8 KiB limit no longer
+  swallows the terminator and all following output.
+
+* RIS (`ESC c`) clears OSC colour overrides, DECAC colour assignments and
+  saved DEC private modes.
+
+* In origin mode with left/right margins, VPA no longer drifts the cursor
+  to the right, and CHA/HPA are relative to the left margin.
+
+* Pasting text with CRLF line endings outside bracketed paste mode sends
+  one carriage return per line, not two.
+
+* Search and URL detection no longer see a phantom space where a wide
+  character wrapped to the next row.
+
+* XTVERSION and secondary device attributes report the current package
+  version; they had been reporting 5.3.0.
+
+### Buffer, reflow and selection
+
+* The cursor stays in place when a resize makes a line exactly fill the new
+  width. It was left on its old row, and the next character overwrote the
+  last one. A narrowing reflow also no longer pushes the cursor's row into
+  scrollback while blank rows remain below it.
+
+* `ESC[K` no longer breaks soft-wrapped lines unless it erases the whole
+  row. `grep --color` and compiler diagnostics emit it constantly, which
+  split long lines when they were copied or reflowed.
+
+* Erased or reflowed text no longer reappears after shrinking and then
+  widening the terminal.
+
+* Copied text keeps the spaces between words when an application left the
+  cells blank instead of writing spaces, as ncurses does.
+  `BufferLine.getText()` and `toString()` now return a space for a blank
+  cell inside the row; trailing blanks are still trimmed.
+
+* Lines scrolled out of a scroll region that starts at the top of the main
+  screen are kept in scrollback, so output above a pinned status line (the
+  apt/dpkg progress bar layout) is no longer lost.
+
+* Block selections dragged from top-right to bottom-left are highlighted.
+
+* Restoring a saved cursor after the terminal height shrinks and grows
+  returns to the right row.
+
+### View and input
+
+* Mouse reports are no longer one row too low once there is scrollback and
+  the view height is not a multiple of the cell height. With the view
+  scrolled up, a click reports the screen row of the line actually clicked
+  instead of the visible row index.
+
+* Scrolling back to the bottom while output is streaming resumes following
+  new output.
+
+* With a full scrollback, a scrolled-up view keeps the same text in place
+  as new output arrives, until that text is trimmed.
+
+* `TerminalTheme` has value equality, so rebuilding an equal non-const
+  theme no longer flushes the render caches or sends an unsolicited
+  colour-scheme report.
+
+* With xterm modifyOtherKeys level 2, unmodified and Shift-only printable
+  keys are sent as plain text again instead of `CSI 27 ; 1 ; … ~`, and Meta
+  is encoded. On macOS this also lets those keys reach the input method.
+
+* Cancelling an IME composition no longer sends a backspace that erased a
+  real character on the shell line.
+
+* Output that only looks like a ZModem start no longer freezes the
+  session; the bytes are shown and input keeps working.
+
+### Package
+
+* Removed the unused `convert`, `equatable` and `quiver` dependencies.
+
 ## [6.3.7] - 2026-10-08
 
 * Auto-scrolling during drag selection uses global pointer coordinates.
