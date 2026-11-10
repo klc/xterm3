@@ -26,6 +26,10 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// overflow
   var _absoluteStartIndex = 0;
 
+  /// How many elements have been dropped from the start of this list since it
+  /// was created.
+  int get absoluteStartIndex => _absoluteStartIndex;
+
   /// Gets the cyclic index for the specified regular index. The cyclic index
   /// can then be used on the backing array to get the element associated with
   /// the regular index.

@@ -668,7 +668,8 @@ void main() {
       Offset(render.cellSize.width * 2, render.cellSize.height * 3),
     );
 
-    expect(output.last, '\x1b[<0;3;4M');
+    // Visible row 3 is buffer row 5, which is screen row 2 (scrollBack 3).
+    expect(output.last, '\x1b[<0;3;3M');
 
     render.detach();
     setup.focusNode.dispose();
