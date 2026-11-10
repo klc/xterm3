@@ -122,7 +122,7 @@ void main() {
 
     final line = terminal.buffer.lines[0];
     expect(line.getCodePoint(0), 'x'.codeUnitAt(0));
-    expect(line.getText(0, 11), 'xabc');
+    expect(line.getText(0, 11), 'x       abc');
   });
 
   test('Terminal applies a full reset', () {
@@ -1943,7 +1943,7 @@ void main() {
     terminal.write('\x1b]1337;ClearScrollback\x1b\\');
 
     expect(terminal.buffer.scrollBack, 0);
-    expect(terminal.buffer.lines[0].toString(), startsWith('old2'));
+    expect(terminal.buffer.lines[0].toString(), startsWith('    old2'));
   });
 
   test('Terminal reports ConEmu OSC 9;9 current directory', () {
@@ -3338,11 +3338,11 @@ void main() {
     terminal.write('ABCDEF\r\nabcdef\r\n123456');
     terminal.write('\x1b[1;3H\x1b[2\'}');
 
-    expect(terminal.buffer.lines[0].getText(0, 6), 'ABCD');
+    expect(terminal.buffer.lines[0].getText(0, 6), 'AB  CD');
     expect(terminal.buffer.lines[0].getCodePoint(2), 0);
     expect(terminal.buffer.lines[0].getCodePoint(3), 0);
-    expect(terminal.buffer.lines[1].getText(0, 6), 'abcd');
-    expect(terminal.buffer.lines[2].getText(0, 6), '1234');
+    expect(terminal.buffer.lines[1].getText(0, 6), 'ab  cd');
+    expect(terminal.buffer.lines[2].getText(0, 6), '12  34');
 
     final deleteTerminal = Terminal()..resize(6, 3);
     deleteTerminal.write('ABCDEF\r\nabcdef\r\n123456');
@@ -3358,14 +3358,14 @@ void main() {
     backIndexTerminal.write('ABCDEF');
     backIndexTerminal.write('\x1b[?69h\x1b[2;5s\x1b[1;2H\x1b6');
 
-    expect(backIndexTerminal.buffer.lines[0].getText(0, 6), 'ABCDF');
+    expect(backIndexTerminal.buffer.lines[0].getText(0, 6), 'A BCDF');
     expect(backIndexTerminal.buffer.lines[0].getCodePoint(1), 0);
 
     final forwardIndexTerminal = Terminal()..resize(6, 1);
     forwardIndexTerminal.write('ABCDEF');
     forwardIndexTerminal.write('\x1b[?69h\x1b[2;5s\x1b[1;5H\x1b9');
 
-    expect(forwardIndexTerminal.buffer.lines[0].getText(0, 6), 'ACDEF');
+    expect(forwardIndexTerminal.buffer.lines[0].getText(0, 6), 'ACDE F');
     expect(forwardIndexTerminal.buffer.lines[0].getCodePoint(4), 0);
   });
 
@@ -4522,7 +4522,7 @@ void main() {
 
       terminal.write('\x1b[;3HX');
 
-      expect(terminal.buffer.lines[0].toString(), 'X');
+      expect(terminal.buffer.lines[0].toString(), '  X');
       expect(terminal.buffer.lines[0].getCodePoint(2), 'X'.codeUnitAt(0));
     });
 
@@ -4559,7 +4559,7 @@ void main() {
       terminal.write('abcde\r\x1b[2C\x1b[0X');
 
       expect(terminal.buffer.lines[0].getCodePoint(2), 0);
-      expect(terminal.buffer.lines[0].toString(), 'abde');
+      expect(terminal.buffer.lines[0].toString(), 'ab de');
     });
 
     test('erase characters ignores horizontal margins', () {
@@ -4567,7 +4567,7 @@ void main() {
 
       terminal.write('abcdef\x1b[?69h\x1b[2;4s\x1b[1;4H\x1b[2X');
 
-      expect(terminal.buffer.lines[0].getText(0, 6), 'abcf');
+      expect(terminal.buffer.lines[0].getText(0, 6), 'abc  f');
       expect(terminal.buffer.lines[0].getCodePoint(3), 0);
       expect(terminal.buffer.lines[0].getCodePoint(4), 0);
       expect(terminal.buffer.lines[0].getCodePoint(5), 0x66);
@@ -4579,7 +4579,7 @@ void main() {
       terminal.write('abcde\r\x1b[2C\x1b[0@');
 
       expect(terminal.buffer.lines[0].getCodePoint(2), 0);
-      expect(terminal.buffer.lines[0].toString(), 'abcd');
+      expect(terminal.buffer.lines[0].toString(), 'ab cd');
     });
 
     test('insert lines treats zero as one', () {
@@ -4749,7 +4749,7 @@ void main() {
 
       terminal.write('ABCD橋\x1b[?69h\x1b[1;5s\x1b[1;3H\x1b[@');
 
-      expect(terminal.buffer.lines[0].getText(), 'ABCD');
+      expect(terminal.buffer.lines[0].getText(), 'AB CD');
       expect(terminal.buffer.lines[0].getCodePoint(2), 0);
       expect(terminal.buffer.lines[0].getWidth(2), 0);
       expect(terminal.buffer.lines[0].getCodePoint(4), 0x44);
@@ -4763,7 +4763,7 @@ void main() {
 
       terminal.write('中中中中中\x1b[?69h\x1b[1;9s\x1b[1;2Ha\x1b[8@');
 
-      expect(terminal.buffer.lines[0].getText(), 'a');
+      expect(terminal.buffer.lines[0].getText(), ' a');
       expect(terminal.buffer.lines[0].getCodePoint(8), 0);
       expect(terminal.buffer.lines[0].getWidth(8), 0);
       expect(terminal.buffer.lines[0].getCodePoint(9), 0);
@@ -4790,7 +4790,7 @@ void main() {
       terminal.write('abcdef\r\nghijkl\r\nmnopqr\r\nstuvwx');
       terminal.write('\x1b[?69h\x1b[2;4s\x1b[2;2H\x1b[L');
 
-      expect(terminal.buffer.lines[1].getText(0, 6), 'gkl');
+      expect(terminal.buffer.lines[1].getText(0, 6), 'g   kl');
       expect(terminal.buffer.lines[2].getText(0, 6), 'mhijqr');
       expect(terminal.buffer.lines[3].getText(0, 6), 'snopwx');
     });
@@ -4803,7 +4803,7 @@ void main() {
 
       expect(terminal.buffer.lines[1].getText(0, 6), 'gnopkl');
       expect(terminal.buffer.lines[2].getText(0, 6), 'mtuvqr');
-      expect(terminal.buffer.lines[3].getText(0, 6), 'swx');
+      expect(terminal.buffer.lines[3].getText(0, 6), 's   wx');
     });
 
     test('delete lines clears wide tail beyond right margin', () {
@@ -4825,7 +4825,7 @@ void main() {
       terminal.write('........\r\n123456橋');
       terminal.write('\x1b[?69h\x1b[2;7s\x1b[1;2H\x1b[M');
 
-      expect(terminal.buffer.lines[0].getText(), '.23456.');
+      expect(terminal.buffer.lines[0].getText(), '.23456 .');
       expect(terminal.buffer.lines[0].getCodePoint(5), 0x36);
       expect(terminal.buffer.lines[0].getWidth(5), 1);
       expect(terminal.buffer.lines[0].getCodePoint(6), 0);
@@ -4840,7 +4840,7 @@ void main() {
       terminal.write('........\r\n橋abcdef');
       terminal.write('\x1b[?69h\x1b[2;7s\x1b[1;2H\x1b[M');
 
-      expect(terminal.buffer.lines[0].getText(), '.abcde.');
+      expect(terminal.buffer.lines[0].getText(), '. abcde.');
       expect(terminal.buffer.lines[0].getCodePoint(0), 0x2e);
       expect(terminal.buffer.lines[0].getWidth(0), 1);
       expect(terminal.buffer.lines[0].getCodePoint(1), 0);
@@ -4857,7 +4857,7 @@ void main() {
 
       expect(terminal.buffer.lines[1].getText(0, 6), 'gnopkl');
       expect(terminal.buffer.lines[2].getText(0, 6), 'mtuvqr');
-      expect(terminal.buffer.lines[3].getText(0, 6), 'swx');
+      expect(terminal.buffer.lines[3].getText(0, 6), 's   wx');
     });
 
     test('index outside horizontal margins does not scroll', () {
@@ -4887,7 +4887,7 @@ void main() {
       terminal.write('\x1b[?69h\x1b[3;5s\x1b[2;3r\x1b[3;5H\x1bEX');
 
       expect(terminal.buffer.lines[1].getText(0, 6), 'ghopql');
-      expect(terminal.buffer.lines[2].getText(0, 6), 'mnXr');
+      expect(terminal.buffer.lines[2].getText(0, 6), 'mnX  r');
       expect(terminal.buffer.lines[2].getCodePoint(3), 0);
       expect(terminal.buffer.lines[2].getCodePoint(4), 0);
     });
@@ -5204,12 +5204,16 @@ void main() {
       terminal.write('\x1b7\x1b[5;1Hbar $i\x1b8line $i\r\n');
     }
 
-    expect(terminal.buffer.lines[0].getText().trimRight(), 'line 4');
-    expect(terminal.buffer.lines[1].getText().trimRight(), 'line 5');
-    expect(terminal.buffer.lines[2].getText().trimRight(), 'line 6');
-    expect(terminal.buffer.lines[3].getText().trimRight(), '');
-    expect(terminal.buffer.lines[4].getText().trimRight(), 'bar 6');
-    expect(terminal.buffer.height, 8);
+    // The region starts at the top, so scrolled lines go to scrollback.
+    expect(terminal.buffer.scrollBack, 3);
+    expect(terminal.buffer.lines[0].getText().trimRight(), 'line 1');
+    expect(terminal.buffer.lines[2].getText().trimRight(), 'line 3');
+    expect(terminal.buffer.lines[3].getText().trimRight(), 'line 4');
+    expect(terminal.buffer.lines[4].getText().trimRight(), 'line 5');
+    expect(terminal.buffer.lines[5].getText().trimRight(), 'line 6');
+    expect(terminal.buffer.lines[6].getText().trimRight(), '');
+    expect(terminal.buffer.lines[7].getText().trimRight(), 'bar 6');
+    expect(terminal.buffer.height, 11);
   });
 }
 
