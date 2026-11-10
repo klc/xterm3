@@ -215,7 +215,7 @@ void main() {
       line.resize(10);
 
       expect(line.getCombiningCharacters(5), '\u0301');
-      expect(line.getText(), 'e\u0301');
+      expect(line.getText(), '     e\u0301');
     });
   });
 
@@ -227,7 +227,7 @@ void main() {
 
       line.insertCells(0, 1);
       expect(line.getCombiningCharacters(1), '\u0301');
-      expect(line.getText(), 'e\u0301b');
+      expect(line.getText(), ' e\u0301b');
 
       line.removeCells(0, 1);
       expect(line.getCombiningCharacters(0), '\u0301');
@@ -304,7 +304,7 @@ void main() {
 
       line.insertCells(0, 1);
 
-      expect(line.getText(), 'abcd');
+      expect(line.getText(), ' abcd');
       expect(startAnchor.attached, isTrue);
       expect(startAnchor.x, 1);
       expect(middleAnchor.attached, isTrue);

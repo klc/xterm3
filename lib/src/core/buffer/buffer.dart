@@ -581,6 +581,7 @@ class Buffer {
   /// cursor.
   void eraseDisplayToCursor({bool respectProtected = false}) {
     eraseLineToCursor(respectProtected: respectProtected);
+    currentLine.isWrapped = false;
 
     for (var i = 0; i < _cursorY; i++) {
       final line = lines[i + scrollBack];
@@ -614,7 +615,9 @@ class Buffer {
   /// cursor position.
   void eraseLineFromCursor({bool respectProtected = false}) {
     _cancelPendingWrap();
-    currentLine.isWrapped = false;
+    // Like xterm.js: the row stops continuing the previous one only when the
+    // whole row is erased.
+    if (_cursorX == 0) currentLine.isWrapped = false;
     currentLine.eraseRange(
       _cursorX,
       viewWidth,
@@ -627,7 +630,6 @@ class Buffer {
   /// cursor.
   void eraseLineToCursor({bool respectProtected = false}) {
     _cancelPendingWrap();
-    currentLine.isWrapped = false;
     currentLine.eraseRange(
       0,
       _cursorX + 1,
@@ -944,9 +946,16 @@ class Buffer {
 
   void _scrollUpFullWidth(int count) {
     if (_canScrollUpByPushingLines) {
-      final linesToPush = min(count, viewHeight);
+      final linesToPush = min(count, _marginBottom + 1);
       for (var i = 0; i < linesToPush; i++) {
         lines.push(_newEmptyLine());
+        // Rows below the scroll region keep their place on screen.
+        if (_marginBottom < viewHeight - 1) {
+          for (var row = viewHeight - 1; row > _marginBottom; row--) {
+            lines.move(row - 1 + scrollBack, row + scrollBack);
+          }
+          lines[absoluteMarginBottom] = _newEmptyLine();
+        }
       }
       return;
     }
@@ -960,10 +969,11 @@ class Buffer {
     }
   }
 
+  /// Whether scrolling moves the top row into scrollback, like xterm does for
+  /// a main-buffer scroll region that starts at the top of the screen.
   bool get _canScrollUpByPushingLines {
     if (isAltBuffer) return false;
-    if (_marginTop != 0) return false;
-    return _marginBottom == viewHeight - 1;
+    return _marginTop == 0;
   }
 
   /// https://vt100.net/docs/vt100-ug/chapter3.html#IND IND – Index
@@ -978,9 +988,9 @@ class Buffer {
       if (!isInHorizontalMarginOrPendingWrap) return;
       if (_cursorY == _marginBottom) {
         // scrollUp() already pushes new lines onto the scrollback when the
-        // margins cover the whole viewport; inserting a line here instead
-        // would leave a partial scroll region unscrolled and shift every row
-        // below the bottom margin down.
+        // region starts at the top of the viewport; inserting a line here
+        // instead would leave a partial scroll region unscrolled and shift
+        // every row below the bottom margin down.
         scrollUp(1);
       } else {
         moveCursorY(1);
@@ -1452,9 +1462,7 @@ class Buffer {
     for (var row = viewportStart; row < viewportEnd; row++) {
       final line = lines[row];
       line.isWrapped = false;
-      for (var column = 0; column < viewWidth; column++) {
-        line.resetCell(column);
-      }
+      line.eraseRange(0, viewWidth, CursorStyle.empty);
     }
     _cursorX = 0;
     _cursorY = 0;
@@ -1597,6 +1605,7 @@ class Buffer {
       for (var i = 0; i < oldHeight - newHeight; i++) {
         if (_cursorY > newHeight - 1) {
           _cursorY--;
+          _savedCursorY--;
         } else {
           lines.pop();
         }
@@ -1633,6 +1642,14 @@ class Buffer {
         }
 
         lines.replaceWith(reflowResult);
+        // Reflow can add rows above the cursor. Drop blank rows below it
+        // instead of pushing the cursor's row up into scrollback.
+        while (cursorAnchor.attached &&
+            lines.length > newHeight &&
+            cursorAnchor.y < lines.length - newHeight &&
+            lines[lines.length - 1].getTrimmedLength() == 0) {
+          lines.pop();
+        }
         if (cursorAnchor.attached) {
           final newScrollBack = max(lines.length - newHeight, 0);
           _cursorX = _reflowedCursorX(
@@ -1644,7 +1661,6 @@ class Buffer {
         }
         if (savedCursorAnchor.attached) {
           final newScrollBack = max(lines.length - newHeight, 0);
-          final savedCursorAtRightEdge = savedCursorAnchor.x == newWidth - 1;
           _savedCursorX = _reflowedCursorX(
             savedCursorAnchor,
             pendingWrap: _savedPendingWrap,
@@ -1652,7 +1668,7 @@ class Buffer {
           );
           _savedCursorY =
               (savedCursorAnchor.y - newScrollBack).clamp(0, newHeight - 1);
-          _savedPendingWrap = _savedPendingWrap && savedCursorAtRightEdge;
+          _savedPendingWrap = _savedCursorX == newWidth;
         } else {
           _savedCursorX = _savedCursorX.clamp(0, newWidth - 1);
           _savedPendingWrap = false;
@@ -1691,6 +1707,11 @@ class Buffer {
     required int newWidth,
   }) {
     if (pendingWrap && anchor.x == newWidth - 1) return newWidth;
+    // Right after text that now exactly fills its row: stay in the
+    // pending-wrap position so the next character does not overwrite it.
+    if (anchor.x >= newWidth && anchor.line!.getTrimmedLength() == newWidth) {
+      return newWidth;
+    }
     final offset = switch (pendingWrap) {
       true => 1,
       false => 0,

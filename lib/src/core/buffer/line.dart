@@ -416,11 +416,23 @@ class BufferLine with IndexedItem {
       eraseCell(end, style);
     }
 
+    if (end >= _length) _clearHiddenCells();
+
     end = min(end, _length);
     for (var i = start; i < end; i++) {
       if (!_canErase(i, respectProtected)) continue;
       eraseCell(i, style);
     }
+  }
+
+  /// Clears the cells a shrinking [resize] keeps past [length]. Anything that
+  /// blanks the line up to its end calls this, so erased text cannot come back
+  /// when the line grows again.
+  void _clearHiddenCells() {
+    final start = _length * _cellSize;
+    if (start < _data.length) _data.fillRange(start, _data.length, 0);
+    _combiningCharacters?.removeWhere((index, _) => index >= _length);
+    _underlineColors?.removeWhere((index, _) => index >= _length);
   }
 
   bool _canErase(int index, bool respectProtected) {
@@ -437,6 +449,7 @@ class BufferLine with IndexedItem {
     assert(count >= 0 && start + count <= end);
 
     if (count == 0) return;
+    if (end == _length) _clearHiddenCells();
 
     style ??= CursorStyle.empty;
     final combiningCharacters = switch (_combiningCharacters) {
@@ -540,6 +553,7 @@ class BufferLine with IndexedItem {
     assert(count >= 0 && start + count <= end);
 
     if (count == 0) return;
+    if (end == _length) _clearHiddenCells();
 
     style ??= CursorStyle.empty;
     final combiningCharacters = switch (_combiningCharacters) {
@@ -814,11 +828,24 @@ class BufferLine with IndexedItem {
       to++;
     }
 
+    final trimmedLength = getTrimmedLength();
     final builder = StringBuffer();
+    var afterTab = false;
     for (var i = from; i < to; i++) {
       final codePoint = getCodePoint(i);
       final width = getWidth(i);
-      if (codePoint != 0 && i + width <= to) {
+      if (codePoint == 0) {
+        // A blank cell inside the content is a space, unless it is the
+        // placeholder half of a wide character or the gap a tab skipped.
+        if (i < trimmedLength &&
+            !afterTab &&
+            (i == 0 || getWidth(i - 1) != 2)) {
+          builder.write(' ');
+        }
+        continue;
+      }
+      afterTab = codePoint == 0x09;
+      if (i + width <= to) {
         builder.writeCharCode(codePoint);
         final combining = _combiningCharacters?[i];
         if (combining != null) {

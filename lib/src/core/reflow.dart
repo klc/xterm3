@@ -1,4 +1,5 @@
 import 'package:xterm3/src/core/buffer/line.dart';
+import 'package:xterm3/src/core/cursor.dart';
 import 'package:xterm3/src/utils/circular_buffer.dart';
 
 class _LineBuilder {
@@ -107,6 +108,9 @@ class _LineReflow {
         } else {
           _addPart(line, from: newWidth, to: trimmedLength);
         }
+        // The moved cells must not also stay in the hidden tail that
+        // `resize` keeps, or they come back when the line grows again.
+        line.eraseRange(newWidth, line.length, CursorStyle.empty);
       }
     }
 
@@ -182,7 +186,13 @@ class _LineReflow {
     if (line.hasAnchors) {
       for (var anchor in line.anchors.toList()) {
         if (anchor.x >= to) {
-          builder.addAnchor(anchor, anchor.x - to);
+          // An empty builder means the last part exactly filled a line that
+          // is already in _lines; the builder's own line would never be added.
+          if (builder.isEmpty && _lines.isNotEmpty) {
+            anchor.reparent(_lines.last, newWidth + anchor.x - to);
+          } else {
+            builder.addAnchor(anchor, anchor.x - to);
+          }
         }
       }
     }
