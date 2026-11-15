@@ -1,3 +1,59 @@
+## [6.5.0] - 2026-11-16
+
+This release comes out of a review of the package for speed and resource use.
+Every number below was measured before and after, ten interleaved rounds of
+the old build against the new on an idle Apple M1 Pro, AOT-compiled, 170x50
+grid with 10000 lines of scrollback; medians, with the two builds' ranges
+disjoint in every row.
+
+### Faster
+
+* Output whose lines end in `ESC[K` - what `grep --color` and compiler
+  diagnostics emit on every line - no longer grows each line's storage to the
+  full width of the window. Erasing allocated and wrote cells that already
+  read as blank, which undid the line storage 6.3.0 sized from the text, for
+  exactly the output that is kept in scrollback. Lines ending in `ESC[K` write
+  at 130 MiB/s instead of 63.5, `grep --color`-shaped output at 39 instead of
+  12, and 10000 such lines hold 14.6 MB of cell storage instead of 29.3
+  (9.8 MB for 30-column lines).
+
+* Box drawing, block elements, braille and the dash, quote and bullet
+  punctuation (U+2010..U+2027) are written in batched runs. They took the
+  per-character path with a full grapheme segmentation each, so a TUI's
+  borders and bars were written at 4.6 M characters/s; they now go at 125.5.
+  Turkish text with an em dash on each line goes from 82 to 136 MiB/s.
+
+* OSC 8 hyperlinks no longer rescan the whole buffer as they are written.
+  With a link on every line (`ls --hyperlink`) and 10000 lines of scrollback,
+  writing took 1.8 ms a line; it takes 4.3 us. At 1000 lines, 7.2 us becomes
+  3.9 us, and plain output scrolling past a single live link is 17% faster.
+
+* The paragraph cache is sized to the screen. Its keys carry each cell's
+  colour, and at a fixed 2048 entries a screen with a colour per cell - a
+  truecolor gradient, 256-colour output - missed on nearly every cell of
+  every repaint, cursor blink included. It now holds one screen plus a
+  quarter, and never less than before.
+
+Plain ASCII, long lines, SGR-heavy output, Cyrillic and alt-screen redraws are
+unchanged. CJK text measured about 2% slower (9.3 to 9.1 M characters/s).
+
+### Changed behaviour
+
+* With the OSC 8 registry at its 4096-link ceiling, it is re-checked for
+  links that are no longer on screen once per interval rather than on every
+  new link. A link opened while the registry is full still gets no link, as
+  before; links freed by an erase are picked up within at most 2048 opens
+  instead of at the next one.
+
+* The paragraph cache can hold more than 2048 entries per view: about 10800
+  at 170x50. Only a screen that needs that many distinct entries reaches it.
+
+### API
+
+* `BufferLine.writtenLength`: the cells from here to `length` hold nothing.
+* `TerminalPainter.fitParagraphCacheToGrid`, and `ParagraphCache.maximumSize`
+  is now settable.
+
 ## [6.4.0] - 2026-11-11
 
 This release comes out of a full review of the package against hostile and

@@ -58,40 +58,40 @@ reproducible from `script/cross_bench/`, which depends on all three at once and
 drives each through its headless `core.dart` — so nothing per-package sits in
 the measured path.
 
-`xterm` 4.0.0 · `xterm2` 5.2.0 · `xterm3` 6.3.0. Grid 170x50, 10000 lines of
+`xterm` 4.0.0 · `xterm2` 5.2.0 · `xterm3` 6.5.0. Grid 170x50, 10000 lines of
 scrollback, 32 MiB per workload in 8 KiB chunks, AOT-compiled, one package per
-process, three interleaved rounds. Apple M1 Pro, macOS 26.5.1, Dart 3.12.2.
+process, three interleaved rounds. Apple M1 Pro, macOS 26.6.2, Dart 3.13.4.
 
 **Write throughput, MiB/s** — higher is better:
 
 | workload | `xterm` | `xterm2` | `xterm3` | vs `xterm` |
 |---|---|---|---|---|
-| plain ASCII output | 15.8 | 86.6 | **113.4** | **7.2x** |
-| lines wider than the window | 16.6 | 117.8 | **135.5** | **8.2x** |
-| SGR-heavy (coloured) output | 18.8 | **60.8** | 57.4 | 3.1x |
-| UTF-8 (Turkish) | 15.4 | 14.2 | **63.5** | **4.1x** |
-| Cyrillic | 14.8 | 5.5 | **90.4** | **6.1x** |
-| alt-screen TUI redraw | 19.2 | 133.2 | **139.1** | **7.2x** |
+| plain ASCII output | 20.3 | 97.4 | **144.1** | **7.1x** |
+| lines wider than the window | 21.5 | 134.1 | **156.7** | **7.3x** |
+| SGR-heavy (coloured) output | 24.3 | **77.0** | 71.8 | 3.0x |
+| UTF-8 (Turkish) | 19.2 | 17.6 | **135.8** | **7.1x** |
+| Cyrillic | 18.9 | 7.0 | **116.0** | **6.1x** |
+| alt-screen TUI redraw | 25.3 | 174.7 | **181.4** | **7.2x** |
 
 **Scrollback residency, MiB** — 10000 lines of `ls -l`-shaped output retained
 at a 170-column window; lower is better:
 
 | | `xterm` | `xterm2` | `xterm3` |
 |---|---|---|---|
-| resident scrollback | 85.8 | 79.3 | **52.8** |
+| resident scrollback | 86.3 | 78.3 | **52.8** |
 
 **Resize reflow, ms** — one 170 → 80 → 170 column pair with the scrollback
 full, rewrapping all 10000 retained lines twice; lower is better:
 
 | | `xterm` | `xterm2` | `xterm3` |
 |---|---|---|---|
-| per resize | 10.6 | 4.7 | **4.6** |
+| per resize | 9.8 | 4.2 | **4.0** |
 
 Two rows are worth reading honestly rather than as a scoreboard. **SGR output
-is 6% slower than `xterm2`** — a known price of sizing line storage from what a
+is 7% slower than `xterm2`** — a known price of sizing line storage from what a
 line actually writes, which is what buys the scrollback row; the alternatives
 were measured at -22% and -14% elsewhere. And **reflow is level with `xterm2`**;
-the 2.3x there is against `xterm`, not against the immediate predecessor.
+the 2.5x there is against `xterm`, not against the immediate predecessor.
 
 The large gaps are on non-ASCII text, and they are structural: both older
 packages leave the batched write path at the first accented letter, so a
