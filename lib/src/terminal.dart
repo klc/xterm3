@@ -282,9 +282,33 @@ class Terminal
   /// immediately.
   final Set<int> _pendingEvictedHyperlinkIds = {};
 
-  /// Number of distinct evicted hyperlink ids to accumulate before spending
-  /// a full buffer scan to resolve them. See [_onScrollbackLineEvicted].
+  /// Fewest distinct evicted hyperlink ids to accumulate before spending a
+  /// full buffer scan to resolve them. See [_hyperlinkScanInterval].
   static const _hyperlinkEvictionBatchSize = 128;
+
+  /// How many hyperlink events - evicted ids, or opens once the registry has
+  /// hit the [_maxHyperlinks] ceiling - to let pass between two scans of both
+  /// buffers.
+  ///
+  /// A scan costs the whole buffer, so the interval has to grow with the
+  /// buffer or the cost per line grows instead. At a fixed 128, output with a
+  /// link on every line (`ls --hyperlink`) paid a scan of 10000 lines every
+  /// 128 lines; a quarter of the line count keeps that near the cost of
+  /// reading a few lines per line written. Half the ceiling caps it, so dead
+  /// links waiting for a scan can never fill the registry on their own.
+  int get _hyperlinkScanInterval => max(
+        _hyperlinkEvictionBatchSize,
+        min(_mainBuffer.lines.length ~/ 4, _maxHyperlinks ~/ 2),
+      );
+
+  /// Link opens still to go before the registry may be pruned at the ceiling
+  /// again. A prune scans both buffers, and with a scrollback full of live
+  /// links it frees nothing, or only the few links that scrolled out since
+  /// the last one - so pruning on every open at the ceiling was a scan per
+  /// link written, 1.9 ms a line at 10000 lines. Opens that find the registry
+  /// full while this runs down get no link, as they did when a prune freed
+  /// nothing.
+  var _hyperlinkPruneCooldown = 0;
 
   /// Count of `getHyperlinkId` cell inspections spent resolving evicted
   /// hyperlinks. Exposed via [debugHyperlinkEvictionScanCells] for tests
@@ -2590,8 +2614,12 @@ class Terminal
       _cursorStyle.hyperlinkId = existingId;
       return;
     }
+    if (_hyperlinkPruneCooldown > 0) _hyperlinkPruneCooldown--;
     if (_hyperlinks.length >= _maxHyperlinks) {
-      _pruneUnusedHyperlinks();
+      if (_hyperlinkPruneCooldown == 0) {
+        _pruneUnusedHyperlinks();
+        _hyperlinkPruneCooldown = _hyperlinkScanInterval;
+      }
       if (_hyperlinks.length >= _maxHyperlinks) {
         _cursorStyle.hyperlinkId = 0;
         return;
@@ -2643,12 +2671,13 @@ class Terminal
   void _onScrollbackLineEvicted(BufferLine line) {
     if (_hyperlinks.isEmpty) return;
 
-    for (var column = 0; column < line.length; column++) {
+    final written = line.writtenLength;
+    for (var column = 0; column < written; column++) {
       final hyperlinkId = line.getHyperlinkId(column);
       if (hyperlinkId != 0) _pendingEvictedHyperlinkIds.add(hyperlinkId);
     }
 
-    if (_pendingEvictedHyperlinkIds.length >= _hyperlinkEvictionBatchSize) {
+    if (_pendingEvictedHyperlinkIds.length >= _hyperlinkScanInterval) {
       _resolvePendingHyperlinkEvictions();
     }
   }
@@ -2657,15 +2686,12 @@ class Terminal
   /// both buffers, removing whichever ones are no longer referenced by the
   /// cursor's current style or by any live cell.
   ///
-  /// Batching size ([_hyperlinkEvictionBatchSize]) is the amortization knob:
-  /// one scan now answers up to that many candidates instead of one scan per
+  /// Batching size ([_hyperlinkScanInterval]) is the amortization knob: one
+  /// scan now answers up to that many candidates instead of one scan per
   /// candidate, so the average cost per evicted hyperlink is O(buffer size /
-  /// batch size) rather than O(buffer size). 128 was picked as a modest
-  /// fraction (~3%) of [_maxHyperlinks] - large enough that the per-eviction
-  /// overhead of the assert-free path stays close to O(line length), small
-  /// enough that at most 127 dead hyperlinks are ever left resident between
-  /// scans, which is a small sliver of the 4096-entry ceiling this exists to
-  /// avoid hitting.
+  /// batch size) rather than O(buffer size). It starts at 128 and grows with
+  /// the scrollback, up to half of [_maxHyperlinks] - so that many dead
+  /// hyperlinks can be left resident between scans, and no more.
   void _resolvePendingHyperlinkEvictions() {
     if (_pendingEvictedHyperlinkIds.isEmpty) return;
 
@@ -2679,8 +2705,9 @@ class Terminal
       for (var i = 0; i < lines.length; i++) {
         if (remaining.isEmpty) break;
         final line = lines[i];
-        for (var column = 0; column < line.length; column++) {
-          _hyperlinkEvictionScanCellsForTesting++;
+        final written = line.writtenLength;
+        _hyperlinkEvictionScanCellsForTesting += written;
+        for (var column = 0; column < written; column++) {
           final hyperlinkId = line.getHyperlinkId(column);
           if (hyperlinkId != 0) remaining.remove(hyperlinkId);
         }
@@ -2708,7 +2735,7 @@ class Terminal
   int get debugHyperlinkCount => _hyperlinks.length;
 
   /// The number of `getHyperlinkId` cell inspections spent resolving evicted
-  /// hyperlinks so far. Exposed only so a test can assert this stays
+  /// hyperlinks and pruning the registry at its ceiling so far. Exposed only so a test can assert this stays
   /// sub-quadratic in the number of evicted lines; not part of the public
   /// API surface.
   @visibleForTesting
@@ -2723,7 +2750,9 @@ class Terminal
 
     void collectBuffer(Buffer buffer) {
       buffer.lines.forEach((line) {
-        for (var column = 0; column < line.length; column++) {
+        final written = line.writtenLength;
+        _hyperlinkEvictionScanCellsForTesting += written;
+        for (var column = 0; column < written; column++) {
           final hyperlinkId = line.getHyperlinkId(column);
           if (hyperlinkId != 0) usedIds.add(hyperlinkId);
         }

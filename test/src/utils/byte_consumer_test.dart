@@ -118,12 +118,18 @@ void main() {
     expect(consumer.printableAsciiRunLength, 1);
   });
 
+  test('single-cell runs span dashes, box drawing and braille', () {
+    final consumer = ByteConsumer()..add('a \u{2014} ┌──┐ ▁▂▃ ⣿⣀\u{4E00}');
+
+    expect(consumer.printableTextRunLength, 'a \u{2014} ┌──┐ ▁▂▃ ⣿⣀'.length);
+  });
+
   test('single-cell runs stop at characters that need the slow path', () {
-    // Soft hyphen is zero width; the em dash and CJK are outside the ranges;
-    // an emoji is a surrogate pair.
+    // Soft hyphen and the zero width joiner are zero width; CJK is outside
+    // the ranges; an emoji is a surrogate pair.
     for (final text in [
       'a\u{00AD}b',
-      'a\u{2014}b',
+      'a\u{200D}b',
       'a\u{4E00}b',
       'a\u{1F600}b'
     ]) {
