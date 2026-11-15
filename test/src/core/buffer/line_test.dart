@@ -191,6 +191,62 @@ void main() {
     });
   });
 
+  group('BufferLine erasing cells nothing was written to', () {
+    test('allocates no storage for the default background', () {
+      final line = BufferLine(170);
+      line.eraseRange(0, 170, CursorStyle());
+      // ignore: deprecated_member_use, invalid_use_of_visible_for_testing_member
+      expect(line.data, isEmpty);
+
+      line.setAsciiCells(0, 'hello', 0, 5, CursorStyle());
+      line.eraseRange(5, 170, CursorStyle());
+      // ignore: deprecated_member_use, invalid_use_of_visible_for_testing_member
+      expect(line.data.length, 64 * 4, reason: 'still the first-write store');
+      expect(line.getText(), 'hello');
+      expect(line.writtenLength, 5);
+    });
+
+    test('still fills to the end with a background colour', () {
+      final line = BufferLine(170);
+      line.setAsciiCells(0, 'hello', 0, 5, CursorStyle());
+      line.eraseRange(5, 170, CursorStyle(background: 42));
+
+      expect(line.getBackground(5), 42);
+      expect(line.getBackground(169), 42);
+      expect(line.writtenLength, 170);
+
+      // And a default erase afterwards has to take that colour away again.
+      line.eraseRange(3, 170, CursorStyle());
+      expect(line.getBackground(5), 0);
+      expect(line.getBackground(169), 0);
+      expect(line.getText(), 'hel');
+      expect(line.writtenLength, 3);
+    });
+
+    test('clears what was written past an earlier erase', () {
+      final line = BufferLine(80);
+      line.setAsciiCells(0, 'abcdef', 0, 6, CursorStyle());
+      line.eraseRange(2, 80, CursorStyle());
+      line.setCell(40, 0x78, 1, CursorStyle(foreground: 7));
+      expect(line.writtenLength, 41);
+
+      line.eraseRange(0, 80, CursorStyle());
+      expect(line.getCodePoint(40), 0);
+      expect(line.getForeground(40), 0);
+      expect(line.getText(), '');
+      expect(line.writtenLength, 0);
+    });
+
+    test('leaves protected cells and the written extent alone', () {
+      final line = BufferLine(20);
+      line.setCell(10, 0x78, 1, CursorStyle(attrs: CellAttr.protected));
+      line.eraseRange(0, 20, CursorStyle(), respectProtected: true);
+
+      expect(line.getCodePoint(10), 0x78);
+      expect(line.writtenLength, 11);
+    });
+  });
+
   group('BufferLine.resize', () {
     test('can resize', () {
       final line = BufferLine(10);

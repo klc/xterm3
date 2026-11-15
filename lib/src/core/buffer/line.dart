@@ -36,6 +36,12 @@ class BufferLine with IndexedItem {
 
   Uint32List _data;
 
+  /// Cells at or past this index hold nothing: all zero, whether because
+  /// they were never written or because an erase to the default background
+  /// took them back. Every store goes through [_ensureCapacity], which is what
+  /// raises it; [eraseRange] is what lowers it.
+  int _used = 0;
+
   /// Grows storage so cell [index] is addressable. The common call finds the
   /// room already there and costs one comparison.
   ///
@@ -45,6 +51,7 @@ class BufferLine with IndexedItem {
   /// that later outgrows that store jumps straight to its full [length]
   /// instead of climbing in 32-cell steps.
   void _ensureCapacity(int index) {
+    if (index >= _used) _used = index + 1;
     final required = (index + 1) * _cellSize;
     if (required <= _data.length) return;
 
@@ -73,6 +80,11 @@ class BufferLine with IndexedItem {
   var isWrapped = false;
 
   int get length => _length;
+
+  /// Cells from here to [length] hold nothing: no content, no colour, no
+  /// attributes. A scan that is looking for any of those can stop here
+  /// instead of walking the blank tail of a short line.
+  int get writtenLength => _used < _length ? _used : _length;
 
   final _anchors = <CellAnchor>[];
 
@@ -419,9 +431,20 @@ class BufferLine with IndexedItem {
     if (end >= _length) _clearHiddenCells();
 
     end = min(end, _length);
+    // Cells past [_used] already read as erased to the default background, so
+    // they need no writing - and no storage allocated to write them into.
+    final used = _used;
+    if (style.background == 0 && end > used) end = used;
     for (var i = start; i < end; i++) {
       if (!_canErase(i, respectProtected)) continue;
       eraseCell(i, style);
+    }
+    // Everything from [start] on is zero again, so the next erase stops here.
+    if (style.background == 0 &&
+        !respectProtected &&
+        end >= used &&
+        start < used) {
+      _used = start;
     }
   }
 
