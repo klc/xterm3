@@ -5098,6 +5098,30 @@ void main() {
     expect(terminal.debugHyperlinkEvictionScanCells, lessThan(200000));
   });
 
+  test('Terminal does not rescan the buffers for every link at the ceiling',
+      () {
+    final terminal = Terminal(maxLines: 6000)..resize(20, 10);
+
+    // 4096 live links, none of which can be pruned: nothing is evicted and
+    // nothing is erased. Every further link finds the registry full.
+    for (var index = 0; index < 4096; index++) {
+      terminal.write(
+        '\x1b]8;;https://example.com/$index\x1b\\x\x1b]8;;\x1b\\\r\n',
+      );
+    }
+    final before = terminal.debugHyperlinkEvictionScanCells;
+    for (var index = 0; index < 1000; index++) {
+      terminal.write(
+        '\x1b]8;;https://example.com/more/$index\x1b\\x\x1b]8;;\x1b\\\r\n',
+      );
+    }
+
+    // A prune per link would read every written cell of ~5000 lines a
+    // thousand times over, about 4.5 million inspections. One prune per scan
+    // interval reads them once.
+    expect(terminal.debugHyperlinkEvictionScanCells - before, lessThan(100000));
+  });
+
   test('Terminal insert blank chars shifts hyperlinks without linking blanks',
       () {
     final terminal = Terminal()..resize(10, 2);
