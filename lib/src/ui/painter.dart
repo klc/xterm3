@@ -129,6 +129,7 @@ class TerminalPainter {
         _theme = theme,
         _textScaler = textScaler,
         _devicePixelRatio = devicePixelRatio,
+        _minParagraphCacheSize = paragraphCacheSize,
         _paragraphCache = ParagraphCache(paragraphCacheSize),
         _proceduralGlyphCache = ProceduralGlyphCache(proceduralGlyphCacheSize);
 
@@ -142,6 +143,25 @@ class TerminalPainter {
   /// cell no longer produces the same visual output. For example, when
   /// [_textStyle] is changed, or when the system font changes.
   final ParagraphCache _paragraphCache;
+
+  final int _minParagraphCacheSize;
+
+  /// Sizes the paragraph cache so that one screen of [columns] x [rows] fits.
+  ///
+  /// Keys carry the cell's colour, so a screen where most cells differ in
+  /// colour - a truecolor gradient, 256-colour output - needs about one entry
+  /// per cell. A cache smaller than that does not degrade, it stops working:
+  /// cells are looked up in the same order every frame, so each frame evicts
+  /// what the next one needs, and at a fixed 2048 entries an 8060-cell screen
+  /// laid out 8060 paragraphs on every repaint, cursor blink included. The
+  /// quarter on top keeps the eviction batch from cutting into a full screen.
+  void fitParagraphCacheToGrid(int columns, int rows) {
+    final cells = columns * (rows + 1);
+    final size = max(_minParagraphCacheSize, cells + (cells >> 2));
+    if (size != _paragraphCache.maximumSize) {
+      _paragraphCache.maximumSize = size;
+    }
+  }
 
   /// Cache of rasterised procedural glyphs (box-drawing, Powerline, Braille).
   /// Should be invalidated at the same points as [_paragraphCache]: anything

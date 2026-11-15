@@ -13,7 +13,10 @@ class ParagraphCache {
     }
   }
 
-  final int maximumSize;
+  /// Entries kept before the least recently used ones are evicted. Can be
+  /// changed while the cache is in use: lowering it evicts down to the new
+  /// size over the next few insertions rather than at once.
+  int maximumSize;
 
   final _cache = <Object, _CachedParagraph>{};
 

@@ -878,6 +878,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     canvas.save();
     canvas.clipRect(offset & size);
     TerminalRenderStats.paints++;
+    // Rows on screen, not rows in the terminal: without auto-resize the view
+    // can be taller than the terminal's own grid.
+    _painter.fitParagraphCacheToGrid(
+      _terminal.viewWidth,
+      max(
+        _terminal.viewHeight,
+        (size.height / _painter.cellSize.height).ceil(),
+      ),
+    );
     if (kReleaseMode) {
       _paint(context, offset);
     } else {
