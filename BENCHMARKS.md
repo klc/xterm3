@@ -509,7 +509,9 @@ side of that trade an application wants is not the package's call.
 
 Note what this is not: the unpaced case was never freezing. Its worst UI frame
 during the burst is 3.2ms. The frame rate is low because parsing owns the
-thread between frames, not because any single frame is slow.
+thread between frames, not because any single frame is slow. That holds for
+`flood`, which has no PTY. Through a real PTY the app draws a handful of frames
+in a whole burst: see *Frame starvation through a PTY — 2026-11-20*.
 
 ### Recycling evicted lines — measured, rejected
 
@@ -993,17 +995,24 @@ on another.
    (see *Where the `unicode` time goes* below):
    decode and parse in a separate isolate and hand the UI thread something it
    only has to paint. Architectural — `Terminal` state is read directly by the
-   renderer today.
+   renderer today. A spike was measured and not pursued: *Frame starvation
+   through a PTY* below.
 2. **Profile the `unicode` path.** Done: *Where the `unicode` time goes* and
    *Grapheme-join fast paths* below. The largest gap (6.7x to Ghostty, 3.3x to
    Alacritty). The headless core does Turkish at 63.5 MiB/s (table above), so
    the cost is in CJK/emoji/wide cells, the paint path, or both — split the
    payload by script before guessing.
-3. **Backpressure.** `flutter_pty2`'s `ackRead` stops reading the PTY while the
-   parser is behind. Removes the vtebench freeze and the unbounded memory; no
-   throughput gain.
-4. **`PacedTerminalWriter`.** Already exists (see *Pacing the write path*):
-   smoother frames at about 50% longer drain. No throughput gain.
+3. **Backpressure.** Measured (*Frame starvation through a PTY* below): on
+   `flutter_pty2` 1.0.0, `ackRead` gives full frame rate and no backlog, and
+   costs 48-76% of throughput, because every ~1 KiB read waits for its own
+   ack. The coalescing plugin of item 5 changes that: its output credits
+   throttle the producer without an ack per read.
+4. **`PacedTerminalWriter`.** Did nothing through a PTY until `996a7b4`: its
+   budget was per drain pass, and a PTY delivers one chunk per pass. See
+   *`PacedTerminalWriter` paces across turns* below. No throughput gain.
+5. **Coalesce reads in `flutter_pty2`.** Exists on an unreleased local branch
+   of flutter_pty2 3.0.0 and was measured: *flutter_pty2 with coalesced reads*
+   below.
 
 ## Where the `unicode` time goes — 2026-11-19
 
@@ -1238,7 +1247,8 @@ segmentation, the plane-1 table one against the binary search it replaces.
 Tests 1079 → 1094, all passing.
 
 What that does not cover: the digest leaves out cell attributes and the
-pending-wrap state. The numbers are headless; the app was not re-measured.
+pending-wrap state. The numbers are headless; the app is measured under *In
+the app* below.
 And the width table is Unicode 17 while `characters` 1.4.1 segments by
 Unicode 16 — `zeroWidthExtends` works around the difference (U+1ACF-1AEB), and
 the exhaustive tests will flag it when either side moves.
@@ -1275,6 +1285,341 @@ script/term_compare/probe_ab.sh /tmp/ulp-base /tmp/ulp 3 /tmp/ab.log \
   /tmp/pay/{ascii,unicode,latin-ext,cjk,emoji,combining,box} \
   /tmp/pay/c-{wide-only,wide-narrow,hangul-only,emoji-only,emoji-narrow,latin-combining}
 ```
+
+### In the app — 2026-11-20
+
+The example app (`e2e_bench.dart`, release, real PTY, view on, no profiling)
+built before `7be44d3` (at `8e2b14b`) and after it, alternated one round at a
+time. 64 MiB per payload, 100x37, five rounds, medians, MiB/s:
+
+| payload | before | after | ratio |
+|---|---|---|---|
+| ascii | 76.4 | 77.6 | 1.02 |
+| unicode | 16.0 | **27.7** | 1.73 |
+| latin-ext | 75.8 | 76.5 | 1.01 |
+| cyrillic | 75.2 | 76.0 | 1.01 |
+| cjk | 13.1 | **23.6** | 1.81 |
+| emoji | 7.9 | **12.2** | 1.55 |
+| combining | 6.2 | **11.3** | 1.81 |
+| box | 88.6 | 88.9 | 1.00 |
+
+The app gets what the headless table promised: 1.55-1.81x on the four rows
+that reach the join check, against 1.55-1.88x headless, and the rows that never
+reach it within 2%.
+
+```sh
+# Base build: the harness does not exist at 8e2b14b, so it is copied in, as
+# bench-compare.sh copies its harness. Keep the bundle named example.app.
+git worktree add --detach /tmp/xb 8e2b14b
+cp example/lib/e2e_bench.dart example/lib/e2e_worker.dart /tmp/xb/example/lib/
+(cd /tmp/xb/example && flutter build macos --release -t lib/e2e_bench.dart)
+mkdir -p /tmp/app-base && cp -R /tmp/xb/example/build/macos/Build/Products/Release/example.app /tmp/app-base/
+git worktree remove --force /tmp/xb
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+mkdir -p /tmp/app-new && cp -R example/build/macos/Build/Products/Release/example.app /tmp/app-new/
+script/term_compare/app_ab.sh /tmp/pay /tmp/appab /tmp/app-base /tmp/app-new 5
+python3 script/term_compare/app_ab_table.py /tmp/appab/results.jsonl
+```
+
+Built here, the new side is this tree, which also has `996a7b4` and the bench
+flags of `c717fec`; with no flag set neither is on this path.
+
+## Frame starvation through a PTY — 2026-11-20
+
+`flood` (*Pacing the write path*) has no PTY, and there the unpaced case drew 37
+frames a second and was never freezing. Through a real PTY it does freeze. The
+example app (`e2e_bench.dart` with `XB_PROF`, release, `flutter_pty2` 1.0.0,
+view on) draws **1-8 frames during a whole 64 MiB payload**, and the longest
+gap between two frames is **0.2-2.8 s** — every unpaced run in this section and
+the next two. All tables here: real PTY, 64 MiB per payload, 100x37, Apple M1
+Pro, display at 75 Hz, five interleaved rounds, medians.
+
+**The cause, measured.** `flutter_pty2` 1.0.0 posts one port message per
+`read()`, and a macOS PTY returns about 1 KiB per read: 0.99 KiB per
+`terminal.write` call. The messages arrive far faster than they are parsed. The
+driver has handed over all 64 MiB after 0.5-0.8 s, with 5-53 MiB still
+unparsed at that point (derived), and the UI thread spends the rest of the
+payload draining that backlog. Split where the driver finished writing
+(`spike_phase.py`, run 3 below), every unpaced frame falls in the burst; the
+tail — 1.8 s on unicode, 2.3 s on cjk — draws none. Peak RSS is up to 106 MiB
+above the same run with `ackRead` (unicode 304 against 198 MiB).
+
+### Levers on flutter_pty2 1.0.0
+
+Each cell is MiB/s / frames during the payload / longest gap between frames, ms.
+Two runs; compare only within one table.
+
+Run 1:
+
+| config | ascii | unicode | cjk |
+|---|---|---|---|
+| unpaced | 77.4 / 4 / 405 | 27.7 / 1 / 1586 | 22.9 / 1 / 2545 |
+| `ackRead`, ack after parsing (`ack`) | 18.9 / 254 / 14 | 12.8 / 374 / 16 | 11.8 / 408 / 15 |
+| `ackRead`, ack on arrival (`ack-early`) | 20.3 / 237 / 15 | 16.3 / 293 / 15 | 15.1 / 317 / 14 |
+| `PacedTerminalWriter` before `996a7b4` | 71.2 / 3 / 457 | 26.6 / 1 / 2341 | 22.0 / 1 / 2619 |
+| the same + `ackRead` | 19.6 / 245 / 15 | 15.5 / 308 / 15 | 14.6 / 330 / 14 |
+| isolate, snapshot pulled per frame, acked (`isolate`) | 33.6 / 142 / 14 | 17.5 / 271 / 14 | 15.2 / 316 / 14 |
+| the same, ack on arrival (`isolate-early`) | 36.2 / 132 / 14 | 21.6 / 222 / 17 | 18.9 / 254 / 14 |
+
+Run 3 (run 2 repeated `ack-early` and `isolate-early` within 7%):
+
+| config | ascii | unicode | cjk |
+|---|---|---|---|
+| unpaced | 75.0 / 5 / 316 | 27.1 / 1 / 2257 | 22.8 / 1 / 2700 |
+| isolate, snapshot pushed (`isolate-push`) | 65.7 / 74 / 17 | 26.0 / 188 / 17 | 21.5 / 228 / 17 |
+| budget across turns, 8 ms (`paced-span`) | 55.3 / 92 / 24 | 23.2 / 239 / 54 | 19.8 / 314 / 26 |
+| budget across turns, 11 ms (`paced-span11`) | 59.8 / 64 / 28 | 23.8 / 178 / 67 | 20.4 / 226 / 35 |
+
+**Back pressure works, and on 1.0.0 it is expensive.** `ackRead` holds the
+display's 75 fps with a longest gap of 14-16 ms and no backlog, at 48-76% less
+throughput (ascii 77.4 → 18.9, unicode 27.7 → 12.8, cjk 22.9 → 11.8): every
+~1 KiB chunk waits for its own ack round trip. Acking on arrival recovers part
+of it and nothing else changes.
+
+**The shipped `PacedTerminalWriter` did nothing.** Never more than one chunk
+queued (`pendingChunks` max 1), frames and gaps as unpaced. Its budget was per
+drain pass, and a pass ended when the queue was empty: a PTY delivers one chunk
+per event-loop turn, so every pass wrote its one chunk and returned, and the
+budget was never reached.
+
+**A budget that spans turns does work.** `paced-span` is a bench-only pacer
+(`XB_PACED=2`) that sums the time spent in `Terminal.write` across chunks and
+queues whatever arrives past the budget until after the frame: the longest gap
+goes from 0.3-2.7 s to 24-54 ms, at 13-26% of throughput. An 11 ms budget buys
+some throughput back and lengthens the gaps. Both still take everything the PTY
+delivers into their queue — up to 62039 chunks.
+
+**An isolate is smooth and buys no throughput.** `isolate-push`: a worker
+isolate owns the PTY and a headless `Terminal`, and pushes a 100x37 snapshot of
+the visible grid at most every 13 ms to a mirror `Terminal` that the view
+shows. Longest gap 17 ms on every payload, at 88-96% of unpaced throughput in
+that run. No gain, because the stream is sequential and another core parses it
+at the same rate, and the backlog is as unbounded as unpaced (20-53 MiB
+unparsed when the driver finishes). A snapshot is 59.2 KB and takes ~22 us to
+build in the worker; applying it on the UI thread took 59-67 us in runs 1 and 2
+and 87-92 us in run 3, and a snapshot reached the UI a median 0.1-0.2 ms after
+it was requested. Run 2's `isolate-push` was smooth but less so — 61.4 / 77 / 26,
+24.7 / 192 / 27, 20.6 / 232 / 27 — and the data does not show whether that
+build differed from run 3's.
+
+**Not pursued.** The spike mirrors only the visible cells. A real
+implementation would have to carry scrollback, combining characters, the
+hyperlink table, input, resize, selection and search across the isolate
+boundary; answer the callbacks a `Terminal` makes synchronously today (queries
+the application answers inline); keep the modes input encoding depends on
+(keyboard protocol, mouse reporting, bracketed paste) in step on the UI side;
+and keep today's path regardless, because the web has no isolates. For a
+smoothness gain that a budget across turns delivers on the UI thread, at no
+throughput gain, that is not worth it — the next section is that budget in the
+package.
+
+```sh
+python3 script/term_compare/gen.py 64 /tmp/pay
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+script/term_compare/spike.sh /tmp/pay /tmp/spike1 5 "unpaced ack ack-early isolate isolate-early"
+script/term_compare/spike.sh /tmp/pay /tmp/spike3 5 "unpaced isolate-push paced-span paced-span11"
+python3 script/term_compare/spike_table.py /tmp/spike1   # also: backlog, RSS, snapshot costs
+python3 script/term_compare/spike_phase.py /tmp/spike3   # burst / tail split
+```
+
+The two writer rows were taken before `996a7b4`. At this tree `paced` is the
+fixed writer, so the old row reproduces only as `paced-old` with `APP_OLD` set
+to a build at `ba46f04` (recipe as under *In the app*), and the old writer with
+`ackRead` has no config.
+
+## `PacedTerminalWriter` paces across turns — 2026-11-20
+
+`996a7b4` makes the budget per frame. Time spent inside `Terminal.write` is
+summed across `write()` calls, and once `frameBudget` (8 ms) of it has been
+spent since the last frame, further chunks are queued until a frame has been
+produced. The check is made before a chunk is written, never after: with a PTY
+the chunk that has to wait arrives on a later turn. A chunk arriving after a
+frame interval (17 ms) with no write starts a fresh budget and is written at
+once — the frame is inferred from the idleness — so ordinary interactive output
+is not delayed. If the frame waited for has not come within 100 ms, the writer
+stops waiting for it and, until it comes, leaves one frame interval between
+budgets, so a window whose frames have stopped keeps draining and replies the
+terminal owes still go out. Public API unchanged.
+
+Acceptance, one interleaved run, MiB/s / frames / longest gap ms:
+
+| config | ascii | unicode | cjk |
+|---|---|---|---|
+| unpaced | 72.1 / 8 / 206 | 26.4 / 2 / 1825 | 22.3 / 1 / 2747 |
+| writer before `996a7b4` | 67.9 / 6 / 318 | 25.6 / 1 / 2321 | 21.4 / 2 / 2847 |
+| writer after | 53.6 / **100 / 19** | 22.9 / **245 / 48** | 19.4 / **322 / 23** |
+| `paced-span`, for reference | 55.4 / 93 / 22 | 23.0 / 240 / 51 | 19.7 / 316 / 22 |
+
+The writer now lands on the bench-only pacer: throughput within 4%, frames and
+gaps alike. Against unpaced in the same run it costs 13-26% of throughput and
+takes the longest gap from 0.2-2.7 s to 19-48 ms. The binary measured here
+differed from what shipped only in the no-frame fallback below, which a 48 ms
+gap does not reach; a second run of the shipped code gave 54.6 / 97 / 24,
+22.9 / 245 / 50 and 19.5 / 322 / 23.
+
+**Measured, rejected:** when no frame comes, yielding one event-loop turn
+between budgets instead of a frame interval. Measured with a `waitForFrame`
+that never completes while the window stays visible (`XB_PACED=3`): 57.0 /
+26.0 / 21.8 MiB/s, but longest gaps of 260 / 1039 / 1364 ms — back-to-back
+budgets starve the frames as unpaced output does. With the frame interval that
+shipped, the same setup gives gaps of 102 / 51 / 33 ms at 25.4 / 9.6 / 7.3
+MiB/s, about a third of unpaced. So a window whose frames have stopped, or
+whose frames the writer does not hear about, drains at about a third of the
+normal rate. A truly hidden window was not measured.
+
+What this does not cover. Tests 1104, all passing. With a visible window the
+100 ms timeout has not been seen to matter: the longest gap in any round of the
+fixed writer was 63 ms on ascii, unicode and cjk and 87 ms on `sgr` (next
+section), on one machine. Whether it fired was not counted. There is still no back pressure in the class: the queue takes
+everything the PTY delivers, up to 59034 chunks here, about 57 MiB at 0.99 KiB
+a chunk (derived). How long input takes to show its effect — a Ctrl-C's output
+behind that queue — was not measured. And the class stays opt-in: nothing in
+the package uses it.
+
+```sh
+# paced-old: a build at ba46f04, recipe as under *In the app*, into /tmp/app-old
+APP_OLD=/tmp/app-old/example.app/Contents/MacOS/example \
+  script/term_compare/spike.sh /tmp/pay /tmp/accept 5 "unpaced paced-old paced paced-span paced-noframe"
+python3 script/term_compare/spike_table.py /tmp/accept
+```
+
+At this tree `paced-noframe` is the shipped fallback. The zero-delay variant
+was a throwaway build — `_waitForNextFrame` arming `Timer(Duration.zero, ...)`
+instead of `Timer(_frameInterval, ...)` — and is not in the repo.
+
+## flutter_pty2 with coalesced reads — 2026-11-20
+
+Old: `flutter_pty2` 1.0.0 from pub.dev, which the example depends on. New: a
+**local, unreleased** checkout of flutter_pty2 3.0.0 at `2c525c8` (branch
+`perf/coalesce-output-reads`), in which reads are coalesced into events of up to
+64 KiB, output flow is controlled by automatic credits with a 256 KiB window,
+and pausing the stream subscription withholds credit. These are numbers for
+that commit, not for a release. Both builds are this tree with the fixed
+writer; "writer" below is `PacedTerminalWriter` as of `996a7b4` in every row.
+
+MiB/s / frames / longest gap ms:
+
+| config | ascii | unicode | cjk | sgr |
+|---|---|---|---|---|
+| 1.0.0, unpaced | 75.3 / 5 / 348 | 27.2 / 1 / 2264 | 22.9 / 1 / 2781 | 37.6 / 2 / 1185 |
+| 1.0.0, writer | 55.6 / 95 / 22 | 23.2 / 241 / 54 | 19.9 / 318 / 25 | 6.3 / 177 / 83 |
+| 3.0.0 local, unpaced | 77.4 / 16 / 149 | 28.6 / 18 / 296 | 24.6 / 18 / 259 | 27.8 / 18 / 243 |
+| 3.0.0 local, writer | 65.5 / 92 / 16 | 25.5 / 209 / 24 | 22.1 / 274 / 13 | 7.0 / 156 / 69 |
+| 3.0.0 local, writer + pause | 64.6 / 93 / 14 | 25.5 / 208 / 25 | 22.1 / 274 / 14 | 7.1 / 157 / 66 |
+
+KiB per `terminal.write` call / peak PTY bytes queued in the writer, MiB:
+
+| config | ascii | unicode | cjk | sgr |
+|---|---|---|---|---|
+| 1.0.0, unpaced | 0.99 / – | 0.99 / – | 0.99 / – | 0.99 / – |
+| 1.0.0, writer | 0.99 / 29.4\* | 0.99 / 59.5\* | 0.99 / 58.9\* | 0.99 / 60.8\* |
+| 3.0.0 local, unpaced | 38.4 / – | 19.8 / – | 13.3 / – | 22.2 / – |
+| 3.0.0 local, writer | 34.2 / 0.5 | 44.6 / 12.0 | 42.8 / 16.3 | 31.1 / 0.4 |
+| 3.0.0 local, writer + pause | 34.9 / 0.5 | 43.5 / 1.0 | 41.5 / 1.0 | 31.0 / 0.4 |
+
+\* derived: peak queued chunks × KiB per write.
+
+**Unpaced, the producer is throttled.** The driver's writes now return only as
+fast as the terminal parses — accepted and parsed are the same 2.23 s on
+unicode — so nothing piles up: at most 0.3 MiB unparsed when the driver finishes,
+against 12-52 MiB on 1.0.0, and peak RSS 283 → 216 MiB on unicode. Frames go
+from 1-5 to 16-18 per payload and the longest gap from 0.3-2.8 s to 149-296 ms:
+better, not smooth. Throughput moves +3-7% on ascii, unicode and cjk.
+
+**With the writer** the gaps on ascii, unicode and cjk are 13-25 ms and
+throughput is 10-18% above the writer on 1.0.0. But the writer still takes everything it is given, and on
+unicode and cjk its queue peaks at 12.0 and 16.3 MiB: that is growth over a
+64 MiB payload, not a bound.
+
+**Pausing the subscription bounds it.** A bench-only rule in
+`e2e_bench_pty3.dart` (`XB_PAUSE=1`): pause the output subscription above 1 MiB
+queued in the writer, resume below 256 KiB. Peak queue at most 1.0 MiB on every
+payload, and throughput, frames and gaps where they were without it. The pause
+only engaged on unicode and cjk, 46-54 times per run, so what it costs on
+ascii and `sgr` has not been exercised.
+
+**`sgr` with the writer is slow on either plugin**, 6.3 and 7.0 MiB/s, because
+one frame of that payload takes 44-52 ms to build (median per frame, in every
+`sgr` row; under 2 ms on ascii), so 156-177 frames fill most of the window. In one
+diagnostic run, 178 frames' builds summed to 8.9 s of a 10.5 s window. A paint
+cost, under investigation. It is also why unpaced `sgr` got slower on the new
+plugin: it draws 18 frames instead of 2, about 0.8 s of build at ~44 ms each,
+and the payload took 0.6 s longer (derived).
+
+The 3.x entrypoint is not part of the example, because the example depends on
+`flutter_pty2: ^1.0.0` and CI analyzes it against that: it lives in
+`script/term_compare/pty3/`, excluded from analysis, and is copied in for the
+build.
+
+```sh
+# Both binaries: recipe at the top of script/term_compare/spike_pty3.sh
+APP=/tmp/pty3/example.app/Contents/MacOS/example APP_OLD=/tmp/pty1/example.app/Contents/MacOS/example \
+  PAYLOADS="ascii unicode cjk sgr" script/term_compare/spike_pty3.sh /tmp/pay /tmp/pty3run 5
+PAYLOADS="ascii unicode cjk sgr" python3 script/term_compare/spike_table.py /tmp/pty3run
+```
+
+## Against Ghostty again — 2026-11-20
+
+The 2026-11-19 comparison, re-run with the writer as an extra xterm3 leg. Same
+driver, PTY and 100x37 grid; five interleaved rounds, medians, MiB/s. Two runs;
+compare only within one table.
+
+Run 1, `flutter_pty2` 1.0.0, writer as of `996a7b4`:
+
+| workload | xterm3 | xterm3 + writer | Ghostty 1.4.0 |
+|---|---|---|---|
+| ascii | 72.8 | 53.2 | **101.7** |
+| sgr | 36.5 | 6.1 | **71.2** |
+| cursor | 41.8 | 31.6 | **78.8** |
+| unicode | 26.4 | 22.2 | **85.6** |
+
+Run 2, the local flutter_pty2 3.0.0 build of the previous section, writer +
+pause:
+
+| workload | xterm3 | xterm3 + writer + pause | Ghostty 1.4.0 |
+|---|---|---|---|
+| ascii | 75.5 | 63.3 | **127.5** |
+| sgr | 25.9 | 6.9 | **89.0** |
+| cursor | 40.5 | 36.2 | **91.0** |
+| unicode | 28.1 | 24.9 | **103.5** |
+
+**Read the ratios as approximate.** Ghostty's own numbers moved 15-25% between
+the two runs, and run 1 sits 19-30% below the 2026-11-19 table, with the same
+Ghostty 1.4.0. xterm3's ascii and cursor rows stayed within 6% across all
+three; its unicode row moved with the grapheme work, and its `sgr` row with the
+frame cost of the previous section. The unicode gap to Ghostty was 6.7x on
+2026-11-19 and is 3.2x and 3.7x in these two runs.
+
+Throughput only: the clock is the DSR reply, and Ghostty's frames were not
+measured, so the writer columns have no Ghostty counterpart for smoothness. No
+Alacritty column: no binary was available on the day.
+
+```sh
+python3 script/term_compare/gen.py 64 /tmp/pay
+# Results land next to the payloads, so each run gets its own copy.
+mkdir -p /tmp/cmp1 /tmp/cmp2
+cp /tmp/pay/{ascii,sgr,unicode,cursor} /tmp/cmp1/ && cp /tmp/pay/{ascii,sgr,unicode,cursor} /tmp/cmp2/
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+script/term_compare/cmp_paced.sh /tmp/cmp1 5
+# /tmp/pty3: the 3.x build, recipe at the top of script/term_compare/spike_pty3.sh
+APP=/tmp/pty3/example.app/Contents/MacOS/example TAG=-pty3 PAUSE=1 \
+  script/term_compare/cmp_paced.sh /tmp/cmp2 5
+```
+
+### What is left
+
+- **Frame build cost on SGR-dense screens.** 44-52 ms per frame on `sgr` is
+  what holds the writer to 6-7 MiB/s there, and what slows unpaced `sgr` once
+  frames happen at all.
+- **The per-code-point write path**, where the largest throughput gap to
+  Ghostty is: 3.2-3.7x on unicode, against 1.9-2.2x on cursor and 1.4-1.7x on
+  ascii.
+- **An adaptive budget for the writer** when frames are expensive — giving
+  parsing more of the frame when the paint takes 45 ms. An idea, not measured.
+- **The pause logic in the package.** The bench's pause-above / resume-below
+  rule bounds the queue on the 3.x plugin; it could live in
+  `PacedTerminalWriter` or alongside it rather than in each application. An
+  idea, not measured as a package change.
 
 ## Adding a workload
 
