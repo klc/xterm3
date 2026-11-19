@@ -941,6 +941,341 @@ frame pipeline, and it only exists for this tree. A cross-package render
 comparison would need three example apps whose cell metrics agree, and cell
 metrics are the thing this file already records as not stable across builds.
 
+## Against Ghostty and Alacritty, end to end — 2026-11-19
+
+Every table above stops at the terminal core. This one is the whole app: the
+example app (`example/lib/e2e_bench.dart`, release build, `flutter_pty2`, Dart
+`Utf8Decoder`) against Ghostty 1.4.0 and Alacritty 0.17.0 (built with cargo),
+each running the same driver in a real PTY. Grid 100x37 in all three, checked
+on every sample. 64 MiB per workload, five interleaved rounds, medians. Apple
+M1 Pro, Flutter 3.50.0. Harness: `script/term_compare/`.
+
+The clock stops on a DSR reply (`ESC[6n`) sent after the payload: the reply
+can only come once every byte before it is parsed. It proves parsed, not
+painted, and says nothing about input latency or frame pacing.
+
+### Throughput, MiB/s
+
+| workload | xterm3 | Alacritty | Ghostty |
+|---|---|---|---|
+| ascii | 77.0 | 62.5 | **144.9** |
+| sgr | 39.1 | 54.4 | **95.4** |
+| cursor (alt screen, CUP + short writes) | 42.9 | 65.7 | **97.6** |
+| unicode (Turkish, CJK, emoji, box/braille) | 16.2 | 53.4 | **109.3** |
+
+Ghostty's numbers are capped by the harness, not by Ghostty: a null terminal
+that only answers DSR (`ceiling.py`) reaches 185–247 MiB/s through the same
+PTY and Python driver.
+
+### vtebench gets xterm3 wrong
+
+vtebench 0.3.1 times how long `write_all` to the PTY blocks
+(`src/bench.rs`) and never waits for the terminal. The example app reads the
+PTY into an unbounded Dart stream, so vtebench measures how fast that buffer
+fills: xterm3 comes out level with or ahead of both (`scrolling` 16 ms against
+44 and 32), and then the window stays frozen for about three minutes while
+the backlog drains. On the `unicode` payload above the gap is visible in one
+run: bytes accepted in 0.5 s, parsed at 4.0 s.
+
+### Where the time goes
+
+Sampled per thread during the run: the main thread sits at ~97% of one core,
+the process at ~115%. Activity Monitor shows this as 11–20% of the machine,
+which reads as idle CPU but is one saturated core. On macOS the Dart UI
+isolate runs on the platform thread, so UTF-8 decode, parsing, layout and
+paint are serialised on it; frames only happen in the gaps parsing leaves,
+which is the stutter. Ghostty reads and parses on its own thread and renders
+on another.
+
+### Next steps
+
+1. **Parse off the UI thread.** The fix for the stutter, not for throughput
+   (see *Where the `unicode` time goes* below):
+   decode and parse in a separate isolate and hand the UI thread something it
+   only has to paint. Architectural — `Terminal` state is read directly by the
+   renderer today.
+2. **Profile the `unicode` path.** Done: *Where the `unicode` time goes* and
+   *Grapheme-join fast paths* below. The largest gap (6.7x to Ghostty, 3.3x to
+   Alacritty). The headless core does Turkish at 63.5 MiB/s (table above), so
+   the cost is in CJK/emoji/wide cells, the paint path, or both — split the
+   payload by script before guessing.
+3. **Backpressure.** `flutter_pty2`'s `ackRead` stops reading the PTY while the
+   parser is behind. Removes the vtebench freeze and the unbounded memory; no
+   throughput gain.
+4. **`PacedTerminalWriter`.** Already exists (see *Pacing the write path*):
+   smoother frames at about 50% longer drain. No throughput gain.
+
+## Where the `unicode` time goes — 2026-11-19
+
+Step 2 of the list above. `script/term_compare/gen.py` also writes one payload
+per script class in `unicode`'s line shape — `latin-ext`, `cyrillic`, `cjk`,
+`emoji` (with ZWJ sequences, skin tones, flags and VS16), `combining`
+(Devanagari, Arabic with harakat, decomposed Latin) and `box` — so each row is
+one ingredient of the mixed payload. 64 MiB per payload, 100x37, AOT, Apple M1
+Pro. Every LF goes in as CRLF, which is what the PTY's ONLCR hands the
+terminal; with bare LF the column never resets and the fast rows read about
+25% low.
+
+Everything in this section was measured on `8e2b14b`, before the changes in
+the next one.
+
+### The core, headless
+
+`script/unicode_layer_probe.dart`, no Flutter. Each file in 64 KiB chunks
+through a chunked `Utf8Decoder` (`decode`); the decoded strings through
+`EscapeParser` with the no-op handler (`parser`), through `Terminal.write` with
+10000 lines of scrollback (`full`), and the same with DEC mode 2027 off
+(`no-graph`). Five interleaved rounds, medians, MiB/s:
+
+| payload | decode | parser | full | no-graph |
+|---|---|---|---|---|
+| ascii | 1156 | 585 | 122.9 | 124.5 |
+| unicode | 248 | 114 | 19.4 | 39.3 |
+| latin-ext | 290 | 462 | 158.7 | 167.6 |
+| cyrillic | 284 | 434 | 157.5 | 165.0 |
+| cjk | 364 | 130 | 15.3 | 33.2 |
+| emoji | 308 | 128 | 9.2 | 25.1 |
+| combining | 204 | 89 | 7.4 | 19.1 |
+| box | 363 | 491 | 219.5 | 222.6 |
+
+**Read across a row, not down a column.** MiB/s counts bytes, and the bytes
+per code point differ by class: ascii 1.00, latin-ext and cyrillic 1.84,
+combining 2.08, unicode 2.54, box and cjk 2.69, emoji 3.44. Per code point,
+`full` is 128.9 M/s on ascii, 90.2 on latin-ext, 89.5 on cyrillic, 85.6 on box
+— and then 8.0 on unicode, 6.0 on cjk, 3.7 on combining and 2.8 on emoji.
+Everything that stays on the batched path (*Batched writes for alphabets other
+than English*) is within about 1.5x of ASCII; everything that leaves it is an order
+of magnitude behind.
+
+On the four slow rows, taking the columns as time per byte: grapheme
+clustering (`full` against `no-graph`) is 47-62% of the core's time (decode
+plus `full`), the per-code-point buffer path (`no-graph` against `parser`)
+29-34%, the parser 7-16% and decode 3-7%.
+
+### Discriminators
+
+`script/term_compare/gen_synthetic.py` writes six payloads that each hit one
+case of `Buffer._joinsPreviousGrapheme`. 32 MiB each, three interleaved rounds,
+medians, MiB/s:
+
+| payload | decode | parser | full | no-graph |
+|---|---|---|---|---|
+| c-wide-only (kana, kanji) | 424.5 | 159.4 | 25.3 | 37.2 |
+| c-wide-narrow (each followed by `a`) | 382.1 | 88.6 | 12.2 | 26.7 |
+| c-hangul-only (syllables) | 425.4 | 160.5 | 11.5 | 37.4 |
+| c-emoji-only | 414.9 | 170.7 | 14.4 | 29.2 |
+| c-emoji-narrow (each followed by `a`) | 402.6 | 100.4 | 12.8 | 23.9 |
+| c-latin-combining (`e` + U+0301 and kin) | 358.5 | 70.6 | 6.8 | 11.6 |
+
+Each row points at one gap in the join check as it stood. Its fast exit for
+wide characters required a wide base, a wide code point and no marks in the
+cell, so `c-wide-only` loses only a third to clustering while a wide character
+after a narrow letter fell through to segmentation (`c-wide-narrow`, 12.2
+against 26.7). The same exit excluded every Hangul code point: `c-hangul-only` has the
+same bytes per code point and the same parser speed as `c-wide-only`, and runs
+at less than half its speed. Emoji paid two `wcwidth` calls on the way to that
+exit, each a binary search above the BMP. And every combining mark went to the
+segmenter (`c-latin-combining`, 6.8 against 11.6).
+
+### The app
+
+`example/lib/e2e_bench.dart`, release build, with two switches added for this:
+`XB_NOVIEW=1` mounts no `TerminalView` (the terminal is sized to 100x37 by
+hand, so the run is PTY, decode and `Terminal.write` with no layout or paint),
+and `XB_PROF=<file>` records the time spent inside `terminal.write` at each DSR
+reply and every frame's build and raster time. Three legs per round,
+interleaved — view with profiling, no view with profiling, view without — and
+three rounds; all 72 samples were 100x37. Medians:
+
+| payload | view MiB/s | no view MiB/s | wall s | in `write` s | frames |
+|---|---|---|---|---|---|
+| ascii | 71.8 | 75.9 | 0.89 | 0.62 | 4 |
+| unicode | 15.8 | 16.1 | 4.06 | 3.62 | 1 |
+| latin-ext | 73.8 | 72.2 | 0.87 | 0.45 | 4 |
+| cyrillic | 73.7 | 73.8 | 0.87 | 0.47 | 4 |
+| cjk | 13.0 | 13.0 | 4.93 | 4.59 | 1 |
+| emoji | 7.9 | 7.9 | 8.11 | 7.74 | 1 |
+| combining | 6.1 | 6.3 | 10.41 | 9.93 | 1 |
+| box | 87.5 | 90.8 | 0.73 | 0.36 | 5 |
+
+Wall, `write` and frames are the profiled view leg: frames is how many were
+drawn while that payload streamed. Frame build time is 0-2% of wall on every
+row.
+
+**The cost is in the core, not in layout or paint.** Taking `TerminalView`
+away moves no row by more than 6%. On the four slow payloads, decode plus the time inside
+`terminal.write` is 96-98% of the main thread's wall time. Decode is not
+measurable in the app — it runs in the stream transform before `write` — so
+that share is derived: decode seconds come from the headless probe's
+`decode-1k` column (64 MiB at 1 KiB chunks), not from the app.
+
+**The PTY hands `terminal.write` about 1 KiB per call,** not the 64 KiB the
+driver writes (`XB_PROF` counts calls). The probe's `-1k` columns run the same
+files at that size; it changes `full` by under 5% on every row, so the headless
+table stands for the app.
+
+**Parsing off the UI thread would fix the stutter, not the throughput.** The
+slow payloads get one frame in a 4-10 s burst, and a parser isolate would give
+those frames back. But the stream is sequential: another core parses it at the
+same rate, and the payload drains no sooner. Throughput has to come out of the
+core, which is the next section.
+
+```sh
+mkdir -p /tmp/pay
+python3 script/term_compare/gen.py 64 /tmp/pay
+python3 script/term_compare/gen_synthetic.py 32 /tmp/pay
+# /tmp/ulp-base: the probe built at 8e2b14b, recipe in the next section
+/tmp/ulp-base 5 /tmp/pay/{ascii,unicode,latin-ext,cyrillic,cjk,emoji,combining,box} > /tmp/probe.txt
+/tmp/ulp-base 3 /tmp/pay/c-*
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+script/term_compare/run_app.sh /tmp/pay /tmp/app 3
+python3 script/term_compare/app_table.py /tmp/app /tmp/probe.txt
+```
+
+Built here, the app measures this tree, not `8e2b14b`. The app table as it
+was needs the example built in the same worktree, with
+`example/lib/e2e_bench.dart` and `script/term_compare/` copied in and
+`run_app.sh` run from that copy.
+
+## Grapheme-join fast paths — 2026-11-19
+
+`Buffer._joinsPreviousGrapheme` decides whether a code point continues the
+cluster in the cell before it. Whatever its exits do not settle goes to
+`characters` segmentation, which allocates. Each change below adds or widens an
+exit that is decided by the incoming code point, its width and the last code
+point the previous cell stores, and each holds because of one rule of UAX #29:
+
+- **The known cell width is passed in.** `writeChar` has already looked up
+  `wcwidth(codePoint)`; the check looked it up again, which above the BMP is a
+  binary search.
+- **A wide code point joins only after Prepend, a leading jamo or ZWJ.** No
+  wide code point is Extend (bar the emoji modifiers, which have their own
+  check), Hangul V or T, a regional indicator or an Indic consonant, so only
+  GB9b, GB6 and GB11 can attach one to the cluster before it, and each is
+  decided by the last code point stored. Replaces the wide-after-wide exit,
+  Hangul exclusion and both `wcwidth` calls.
+- **A zero-width Extend or ZWJ always joins, unless the cell ends in a
+  control.** GB9 attaches them to anything; GB4 is the exception, and a cell
+  can end in a control — U+2028 is width 1, and with mode 2027 off any
+  zero-width code point is stored. `zeroWidthExtends` takes whole stretches,
+  Greek to Mongolian, minus Prepend, controls, Hangul V and T, and the marks
+  the width table knows from a newer Unicode than the segmenter.
+- **A narrow letter joins only by GB9b or GB9c.** `isNarrowLetter` — Hebrew to
+  NKo, Thai, Lao, Georgian, the Latin and Greek extended blocks, and the
+  independent vowels and consonants of the ten Indic blocks — is no Extend,
+  jamo, regional indicator or pictograph, so it starts a new cluster unless the
+  cell ends in Prepend or holds a conjunct linker. It runs after the Indic
+  conjunct check, which can join pairs GB9c does not.
+- **Indic vowel signs join.** At width 1, the dependent vowel signs at offsets
+  0x3E-0x4C of Devanagari to Malayalam are SpacingMark or Extend (GB9a, GB9),
+  bar the unassigned code points between them.
+- **A valid emoji modifier joins.** Past the modifier-base check a modifier is
+  Extend, so GB9 applies.
+- **The line is read once.** `currentLine` goes through the circular buffer on
+  every call, and the check called it up to three times; `_previousCellIndex` is
+  inlined into the same read.
+- **Plane 1 gets a width table.** `wcwidth` binary-searched everything above
+  the BMP. Plane 1, where nearly every emoji lives, now has a 64 KiB table like
+  the BMP's, filled in `wcwidth`'s own precedence, combining over wide.
+
+Baseline `8e2b14b` against this tree, headless, three interleaved passes,
+medians, MiB/s. 64 MiB per `gen.py` payload, 32 MiB per `c-*`:
+
+| payload | full before | full after | ratio | no-graph before | no-graph after |
+|---|---|---|---|---|---|
+| ascii | 111.4 | 114.7 | 1.03 | 112.2 | 112.9 |
+| unicode | 18.9 | **35.6** | 1.88 | 37.7 | 40.1 |
+| latin-ext | 147.5 | 149.2 | 1.01 | 145.7 | 146.9 |
+| cjk | 14.8 | **27.2** | 1.84 | 32.0 | 33.1 |
+| emoji | 8.9 | **13.8** | 1.55 | 24.7 | 32.4 |
+| combining | 7.1 | **12.7** | 1.79 | 18.4 | 18.7 |
+| box | 202.4 | 204.9 | 1.01 | 205.3 | 196.9 |
+| c-wide-only | 24.4 | 29.8 | 1.22 | 35.5 | 34.9 |
+| c-wide-narrow | 11.8 | **23.1** | 1.96 | 25.6 | 25.8 |
+| c-hangul-only | 11.0 | **30.0** | 2.73 | 35.5 | 35.6 |
+| c-emoji-only | 13.9 | **37.3** | 2.68 | 28.1 | 45.5 |
+| c-emoji-narrow | 12.4 | **27.6** | 2.23 | 22.6 | 31.2 |
+| c-latin-combining | 6.5 | **10.5** | 1.62 | 11.0 | 11.2 |
+
+`no-graph` rose on emoji because the plane-1 table speeds up `wcwidth`, which
+runs in either mode. `full` on the rows that never reach the join check —
+ascii, latin-ext, box — moved by 3% or less.
+
+Step by step, `full` only, each step an interleaved A/B against the one before,
+n=3 unless marked: width passed in, `c-emoji-only` 14.0 → 17.2; the wide exit
+(first form, cells without marks), cjk 15.1 → 25.6, unicode 19.2 → 32.2,
+`c-hangul-only` 11.1 → 27.5, `c-wide-narrow` 12.0 → 22.2; Extend and ZWJ,
+combining 7.5 → 9.1, `c-latin-combining` 6.9 → 10.5; narrow letters, combining
+9.1 → 11.5; Indic vowel signs, combining 11.2 → 12.0; the wide exit decided on
+the last stored code point, emoji 10.3 → 11.3; emoji modifiers, emoji
+11.2 → 11.6 (n=5); the plane-1 table, emoji 11.6 → 13.2, `c-emoji-only`
+24.1 → 34.6; the line read once, `c-wide-only` 27.6 → 30.1, cjk 25.4 → 27.4
+(n=5). Each pair is only good against itself: ascii drifted between 106 and
+119 across these runs. They came from throwaway full-only builds of the probe,
+so the repo scripts reproduce the table above, not these.
+
+**What a code point pays before any exit.** With the width passed in,
+`c-wide-only` ran at 24.7 MiB/s, and at 33.5 with the check returning at its
+first line, though every one of its code points should leave at the first exit.
+Returning early at successive points of the check priced the way there, at
+that step, at about 30 ns per code point: finding the previous cell ~6 ns,
+reading its code point and combining string ~9 ns, the checks ahead of the
+wide exit ~10 ns, the exit itself ~4.5 ns.
+
+### How it was accepted
+
+`script/grapheme_grid_dump.dart` digests the grid a file leaves behind — code
+point, width and combining string per cell, wrap flags, cursor — and
+`script/term_compare/gen_corpus.py` writes a 335-file adversarial corpus:
+every class in isolation, targeted sequences (jamo, Prepend, ZWJ, regional
+indicators, VS15/VS16, modifiers, virama), lines filled to the edge, nearly
+every code point after each of 27 bases, and slices of the payloads above. Old binary
+against new, the digests were identical in four configurations (100x37 and
+7x10, mode 2027 on and off), checked after every change. Deliberately broken
+variants changed 8-21 files' digests, so the oracle does catch errors. Each
+predicate also has an exhaustive test over U+0000-U+10FFFF against real
+segmentation, the plane-1 table one against the binary search it replaces.
+Tests 1079 → 1094, all passing.
+
+What that does not cover: the digest leaves out cell attributes and the
+pending-wrap state. The numbers are headless; the app was not re-measured.
+And the width table is Unicode 17 while `characters` 1.4.1 segments by
+Unicode 16 — `zeroWidthExtends` works around the difference (U+1ACF-1AEB), and
+the exhaustive tests will flag it when either side moves.
+
+**Measured, rejected:** skipping the `runes.length` count in
+`BufferLine.addCombiningCharacter` for short strings. combining 1.025x at n=5 —
+nothing.
+
+### What is left
+
+On mixed and CJK text the join check is nearly exhausted: `unicode` 35.6
+against 40.1 with clustering off. Emoji sequences (13.8 against 32.4: emoji
+after ZWJ, a regional indicator after a finished flag, the VS16 resize path)
+and combining scripts (12.7 against 18.7: scripts the predicates do not cover,
+a consonant after a virama, a `Map<int, String>` lookup and a string concat per
+mark) still have a gap. One lead not pursued: a small direct-mapped cache of
+`(base, codePoint)` pairs for cells with no combining string.
+
+```sh
+# Baseline binaries. The two scripts do not exist at 8e2b14b, so they are
+# copied in, as bench-compare.sh copies its harness.
+git worktree add --detach /tmp/xb 8e2b14b
+cp script/grapheme_grid_dump.dart script/unicode_layer_probe.dart /tmp/xb/script/
+(cd /tmp/xb && dart pub get &&
+  dart compile exe script/grapheme_grid_dump.dart -o /tmp/dump-base &&
+  dart compile exe script/unicode_layer_probe.dart -o /tmp/ulp-base)
+git worktree remove --force /tmp/xb
+dart compile exe script/grapheme_grid_dump.dart -o /tmp/dump
+dart compile exe script/unicode_layer_probe.dart -o /tmp/ulp
+
+python3 script/term_compare/gen_corpus.py /tmp/pay /tmp/pay /tmp/corpus
+script/term_compare/grid_oracle.sh /tmp/corpus /tmp/dump-base /tmp/dump /tmp/oracle
+script/term_compare/probe_ab.sh /tmp/ulp-base /tmp/ulp 3 /tmp/ab.log \
+  /tmp/pay/{ascii,unicode,latin-ext,cjk,emoji,combining,box} \
+  /tmp/pay/c-{wide-only,wide-narrow,hangul-only,emoji-only,emoji-narrow,latin-combining}
+```
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
