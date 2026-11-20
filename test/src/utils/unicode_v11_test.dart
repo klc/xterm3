@@ -82,4 +82,18 @@ void main() {
       }
     }
   });
+
+  test('Unicode width table for plane 1 matches the high ranges', () {
+    // wcwidth answers plane 1 from a table built off the same ranges it
+    // searches beyond plane 1; every code point must get the same width.
+    for (var codePoint = 0x10000; codePoint < 0x20000; codePoint++) {
+      final expected = bisearch(codePoint, HIGH_COMBINING)
+          ? 0
+          : bisearch(codePoint, HIGH_WIDE)
+              ? 2
+              : 1;
+      expect(unicodeV11.wcwidth(codePoint), expected,
+          reason: 'U+${codePoint.toRadixString(16)}');
+    }
+  });
 }

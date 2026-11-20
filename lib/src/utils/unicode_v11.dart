@@ -554,6 +554,26 @@ Uint8List buildTable() {
   return table;
 }
 
+// Plane 1 - where nearly every emoji lives - gets a table like the BMP's: a
+// binary search over the high ranges costs ten times a table lookup, once per
+// emoji written. Filled in [wcwidth]'s precedence: combining over wide.
+final _plane1Table = _buildPlane1Table();
+
+Uint8List _buildPlane1Table() {
+  final table = Uint8List(0x10000)..fillRange(0, 0x10000, 1);
+  void fill(List<List<int>> ranges, int width) {
+    for (final range in ranges) {
+      final start = range[0].clamp(0x10000, 0x20000) - 0x10000;
+      final end = (range[1] + 1).clamp(0x10000, 0x20000) - 0x10000;
+      if (start < end) table.fillRange(start, end, width);
+    }
+  }
+
+  fill(HIGH_WIDE, 2);
+  fill(HIGH_COMBINING, 0);
+  return table;
+}
+
 bool bisearch(int ucs, List<List<int>> data) {
   var min = 0;
   var max = data.length - 1;
@@ -582,6 +602,7 @@ class UnicodeV11 {
     if (codePoint < 32) return 0;
     if (codePoint < 127) return 1;
     if (codePoint < 65536) return table[codePoint];
+    if (codePoint < 0x20000) return _plane1Table[codePoint - 0x10000];
     if (bisearch(codePoint, HIGH_COMBINING)) return 0;
     if (bisearch(codePoint, HIGH_WIDE)) return 2;
     return 1;

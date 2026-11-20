@@ -41,3 +41,124 @@ bool isSingleCellPrintable(int codeUnit) {
   if (codeUnit <= 0x259f) return true;
   return codeUnit >= 0x2800 && codeUnit <= 0x28ff;
 }
+
+/// Whether [codePoint] has Grapheme_Cluster_Break=Prepend: it joins whatever
+/// follows it (GB9b), so a cell holding one can absorb the next character
+/// even when that character is no mark.
+bool isGraphemePrepend(int codePoint) {
+  if (codePoint < 0x600 || codePoint > 0x11f02) return false;
+  if (codePoint > 0xd4e && codePoint < 0x110bd) return false;
+  return switch (codePoint) {
+    >= 0x600 && <= 0x605 || 0x6dd || 0x70f || 0x890 || 0x891 => true,
+    0x8e2 || 0xd4e || 0x110bd || 0x110cd || 0x111c2 || 0x111c3 => true,
+    0x113d1 || 0x1193f || 0x11941 || 0x11a3a || 0x11d46 || 0x11f02 => true,
+    >= 0x11a84 && <= 0x11a89 => true,
+    _ => false,
+  };
+}
+
+/// Whether [codePoint] is a Hangul leading consonant, Grapheme_Cluster_Break=L:
+/// the only base a jamo or a precomposed syllable joins (GB6).
+bool isHangulLeadingJamo(int codePoint) {
+  return codePoint >= 0x1100 && codePoint <= 0x115f ||
+      codePoint >= 0xa960 && codePoint <= 0xa97c;
+}
+
+/// Whether [codePoint], a code point already known to be zero width, extends
+/// any grapheme cluster that does not end in a control: whether it has
+/// Grapheme_Cluster_Break Extend or ZWJ (GB9).
+///
+/// This holds for the zero-width code points of whole stretches - the
+/// combining diacritics and every script from Greek to Georgian, Ethiopic to
+/// Mongolian - apart from the Prepend and control code points in them, Hangul
+/// V and T (GB7, GB8), and the marks the width table already knows from a
+/// newer Unicode version than the segmentation rules. Past U+2000 only the
+/// joiners and the symbol diacritics are taken; everything else answers no
+/// and goes to the slow path.
+bool zeroWidthExtends(int codePoint) {
+  if (codePoint < 0x300) return false;
+  if (codePoint < 0x2000) {
+    return switch (codePoint) {
+      >= 0x600 && <= 0x605 || 0x61c || 0x70f || 0x890 || 0x891 => false,
+      0x8e2 || 0xd4e || >= 0x1160 && <= 0x11ff || 0x180e => false,
+      >= 0x1acf && <= 0x1aeb => false,
+      _ => true,
+    };
+  }
+  return codePoint == 0x200c ||
+      codePoint == 0x200d ||
+      codePoint >= 0x20d0 && codePoint <= 0x20ff;
+}
+
+/// Whether [codePoint], a code point already known to be width 1, is an Indic
+/// dependent vowel sign that extends any grapheme cluster not ending in a
+/// control: Grapheme_Cluster_Break SpacingMark or Extend (GB9a, GB9).
+///
+/// In the nine Indic blocks from Devanagari to Malayalam the vowel signs sit
+/// at offsets 0x3E to 0x4C; at width 1 every one of them is such a mark. The
+/// exceptions are the unassigned code points between them, which are width 1
+/// and start a grapheme of their own.
+bool isIndicVowelSign(int codePoint) {
+  if (codePoint < 0x93e || codePoint > 0xd4c) return false;
+  final offset = codePoint & 0x7f;
+  if (offset < 0x3e || offset > 0x4c) return false;
+  return switch (codePoint) {
+    0x9c5 || 0x9c6 || 0x9c9 || 0x9ca || >= 0xa43 && <= 0xa46 => false,
+    0xa49 || 0xa4a || 0xac6 || 0xaca || 0xb45 || 0xb46 || 0xb49 => false,
+    0xb4a || >= 0xbc3 && <= 0xbc5 || 0xbc9 || 0xc45 || 0xc49 => false,
+    0xcc5 || 0xcc9 || 0xd45 || 0xd49 => false,
+    _ => true,
+  };
+}
+
+/// Whether [codePoint] has Grapheme_Cluster_Break Control, CR or LF: nothing
+/// joins a cluster across one (GB4, GB5).
+bool isGraphemeControl(int codePoint) {
+  if (codePoint < 0x20) return true;
+  if (codePoint < 0x7f) return false;
+  if (codePoint <= 0x9f) return true;
+  if (codePoint < 0x2000) {
+    return codePoint == 0xad || codePoint == 0x61c || codePoint == 0x180e;
+  }
+  return switch (codePoint) {
+    0x200b || 0x200e || 0x200f || >= 0x2028 && <= 0x202e => true,
+    >= 0x2060 && <= 0x206f || 0xfeff || >= 0xfff0 && <= 0xfffb => true,
+    >= 0x13430 && <= 0x1343f || >= 0x1bca0 && <= 0x1bca3 => true,
+    >= 0x1d173 && <= 0x1d17a || >= 0xe0000 && <= 0xe001f => true,
+    >= 0xe0080 && <= 0xe00ff || >= 0xe01f0 && <= 0xe0fff => true,
+    _ => false,
+  };
+}
+
+/// Whether [codePoint], a code point already known to be width 1, is a letter
+/// that extends no grapheme cluster and is no Hangul jamo, regional indicator
+/// or Extended_Pictographic code point: it joins the cluster before it only
+/// through GB9b or GB9c.
+///
+/// Taken are whole alphabets that keep their marks at width 0 - Hebrew to NKo,
+/// Thai and Lao but for SARA AM, Georgian, the Latin and Greek extended blocks
+/// - and, in each of the ten Indic blocks, the stretch of independent vowels
+/// and consonants (offsets 0x04 to 0x39) before the dependent vowel signs,
+/// several of which are width 1 SpacingMarks.
+bool isNarrowLetter(int codePoint) {
+  if (codePoint < 0x590) return false;
+  if (codePoint < 0x8ca) return true;
+  if (codePoint < 0x900) return false;
+  if (codePoint < 0xe00) {
+    final offset = codePoint & 0x7f;
+    return offset >= 0x04 && offset < 0x3a;
+  }
+  if (codePoint < 0xf00) return codePoint != 0xe33 && codePoint != 0xeb3;
+  if (codePoint < 0x10a0) return false;
+  if (codePoint < 0x1100) return true;
+  return codePoint >= 0x1e00 && codePoint < 0x2000;
+}
+
+/// Whether [codePoint] is an Indic conjunct linker, Indic_Conjunct_Break=
+/// Linker: the virama that GB9c joins two consonants across.
+bool isConjunctLinker(int codePoint) {
+  return switch (codePoint) {
+    0x94d || 0x9cd || 0xacd || 0xb4d || 0xc4d || 0xd4d => true,
+    _ => false,
+  };
+}

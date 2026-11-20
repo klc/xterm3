@@ -159,6 +159,135 @@ void main() {
     consumer.rollback(3);
     expect(_consumeAll(consumer), 'def'.runes);
   });
+  // ByteConsumer keeps the head block's string in a field (see the class
+  // comment). These cover each place where the head block changes.
+  group('the cached head block follows the queue', () {
+    test('when a block is added after a partial consume', () {
+      final consumer = ByteConsumer()..add('ab');
+      expect(consumer.consume(), 0x61);
+      consumer.add('cd');
+
+      expect(consumer.currentBlock, 'ab');
+      expect(consumer.currentCodeUnitOffset, 1);
+      expect(consumer.printableTextRunLength, 1);
+      expect(consumer.consume(), 0x62);
+      expect(consumer.currentBlock, 'cd');
+      expect(consumer.printableTextRunLength, 2);
+      expect(_consumeAll(consumer), 'cd'.runes);
+    });
+
+    test('when a block is added to an emptied queue', () {
+      final consumer = ByteConsumer()..add('ab');
+      _consumeAll(consumer);
+      consumer.unrefConsumedBlocks();
+      consumer.add('xyz');
+
+      expect(consumer.currentBlock, 'xyz');
+      expect(consumer.currentCodeUnitOffset, 0);
+      expect(consumer.printableTextRunLength, 3);
+      consumer.consumeAsciiCodeUnits(2);
+      expect(consumer.consume(), 0x7a);
+      expect(consumer, isEmpty);
+    });
+
+    test('when a rollback crosses a block edge', () {
+      final consumer = ByteConsumer()
+        ..add('ab')
+        ..add('cd');
+      consumer.consumeAsciiCodeUnits(2);
+      expect(consumer.consume(), 0x63);
+      expect(consumer.currentBlock, 'cd');
+
+      consumer.rollback(2);
+      expect(consumer.currentBlock, 'ab');
+      expect(consumer.currentCodeUnitOffset, 1);
+      expect(consumer.printableTextRunLength, 1);
+      expect(_consumeAll(consumer), 'bcd'.runes);
+    });
+
+    test('when a rollback crosses a block edge inside a surrogate pair', () {
+      final consumer = ByteConsumer()
+        ..add('a😀')
+        ..add('😁');
+      consumer.consume();
+      consumer.consume();
+      consumer.consume();
+      consumer.rollback(2);
+      expect(consumer.currentBlock, 'a😀');
+      expect(consumer.currentCodeUnitOffset, 1);
+      expect(_consumeAll(consumer), '😀😁'.runes);
+    });
+
+    test('when peeking at the last code unit of a block', () {
+      final consumer = ByteConsumer()
+        ..add('xa')
+        ..add('b');
+      consumer.consume();
+      expect(consumer.peek(), 0x61);
+      expect(consumer.currentBlock, 'xa');
+      expect(consumer.currentCodeUnitOffset, 1);
+      expect(consumer.consume(), 0x61);
+      expect(consumer.peek(), 0x62);
+      expect(consumer.currentBlock, 'b');
+      expect(consumer.currentCodeUnitOffset, 0);
+      expect(_consumeAll(consumer), 'b'.runes);
+    });
+
+    test('when unref cuts the head block and more is added', () {
+      final consumer = ByteConsumer()..add('abc');
+      consumer.consume();
+      consumer.consume();
+      consumer.unrefConsumedBlocks();
+      expect(consumer.currentBlock, 'c');
+      expect(consumer.currentCodeUnitOffset, 0);
+
+      consumer.add('de');
+      expect(consumer.printableTextRunLength, 1);
+      expect(_consumeAll(consumer), 'cde'.runes);
+    });
+
+    test('when an unfinished sequence is put back and the next write lands',
+        () {
+      // What EscapeParser.write does when a chunk ends inside a sequence.
+      final consumer = ByteConsumer()..add('x\x1b[1');
+      expect(consumer.consume(), 0x78);
+      consumer.consume();
+      consumer.consume();
+      consumer.consume();
+      consumer.rollback(3);
+      consumer.unrefConsumedBlocks();
+      expect(consumer.currentBlock, '\x1b[1');
+
+      consumer.add('m');
+      expect(_consumeAll(consumer), '\x1b[1m'.runes);
+    });
+
+    test('when it is reset', () {
+      final consumer = ByteConsumer()
+        ..add('ab')
+        ..add('cd');
+      consumer.consume();
+      consumer.reset();
+      expect(consumer, isEmpty);
+
+      consumer.add('z');
+      expect(consumer.currentBlock, 'z');
+      expect(_consumeAll(consumer), 'z'.runes);
+    });
+
+    test('when a consume runs past the end', () {
+      final consumer = ByteConsumer();
+      expect(consumer.consume, throwsStateError);
+
+      consumer.add('a');
+      consumer.consume();
+      expect(consumer.consume, throwsStateError);
+
+      consumer.add('b');
+      expect(consumer.currentBlock, 'b');
+      expect(_consumeAll(consumer), 'b'.runes);
+    });
+  });
 }
 
 List<int> _consumeAll(ByteConsumer consumer) {

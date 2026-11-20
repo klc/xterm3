@@ -178,7 +178,8 @@ class Buffer {
       return cellWidth;
     }
     if (cellWidth == 0) {
-      if (!terminal.graphemeClusterMode || _joinsPreviousGrapheme(codePoint)) {
+      if (!terminal.graphemeClusterMode ||
+          _joinsPreviousGrapheme(codePoint, cellWidth)) {
         _addCombiningCharacter(codePoint);
       }
       return cellWidth;
@@ -194,7 +195,8 @@ class Buffer {
     if (mayJoinPreviousGrapheme && _joinRegionalIndicator(codePoint)) {
       return cellWidth;
     }
-    if (mayJoinPreviousGrapheme && _joinsPreviousGrapheme(codePoint)) {
+    if (mayJoinPreviousGrapheme &&
+        _joinsPreviousGrapheme(codePoint, cellWidth)) {
       final previousWidth = _joinedPreviousGraphemeWidth(codePoint, cellWidth);
       if (previousWidth == 2 && !_setPreviousGraphemeWidth(2)) {
         return cellWidth;
@@ -335,13 +337,50 @@ class Buffer {
     return index;
   }
 
-  bool _joinsPreviousGrapheme(int codePoint) {
-    final index = _previousCellIndex();
-    if (index == null) return false;
-
-    final base = currentLine.getCodePoint(index);
+  /// [cellWidth] is `wcwidth(codePoint)`, which [writeChar] has already
+  /// looked up - for an astral code point that is a binary search.
+  bool _joinsPreviousGrapheme(int codePoint, int cellWidth) {
+    // [_previousCellIndex] with one lookup of the line for it and the reads
+    // below: [currentLine] goes through the circular buffer each time.
+    if (_cursorX == 0) return false;
+    final line = currentLine;
+    var index = min(_cursorX - 1, viewWidth - 1);
+    if (index > 0 && line.getWidth(index) == 0) index--;
+    final base = line.getCodePoint(index);
     if (base == 0) return false;
-    final combining = currentLine.getCombiningCharacters(index);
+    final combining = line.getCombiningCharacters(index);
+
+    final last = combining?.runes.last ?? base;
+
+    // A wide code point never extends a cluster - the emoji modifiers are the
+    // only wide Extend characters, and the check below owns them - and is
+    // never a Hangul V or T, a regional indicator or an Indic consonant. That
+    // leaves three rules that can join it to the cluster before, each decided
+    // by the last code point stored: GB9b when that is Prepend, GB6 when it is
+    // a leading jamo, GB11 when it is ZWJ. Every other case breaks, so CJK,
+    // kana, emoji and Hangul syllables skip segmentation here, after a plain
+    // base and after a cluster such as an emoji with VS16 or a modifier alike.
+    // Neither check below can return true for such a code point: the Indic
+    // one needs an Indic code point.
+    if (cellWidth == 2 &&
+        !_isEmojiModifier(codePoint) &&
+        last != 0x200d &&
+        !isGraphemePrepend(last) &&
+        !isHangulLeadingJamo(last)) {
+      return false;
+    }
+
+    // GB9, GB9a: a mark - Extend, ZWJ or SpacingMark - joins whatever comes
+    // before it unless that is a control (GB4), so neither the cluster nor
+    // the base matters, only the last code point stored - and a cell can end
+    // in a control: U+2028 is width 1, and with mode 2027 off any zero-width
+    // code point is stored. The two checks below agree: the Indic one only
+    // ever returns true, and no emoji modifier is among these marks.
+    if ((cellWidth == 0 && zeroWidthExtends(codePoint) ||
+            cellWidth == 1 && isIndicVowelSign(codePoint)) &&
+        !isGraphemeControl(last)) {
+      return true;
+    }
 
     if (_isWideIndicConjunct(base, combining, codePoint)) return true;
 
@@ -354,6 +393,9 @@ class Buffer {
         }
       }
       if (_isEmojiModifierBase(modifierBase) == false) return false;
+      // Past that check a modifier is a mark like the ones above: it has
+      // Grapheme_Cluster_Break Extend and joins anything but a control (GB9).
+      if (!isGraphemeControl(last)) return true;
     }
 
     // Almost all terminal output is ASCII, where a new printable code point
@@ -366,12 +408,17 @@ class Buffer {
     // Cyrillic one - drops the characters after it into grapheme
     // segmentation, at three string allocations each.
     if (combining == null && isSingleCellPrintable(codePoint)) return false;
-    if (combining == null &&
-        unicodeV11.wcwidth(base) == 2 &&
-        unicodeV11.wcwidth(codePoint) == 2 &&
-        _isEmojiModifier(codePoint) == false &&
-        _isHangul(base) == false &&
-        _isHangul(codePoint) == false) {
+    // A letter of [isNarrowLetter] extends nothing and is no Hangul jamo,
+    // regional indicator or Extended_Pictographic code point, so of the rules
+    // that join a character to the cluster before it only two are left: GB9b,
+    // when the cluster ends in a Prepend code point, and GB9c, when the letter
+    // is an Indic consonant and the cluster holds a conjunct linker. Without
+    // either, it starts a new grapheme. This comes after the Indic conjunct
+    // check above, which can join a pair that GB9c does not.
+    if (cellWidth == 1 &&
+        isNarrowLetter(codePoint) &&
+        !isGraphemePrepend(last) &&
+        !_hasConjunctLinker(combining)) {
       return false;
     }
 
@@ -384,6 +431,14 @@ class Buffer {
 
     final extensionCandidate = 'a$character';
     return extensionCandidate.characters.length == 1;
+  }
+
+  static bool _hasConjunctLinker(String? combining) {
+    if (combining == null) return false;
+    for (final rune in combining.runes) {
+      if (isConjunctLinker(rune)) return true;
+    }
+    return false;
   }
 
   int _joinedPreviousGraphemeWidth(int codePoint, int cellWidth) {
@@ -450,13 +505,6 @@ class Buffer {
 
   static bool _isEmojiModifier(int codePoint) {
     return codePoint >= 0x1F3FB && codePoint <= 0x1F3FF;
-  }
-
-  static bool _isHangul(int codePoint) {
-    return codePoint >= 0x1100 && codePoint <= 0x11FF ||
-        codePoint >= 0xA960 && codePoint <= 0xA97F ||
-        codePoint >= 0xAC00 && codePoint <= 0xD7A3 ||
-        codePoint >= 0xD7B0 && codePoint <= 0xD7FF;
   }
 
   static bool _isEmojiModifierBase(int codePoint) {

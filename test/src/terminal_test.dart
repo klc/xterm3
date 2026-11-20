@@ -1106,6 +1106,113 @@ void main() {
     expect(terminal.buffer.cursorX, 2);
   });
 
+  test('Terminal joins Hangul jamo by jamo class', () {
+    // L V T decomposed is one syllable; a syllable after a syllable is not
+    // joined, a syllable after a leading jamo is (GB6).
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('각가ᄀ가x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x1100);
+    expect(line.getCombiningCharacters(0), 'ᅡᆨ');
+    expect(line.getCodePoint(2), 0xac00);
+    expect(line.getCombiningCharacters(2), isNull);
+    expect(line.getCodePoint(4), 0x1100);
+    expect(line.getCombiningCharacters(4), '가');
+    expect(line.getCodePoint(6), 0x78);
+  });
+
+  test('Terminal joins the character after a Prepend code point', () {
+    // GB9b: U+06DD ARABIC END OF AYAH pulls in what follows it, a narrow
+    // letter and a wide ideograph alike.
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('۝بx۝中y');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x06dd);
+    expect(line.getCombiningCharacters(0), 'ب');
+    expect(line.getWidth(0), 2);
+    expect(line.getCodePoint(2), 0x78);
+    expect(line.getCodePoint(3), 0x06dd);
+    expect(line.getCombiningCharacters(3), '中');
+    expect(line.getCodePoint(5), 0x79);
+  });
+
+  test('Terminal stacks marks on marked and wide cells', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('ẹ́̂x中́y');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCombiningCharacters(0), '̣́̂');
+    expect(line.getCodePoint(1), 0x78);
+    expect(line.getCodePoint(2), 0x4e2d);
+    expect(line.getCombiningCharacters(2), '́');
+    expect(line.getCodePoint(4), 0x79);
+  });
+
+  test('Terminal keeps a mark off a line separator cell', () {
+    // U+2028 is width 1 but a control to grapheme segmentation (GB4).
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write(' ́x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x2028);
+    expect(line.getCombiningCharacters(0), isNull);
+    expect(line.getCodePoint(1), 0x78);
+  });
+
+  test('Terminal starts wide characters after narrow ones', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('a中b가c\u{1F600}d');
+
+    final line = terminal.buffer.lines[0];
+    for (final (index, codePoint) in [
+      (0, 0x61),
+      (1, 0x4e2d),
+      (3, 0x62),
+      (4, 0xac00),
+      (6, 0x63),
+      (7, 0x1F600),
+      (9, 0x64),
+    ]) {
+      expect(line.getCodePoint(index), codePoint);
+      expect(line.getCombiningCharacters(index), isNull);
+    }
+  });
+
+  test('Terminal joins a consonant across a virama, not a vowel sign', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('कितक्षx');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCombiningCharacters(0), 'ि');
+    expect(line.getCodePoint(2), 0x0924);
+    expect(line.getCombiningCharacters(2), isNull);
+    expect(line.getCodePoint(3), 0x0915);
+    expect(line.getCombiningCharacters(3), '्ष');
+    expect(line.getCodePoint(5), 0x78);
+  });
+
+  test('Terminal starts an emoji after VS16 and modifier clusters', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('❤️\u{1F600}\u{1F44D}\u{1F3FD}x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCombiningCharacters(0), '️');
+    expect(line.getCodePoint(2), 0x1F600);
+    expect(line.getCombiningCharacters(2), isNull);
+    expect(line.getCodePoint(4), 0x1F44D);
+    expect(line.getCombiningCharacters(4), '\u{1F3FD}');
+    expect(line.getCodePoint(6), 0x78);
+  });
+
   test('Terminal erase chars clears split wide-character boundaries', () {
     final terminal = Terminal()..resize(8, 1);
 

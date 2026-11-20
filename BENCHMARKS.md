@@ -509,7 +509,9 @@ side of that trade an application wants is not the package's call.
 
 Note what this is not: the unpaced case was never freezing. Its worst UI frame
 during the burst is 3.2ms. The frame rate is low because parsing owns the
-thread between frames, not because any single frame is slow.
+thread between frames, not because any single frame is slow. That holds for
+`flood`, which has no PTY. Through a real PTY the app draws a handful of frames
+in a whole burst: see *Frame starvation through a PTY — 2026-11-20*.
 
 ### Recycling evicted lines — measured, rejected
 
@@ -940,6 +942,1003 @@ Everything above the terminal core. No renderer, no Flutter, no PTY — the
 frame pipeline, and it only exists for this tree. A cross-package render
 comparison would need three example apps whose cell metrics agree, and cell
 metrics are the thing this file already records as not stable across builds.
+
+## Against Ghostty and Alacritty, end to end — 2026-11-19
+
+Every table above stops at the terminal core. This one is the whole app: the
+example app (`example/lib/e2e_bench.dart`, release build, `flutter_pty2`, Dart
+`Utf8Decoder`) against Ghostty 1.4.0 and Alacritty 0.17.0 (built with cargo),
+each running the same driver in a real PTY. Grid 100x37 in all three, checked
+on every sample. 64 MiB per workload, five interleaved rounds, medians. Apple
+M1 Pro, Flutter 3.50.0. Harness: `script/term_compare/`.
+
+The clock stops on a DSR reply (`ESC[6n`) sent after the payload: the reply
+can only come once every byte before it is parsed. It proves parsed, not
+painted, and says nothing about input latency or frame pacing.
+
+### Throughput, MiB/s
+
+| workload | xterm3 | Alacritty | Ghostty |
+|---|---|---|---|
+| ascii | 77.0 | 62.5 | **144.9** |
+| sgr | 39.1 | 54.4 | **95.4** |
+| cursor (alt screen, CUP + short writes) | 42.9 | 65.7 | **97.6** |
+| unicode (Turkish, CJK, emoji, box/braille) | 16.2 | 53.4 | **109.3** |
+
+Ghostty's numbers are capped by the harness, not by Ghostty: a null terminal
+that only answers DSR (`ceiling.py`) reaches 185–247 MiB/s through the same
+PTY and Python driver.
+
+### vtebench gets xterm3 wrong
+
+vtebench 0.3.1 times how long `write_all` to the PTY blocks
+(`src/bench.rs`) and never waits for the terminal. The example app reads the
+PTY into an unbounded Dart stream, so vtebench measures how fast that buffer
+fills: xterm3 comes out level with or ahead of both (`scrolling` 16 ms against
+44 and 32), and then the window stays frozen for about three minutes while
+the backlog drains. On the `unicode` payload above the gap is visible in one
+run: bytes accepted in 0.5 s, parsed at 4.0 s.
+
+### Where the time goes
+
+Sampled per thread during the run: the main thread sits at ~97% of one core,
+the process at ~115%. Activity Monitor shows this as 11–20% of the machine,
+which reads as idle CPU but is one saturated core. On macOS the Dart UI
+isolate runs on the platform thread, so UTF-8 decode, parsing, layout and
+paint are serialised on it; frames only happen in the gaps parsing leaves,
+which is the stutter. Ghostty reads and parses on its own thread and renders
+on another.
+
+### Next steps
+
+1. **Parse off the UI thread.** The fix for the stutter, not for throughput
+   (see *Where the `unicode` time goes* below):
+   decode and parse in a separate isolate and hand the UI thread something it
+   only has to paint. Architectural — `Terminal` state is read directly by the
+   renderer today. A spike was measured and not pursued: *Frame starvation
+   through a PTY* below.
+2. **Profile the `unicode` path.** Done: *Where the `unicode` time goes* and
+   *Grapheme-join fast paths* below. The largest gap (6.7x to Ghostty, 3.3x to
+   Alacritty). The headless core does Turkish at 63.5 MiB/s (table above), so
+   the cost is in CJK/emoji/wide cells, the paint path, or both — split the
+   payload by script before guessing.
+3. **Backpressure.** Measured (*Frame starvation through a PTY* below): on
+   `flutter_pty2` 1.0.0, `ackRead` gives full frame rate and no backlog, and
+   costs 48-76% of throughput, because every ~1 KiB read waits for its own
+   ack. The coalescing plugin of item 5 changes that: its output credits
+   throttle the producer without an ack per read.
+4. **`PacedTerminalWriter`.** Did nothing through a PTY until `996a7b4`: its
+   budget was per drain pass, and a PTY delivers one chunk per pass. See
+   *`PacedTerminalWriter` paces across turns* below. No throughput gain.
+5. **Coalesce reads in `flutter_pty2`.** Exists on an unreleased local branch
+   of flutter_pty2 3.0.0 and was measured: *flutter_pty2 with coalesced reads*
+   below.
+
+## Where the `unicode` time goes — 2026-11-19
+
+Step 2 of the list above. `script/term_compare/gen.py` also writes one payload
+per script class in `unicode`'s line shape — `latin-ext`, `cyrillic`, `cjk`,
+`emoji` (with ZWJ sequences, skin tones, flags and VS16), `combining`
+(Devanagari, Arabic with harakat, decomposed Latin) and `box` — so each row is
+one ingredient of the mixed payload. 64 MiB per payload, 100x37, AOT, Apple M1
+Pro. Every LF goes in as CRLF, which is what the PTY's ONLCR hands the
+terminal; with bare LF the column never resets and the fast rows read about
+25% low.
+
+Everything in this section was measured on `8e2b14b`, before the changes in
+the next one.
+
+### The core, headless
+
+`script/unicode_layer_probe.dart`, no Flutter. Each file in 64 KiB chunks
+through a chunked `Utf8Decoder` (`decode`); the decoded strings through
+`EscapeParser` with the no-op handler (`parser`), through `Terminal.write` with
+10000 lines of scrollback (`full`), and the same with DEC mode 2027 off
+(`no-graph`). Five interleaved rounds, medians, MiB/s:
+
+| payload | decode | parser | full | no-graph |
+|---|---|---|---|---|
+| ascii | 1156 | 585 | 122.9 | 124.5 |
+| unicode | 248 | 114 | 19.4 | 39.3 |
+| latin-ext | 290 | 462 | 158.7 | 167.6 |
+| cyrillic | 284 | 434 | 157.5 | 165.0 |
+| cjk | 364 | 130 | 15.3 | 33.2 |
+| emoji | 308 | 128 | 9.2 | 25.1 |
+| combining | 204 | 89 | 7.4 | 19.1 |
+| box | 363 | 491 | 219.5 | 222.6 |
+
+**Read across a row, not down a column.** MiB/s counts bytes, and the bytes
+per code point differ by class: ascii 1.00, latin-ext and cyrillic 1.84,
+combining 2.08, unicode 2.54, box and cjk 2.69, emoji 3.44. Per code point,
+`full` is 128.9 M/s on ascii, 90.2 on latin-ext, 89.5 on cyrillic, 85.6 on box
+— and then 8.0 on unicode, 6.0 on cjk, 3.7 on combining and 2.8 on emoji.
+Everything that stays on the batched path (*Batched writes for alphabets other
+than English*) is within about 1.5x of ASCII; everything that leaves it is an order
+of magnitude behind.
+
+On the four slow rows, taking the columns as time per byte: grapheme
+clustering (`full` against `no-graph`) is 47-62% of the core's time (decode
+plus `full`), the per-code-point buffer path (`no-graph` against `parser`)
+29-34%, the parser 7-16% and decode 3-7%.
+
+### Discriminators
+
+`script/term_compare/gen_synthetic.py` writes six payloads that each hit one
+case of `Buffer._joinsPreviousGrapheme`. 32 MiB each, three interleaved rounds,
+medians, MiB/s:
+
+| payload | decode | parser | full | no-graph |
+|---|---|---|---|---|
+| c-wide-only (kana, kanji) | 424.5 | 159.4 | 25.3 | 37.2 |
+| c-wide-narrow (each followed by `a`) | 382.1 | 88.6 | 12.2 | 26.7 |
+| c-hangul-only (syllables) | 425.4 | 160.5 | 11.5 | 37.4 |
+| c-emoji-only | 414.9 | 170.7 | 14.4 | 29.2 |
+| c-emoji-narrow (each followed by `a`) | 402.6 | 100.4 | 12.8 | 23.9 |
+| c-latin-combining (`e` + U+0301 and kin) | 358.5 | 70.6 | 6.8 | 11.6 |
+
+Each row points at one gap in the join check as it stood. Its fast exit for
+wide characters required a wide base, a wide code point and no marks in the
+cell, so `c-wide-only` loses only a third to clustering while a wide character
+after a narrow letter fell through to segmentation (`c-wide-narrow`, 12.2
+against 26.7). The same exit excluded every Hangul code point: `c-hangul-only` has the
+same bytes per code point and the same parser speed as `c-wide-only`, and runs
+at less than half its speed. Emoji paid two `wcwidth` calls on the way to that
+exit, each a binary search above the BMP. And every combining mark went to the
+segmenter (`c-latin-combining`, 6.8 against 11.6).
+
+### The app
+
+`example/lib/e2e_bench.dart`, release build, with two switches added for this:
+`XB_NOVIEW=1` mounts no `TerminalView` (the terminal is sized to 100x37 by
+hand, so the run is PTY, decode and `Terminal.write` with no layout or paint),
+and `XB_PROF=<file>` records the time spent inside `terminal.write` at each DSR
+reply and every frame's build and raster time. Three legs per round,
+interleaved — view with profiling, no view with profiling, view without — and
+three rounds; all 72 samples were 100x37. Medians:
+
+| payload | view MiB/s | no view MiB/s | wall s | in `write` s | frames |
+|---|---|---|---|---|---|
+| ascii | 71.8 | 75.9 | 0.89 | 0.62 | 4 |
+| unicode | 15.8 | 16.1 | 4.06 | 3.62 | 1 |
+| latin-ext | 73.8 | 72.2 | 0.87 | 0.45 | 4 |
+| cyrillic | 73.7 | 73.8 | 0.87 | 0.47 | 4 |
+| cjk | 13.0 | 13.0 | 4.93 | 4.59 | 1 |
+| emoji | 7.9 | 7.9 | 8.11 | 7.74 | 1 |
+| combining | 6.1 | 6.3 | 10.41 | 9.93 | 1 |
+| box | 87.5 | 90.8 | 0.73 | 0.36 | 5 |
+
+Wall, `write` and frames are the profiled view leg: frames is how many were
+drawn while that payload streamed. Frame build time is 0-2% of wall on every
+row.
+
+**The cost is in the core, not in layout or paint.** Taking `TerminalView`
+away moves no row by more than 6%. On the four slow payloads, decode plus the time inside
+`terminal.write` is 96-98% of the main thread's wall time. Decode is not
+measurable in the app — it runs in the stream transform before `write` — so
+that share is derived: decode seconds come from the headless probe's
+`decode-1k` column (64 MiB at 1 KiB chunks), not from the app.
+
+**The PTY hands `terminal.write` about 1 KiB per call,** not the 64 KiB the
+driver writes (`XB_PROF` counts calls). The probe's `-1k` columns run the same
+files at that size; it changes `full` by under 5% on every row, so the headless
+table stands for the app.
+
+**Parsing off the UI thread would fix the stutter, not the throughput.** The
+slow payloads get one frame in a 4-10 s burst, and a parser isolate would give
+those frames back. But the stream is sequential: another core parses it at the
+same rate, and the payload drains no sooner. Throughput has to come out of the
+core, which is the next section.
+
+```sh
+mkdir -p /tmp/pay
+python3 script/term_compare/gen.py 64 /tmp/pay
+python3 script/term_compare/gen_synthetic.py 32 /tmp/pay
+# /tmp/ulp-base: the probe built at 8e2b14b, recipe in the next section
+/tmp/ulp-base 5 /tmp/pay/{ascii,unicode,latin-ext,cyrillic,cjk,emoji,combining,box} > /tmp/probe.txt
+/tmp/ulp-base 3 /tmp/pay/c-*
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+script/term_compare/run_app.sh /tmp/pay /tmp/app 3
+python3 script/term_compare/app_table.py /tmp/app /tmp/probe.txt
+```
+
+Built here, the app measures this tree, not `8e2b14b`. The app table as it
+was needs the example built in the same worktree, with
+`example/lib/e2e_bench.dart` and `script/term_compare/` copied in and
+`run_app.sh` run from that copy.
+
+## Grapheme-join fast paths — 2026-11-19
+
+`Buffer._joinsPreviousGrapheme` decides whether a code point continues the
+cluster in the cell before it. Whatever its exits do not settle goes to
+`characters` segmentation, which allocates. Each change below adds or widens an
+exit that is decided by the incoming code point, its width and the last code
+point the previous cell stores, and each holds because of one rule of UAX #29:
+
+- **The known cell width is passed in.** `writeChar` has already looked up
+  `wcwidth(codePoint)`; the check looked it up again, which above the BMP is a
+  binary search.
+- **A wide code point joins only after Prepend, a leading jamo or ZWJ.** No
+  wide code point is Extend (bar the emoji modifiers, which have their own
+  check), Hangul V or T, a regional indicator or an Indic consonant, so only
+  GB9b, GB6 and GB11 can attach one to the cluster before it, and each is
+  decided by the last code point stored. Replaces the wide-after-wide exit,
+  Hangul exclusion and both `wcwidth` calls.
+- **A zero-width Extend or ZWJ always joins, unless the cell ends in a
+  control.** GB9 attaches them to anything; GB4 is the exception, and a cell
+  can end in a control — U+2028 is width 1, and with mode 2027 off any
+  zero-width code point is stored. `zeroWidthExtends` takes whole stretches,
+  Greek to Mongolian, minus Prepend, controls, Hangul V and T, and the marks
+  the width table knows from a newer Unicode than the segmenter.
+- **A narrow letter joins only by GB9b or GB9c.** `isNarrowLetter` — Hebrew to
+  NKo, Thai, Lao, Georgian, the Latin and Greek extended blocks, and the
+  independent vowels and consonants of the ten Indic blocks — is no Extend,
+  jamo, regional indicator or pictograph, so it starts a new cluster unless the
+  cell ends in Prepend or holds a conjunct linker. It runs after the Indic
+  conjunct check, which can join pairs GB9c does not.
+- **Indic vowel signs join.** At width 1, the dependent vowel signs at offsets
+  0x3E-0x4C of Devanagari to Malayalam are SpacingMark or Extend (GB9a, GB9),
+  bar the unassigned code points between them.
+- **A valid emoji modifier joins.** Past the modifier-base check a modifier is
+  Extend, so GB9 applies.
+- **The line is read once.** `currentLine` goes through the circular buffer on
+  every call, and the check called it up to three times; `_previousCellIndex` is
+  inlined into the same read.
+- **Plane 1 gets a width table.** `wcwidth` binary-searched everything above
+  the BMP. Plane 1, where nearly every emoji lives, now has a 64 KiB table like
+  the BMP's, filled in `wcwidth`'s own precedence, combining over wide.
+
+Baseline `8e2b14b` against this tree, headless, three interleaved passes,
+medians, MiB/s. 64 MiB per `gen.py` payload, 32 MiB per `c-*`:
+
+| payload | full before | full after | ratio | no-graph before | no-graph after |
+|---|---|---|---|---|---|
+| ascii | 111.4 | 114.7 | 1.03 | 112.2 | 112.9 |
+| unicode | 18.9 | **35.6** | 1.88 | 37.7 | 40.1 |
+| latin-ext | 147.5 | 149.2 | 1.01 | 145.7 | 146.9 |
+| cjk | 14.8 | **27.2** | 1.84 | 32.0 | 33.1 |
+| emoji | 8.9 | **13.8** | 1.55 | 24.7 | 32.4 |
+| combining | 7.1 | **12.7** | 1.79 | 18.4 | 18.7 |
+| box | 202.4 | 204.9 | 1.01 | 205.3 | 196.9 |
+| c-wide-only | 24.4 | 29.8 | 1.22 | 35.5 | 34.9 |
+| c-wide-narrow | 11.8 | **23.1** | 1.96 | 25.6 | 25.8 |
+| c-hangul-only | 11.0 | **30.0** | 2.73 | 35.5 | 35.6 |
+| c-emoji-only | 13.9 | **37.3** | 2.68 | 28.1 | 45.5 |
+| c-emoji-narrow | 12.4 | **27.6** | 2.23 | 22.6 | 31.2 |
+| c-latin-combining | 6.5 | **10.5** | 1.62 | 11.0 | 11.2 |
+
+`no-graph` rose on emoji because the plane-1 table speeds up `wcwidth`, which
+runs in either mode. `full` on the rows that never reach the join check —
+ascii, latin-ext, box — moved by 3% or less.
+
+Step by step, `full` only, each step an interleaved A/B against the one before,
+n=3 unless marked: width passed in, `c-emoji-only` 14.0 → 17.2; the wide exit
+(first form, cells without marks), cjk 15.1 → 25.6, unicode 19.2 → 32.2,
+`c-hangul-only` 11.1 → 27.5, `c-wide-narrow` 12.0 → 22.2; Extend and ZWJ,
+combining 7.5 → 9.1, `c-latin-combining` 6.9 → 10.5; narrow letters, combining
+9.1 → 11.5; Indic vowel signs, combining 11.2 → 12.0; the wide exit decided on
+the last stored code point, emoji 10.3 → 11.3; emoji modifiers, emoji
+11.2 → 11.6 (n=5); the plane-1 table, emoji 11.6 → 13.2, `c-emoji-only`
+24.1 → 34.6; the line read once, `c-wide-only` 27.6 → 30.1, cjk 25.4 → 27.4
+(n=5). Each pair is only good against itself: ascii drifted between 106 and
+119 across these runs. They came from throwaway full-only builds of the probe,
+so the repo scripts reproduce the table above, not these.
+
+**What a code point pays before any exit.** With the width passed in,
+`c-wide-only` ran at 24.7 MiB/s, and at 33.5 with the check returning at its
+first line, though every one of its code points should leave at the first exit.
+Returning early at successive points of the check priced the way there, at
+that step, at about 30 ns per code point: finding the previous cell ~6 ns,
+reading its code point and combining string ~9 ns, the checks ahead of the
+wide exit ~10 ns, the exit itself ~4.5 ns.
+
+### How it was accepted
+
+`script/grapheme_grid_dump.dart` digests the grid a file leaves behind — code
+point, width and combining string per cell, wrap flags, cursor — and
+`script/term_compare/gen_corpus.py` writes a 335-file adversarial corpus:
+every class in isolation, targeted sequences (jamo, Prepend, ZWJ, regional
+indicators, VS15/VS16, modifiers, virama), lines filled to the edge, nearly
+every code point after each of 27 bases, and slices of the payloads above. Old binary
+against new, the digests were identical in four configurations (100x37 and
+7x10, mode 2027 on and off), checked after every change. Deliberately broken
+variants changed 8-21 files' digests, so the oracle does catch errors. Each
+predicate also has an exhaustive test over U+0000-U+10FFFF against real
+segmentation, the plane-1 table one against the binary search it replaces.
+Tests 1079 → 1094, all passing.
+
+What that does not cover: the digest leaves out cell attributes and the
+pending-wrap state. The numbers are headless; the app is measured under *In
+the app* below.
+And the width table is Unicode 17 while `characters` 1.4.1 segments by
+Unicode 16 — `zeroWidthExtends` works around the difference (U+1ACF-1AEB), and
+the exhaustive tests will flag it when either side moves.
+
+**Measured, rejected:** skipping the `runes.length` count in
+`BufferLine.addCombiningCharacter` for short strings. combining 1.025x at n=5 —
+nothing.
+
+### What is left
+
+On mixed and CJK text the join check is nearly exhausted: `unicode` 35.6
+against 40.1 with clustering off. Emoji sequences (13.8 against 32.4: emoji
+after ZWJ, a regional indicator after a finished flag, the VS16 resize path)
+and combining scripts (12.7 against 18.7: scripts the predicates do not cover,
+a consonant after a virama, a `Map<int, String>` lookup and a string concat per
+mark) still have a gap. One lead not pursued: a small direct-mapped cache of
+`(base, codePoint)` pairs for cells with no combining string.
+
+```sh
+# Baseline binaries. The two scripts do not exist at 8e2b14b, so they are
+# copied in, as bench-compare.sh copies its harness.
+git worktree add --detach /tmp/xb 8e2b14b
+cp script/grapheme_grid_dump.dart script/unicode_layer_probe.dart /tmp/xb/script/
+(cd /tmp/xb && dart pub get &&
+  dart compile exe script/grapheme_grid_dump.dart -o /tmp/dump-base &&
+  dart compile exe script/unicode_layer_probe.dart -o /tmp/ulp-base)
+git worktree remove --force /tmp/xb
+dart compile exe script/grapheme_grid_dump.dart -o /tmp/dump
+dart compile exe script/unicode_layer_probe.dart -o /tmp/ulp
+
+python3 script/term_compare/gen_corpus.py /tmp/pay /tmp/pay /tmp/corpus
+script/term_compare/grid_oracle.sh /tmp/corpus /tmp/dump-base /tmp/dump /tmp/oracle
+script/term_compare/probe_ab.sh /tmp/ulp-base /tmp/ulp 3 /tmp/ab.log \
+  /tmp/pay/{ascii,unicode,latin-ext,cjk,emoji,combining,box} \
+  /tmp/pay/c-{wide-only,wide-narrow,hangul-only,emoji-only,emoji-narrow,latin-combining}
+```
+
+### In the app — 2026-11-20
+
+The example app (`e2e_bench.dart`, release, real PTY, view on, no profiling)
+built before `7be44d3` (at `8e2b14b`) and after it, alternated one round at a
+time. 64 MiB per payload, 100x37, five rounds, medians, MiB/s:
+
+| payload | before | after | ratio |
+|---|---|---|---|
+| ascii | 76.4 | 77.6 | 1.02 |
+| unicode | 16.0 | **27.7** | 1.73 |
+| latin-ext | 75.8 | 76.5 | 1.01 |
+| cyrillic | 75.2 | 76.0 | 1.01 |
+| cjk | 13.1 | **23.6** | 1.81 |
+| emoji | 7.9 | **12.2** | 1.55 |
+| combining | 6.2 | **11.3** | 1.81 |
+| box | 88.6 | 88.9 | 1.00 |
+
+The app gets what the headless table promised: 1.55-1.81x on the four rows
+that reach the join check, against 1.55-1.88x headless, and the rows that never
+reach it within 2%.
+
+```sh
+# Base build: the harness does not exist at 8e2b14b, so it is copied in, as
+# bench-compare.sh copies its harness. Keep the bundle named example.app.
+git worktree add --detach /tmp/xb 8e2b14b
+cp example/lib/e2e_bench.dart example/lib/e2e_worker.dart /tmp/xb/example/lib/
+(cd /tmp/xb/example && flutter build macos --release -t lib/e2e_bench.dart)
+mkdir -p /tmp/app-base && cp -R /tmp/xb/example/build/macos/Build/Products/Release/example.app /tmp/app-base/
+git worktree remove --force /tmp/xb
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+mkdir -p /tmp/app-new && cp -R example/build/macos/Build/Products/Release/example.app /tmp/app-new/
+script/term_compare/app_ab.sh /tmp/pay /tmp/appab /tmp/app-base /tmp/app-new 5
+python3 script/term_compare/app_ab_table.py /tmp/appab/results.jsonl
+```
+
+Built here, the new side is this tree, which also has `996a7b4` and the bench
+flags of `c717fec`; with no flag set neither is on this path.
+
+## Frame starvation through a PTY — 2026-11-20
+
+`flood` (*Pacing the write path*) has no PTY, and there the unpaced case drew 37
+frames a second and was never freezing. Through a real PTY it does freeze. The
+example app (`e2e_bench.dart` with `XB_PROF`, release, `flutter_pty2` 1.0.0,
+view on) draws **1-8 frames during a whole 64 MiB payload**, and the longest
+gap between two frames is **0.2-2.8 s** — every unpaced run in this section and
+the next two. All tables here: real PTY, 64 MiB per payload, 100x37, Apple M1
+Pro, display at 75 Hz, five interleaved rounds, medians.
+
+**The cause, measured.** `flutter_pty2` 1.0.0 posts one port message per
+`read()`, and a macOS PTY returns about 1 KiB per read: 0.99 KiB per
+`terminal.write` call. The messages arrive far faster than they are parsed. The
+driver has handed over all 64 MiB after 0.5-0.8 s, with 5-53 MiB still
+unparsed at that point (derived), and the UI thread spends the rest of the
+payload draining that backlog. Split where the driver finished writing
+(`spike_phase.py`, run 3 below), every unpaced frame falls in the burst; the
+tail — 1.8 s on unicode, 2.3 s on cjk — draws none. Peak RSS is up to 106 MiB
+above the same run with `ackRead` (unicode 304 against 198 MiB).
+
+### Levers on flutter_pty2 1.0.0
+
+Each cell is MiB/s / frames during the payload / longest gap between frames, ms.
+Two runs; compare only within one table.
+
+Run 1:
+
+| config | ascii | unicode | cjk |
+|---|---|---|---|
+| unpaced | 77.4 / 4 / 405 | 27.7 / 1 / 1586 | 22.9 / 1 / 2545 |
+| `ackRead`, ack after parsing (`ack`) | 18.9 / 254 / 14 | 12.8 / 374 / 16 | 11.8 / 408 / 15 |
+| `ackRead`, ack on arrival (`ack-early`) | 20.3 / 237 / 15 | 16.3 / 293 / 15 | 15.1 / 317 / 14 |
+| `PacedTerminalWriter` before `996a7b4` | 71.2 / 3 / 457 | 26.6 / 1 / 2341 | 22.0 / 1 / 2619 |
+| the same + `ackRead` | 19.6 / 245 / 15 | 15.5 / 308 / 15 | 14.6 / 330 / 14 |
+| isolate, snapshot pulled per frame, acked (`isolate`) | 33.6 / 142 / 14 | 17.5 / 271 / 14 | 15.2 / 316 / 14 |
+| the same, ack on arrival (`isolate-early`) | 36.2 / 132 / 14 | 21.6 / 222 / 17 | 18.9 / 254 / 14 |
+
+Run 3 (run 2 repeated `ack-early` and `isolate-early` within 7%):
+
+| config | ascii | unicode | cjk |
+|---|---|---|---|
+| unpaced | 75.0 / 5 / 316 | 27.1 / 1 / 2257 | 22.8 / 1 / 2700 |
+| isolate, snapshot pushed (`isolate-push`) | 65.7 / 74 / 17 | 26.0 / 188 / 17 | 21.5 / 228 / 17 |
+| budget across turns, 8 ms (`paced-span`) | 55.3 / 92 / 24 | 23.2 / 239 / 54 | 19.8 / 314 / 26 |
+| budget across turns, 11 ms (`paced-span11`) | 59.8 / 64 / 28 | 23.8 / 178 / 67 | 20.4 / 226 / 35 |
+
+**Back pressure works, and on 1.0.0 it is expensive.** `ackRead` holds the
+display's 75 fps with a longest gap of 14-16 ms and no backlog, at 48-76% less
+throughput (ascii 77.4 → 18.9, unicode 27.7 → 12.8, cjk 22.9 → 11.8): every
+~1 KiB chunk waits for its own ack round trip. Acking on arrival recovers part
+of it and nothing else changes.
+
+**The shipped `PacedTerminalWriter` did nothing.** Never more than one chunk
+queued (`pendingChunks` max 1), frames and gaps as unpaced. Its budget was per
+drain pass, and a pass ended when the queue was empty: a PTY delivers one chunk
+per event-loop turn, so every pass wrote its one chunk and returned, and the
+budget was never reached.
+
+**A budget that spans turns does work.** `paced-span` is a bench-only pacer
+(`XB_PACED=2`) that sums the time spent in `Terminal.write` across chunks and
+queues whatever arrives past the budget until after the frame: the longest gap
+goes from 0.3-2.7 s to 24-54 ms, at 13-26% of throughput. An 11 ms budget buys
+some throughput back and lengthens the gaps. Both still take everything the PTY
+delivers into their queue — up to 62039 chunks.
+
+**An isolate is smooth and buys no throughput.** `isolate-push`: a worker
+isolate owns the PTY and a headless `Terminal`, and pushes a 100x37 snapshot of
+the visible grid at most every 13 ms to a mirror `Terminal` that the view
+shows. Longest gap 17 ms on every payload, at 88-96% of unpaced throughput in
+that run. No gain, because the stream is sequential and another core parses it
+at the same rate, and the backlog is as unbounded as unpaced (20-53 MiB
+unparsed when the driver finishes). A snapshot is 59.2 KB and takes ~22 us to
+build in the worker; applying it on the UI thread took 59-67 us in runs 1 and 2
+and 87-92 us in run 3, and a snapshot reached the UI a median 0.1-0.2 ms after
+it was requested. Run 2's `isolate-push` was smooth but less so — 61.4 / 77 / 26,
+24.7 / 192 / 27, 20.6 / 232 / 27 — and the data does not show whether that
+build differed from run 3's.
+
+**Not pursued.** The spike mirrors only the visible cells. A real
+implementation would have to carry scrollback, combining characters, the
+hyperlink table, input, resize, selection and search across the isolate
+boundary; answer the callbacks a `Terminal` makes synchronously today (queries
+the application answers inline); keep the modes input encoding depends on
+(keyboard protocol, mouse reporting, bracketed paste) in step on the UI side;
+and keep today's path regardless, because the web has no isolates. For a
+smoothness gain that a budget across turns delivers on the UI thread, at no
+throughput gain, that is not worth it — the next section is that budget in the
+package.
+
+```sh
+python3 script/term_compare/gen.py 64 /tmp/pay
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+script/term_compare/spike.sh /tmp/pay /tmp/spike1 5 "unpaced ack ack-early isolate isolate-early"
+script/term_compare/spike.sh /tmp/pay /tmp/spike3 5 "unpaced isolate-push paced-span paced-span11"
+python3 script/term_compare/spike_table.py /tmp/spike1   # also: backlog, RSS, snapshot costs
+python3 script/term_compare/spike_phase.py /tmp/spike3   # burst / tail split
+```
+
+The two writer rows were taken before `996a7b4`. At this tree `paced` is the
+fixed writer, so the old row reproduces only as `paced-old` with `APP_OLD` set
+to a build at `ba46f04` (recipe as under *In the app*), and the old writer with
+`ackRead` has no config.
+
+## `PacedTerminalWriter` paces across turns — 2026-11-20
+
+`996a7b4` makes the budget per frame. Time spent inside `Terminal.write` is
+summed across `write()` calls, and once `frameBudget` (8 ms) of it has been
+spent since the last frame, further chunks are queued until a frame has been
+produced. The check is made before a chunk is written, never after: with a PTY
+the chunk that has to wait arrives on a later turn. A chunk arriving after a
+frame interval (17 ms) with no write starts a fresh budget and is written at
+once — the frame is inferred from the idleness — so ordinary interactive output
+is not delayed. If the frame waited for has not come within 100 ms, the writer
+stops waiting for it and, until it comes, leaves one frame interval between
+budgets, so a window whose frames have stopped keeps draining and replies the
+terminal owes still go out. Public API unchanged.
+
+Acceptance, one interleaved run, MiB/s / frames / longest gap ms:
+
+| config | ascii | unicode | cjk |
+|---|---|---|---|
+| unpaced | 72.1 / 8 / 206 | 26.4 / 2 / 1825 | 22.3 / 1 / 2747 |
+| writer before `996a7b4` | 67.9 / 6 / 318 | 25.6 / 1 / 2321 | 21.4 / 2 / 2847 |
+| writer after | 53.6 / **100 / 19** | 22.9 / **245 / 48** | 19.4 / **322 / 23** |
+| `paced-span`, for reference | 55.4 / 93 / 22 | 23.0 / 240 / 51 | 19.7 / 316 / 22 |
+
+The writer now lands on the bench-only pacer: throughput within 4%, frames and
+gaps alike. Against unpaced in the same run it costs 13-26% of throughput and
+takes the longest gap from 0.2-2.7 s to 19-48 ms. The binary measured here
+differed from what shipped only in the no-frame fallback below, which a 48 ms
+gap does not reach; a second run of the shipped code gave 54.6 / 97 / 24,
+22.9 / 245 / 50 and 19.5 / 322 / 23.
+
+**Measured, rejected:** when no frame comes, yielding one event-loop turn
+between budgets instead of a frame interval. Measured with a `waitForFrame`
+that never completes while the window stays visible (`XB_PACED=3`): 57.0 /
+26.0 / 21.8 MiB/s, but longest gaps of 260 / 1039 / 1364 ms — back-to-back
+budgets starve the frames as unpaced output does. With the frame interval that
+shipped, the same setup gives gaps of 102 / 51 / 33 ms at 25.4 / 9.6 / 7.3
+MiB/s, about a third of unpaced. So a window whose frames have stopped, or
+whose frames the writer does not hear about, drains at about a third of the
+normal rate. A truly hidden window was not measured.
+
+What this does not cover. Tests 1104, all passing. With a visible window the
+100 ms timeout has not been seen to matter: the longest gap in any round of the
+fixed writer was 63 ms on ascii, unicode and cjk and 87 ms on `sgr` (next
+section), on one machine. Whether it fired was not counted. There is still no back pressure in the class: the queue takes
+everything the PTY delivers, up to 59034 chunks here, about 57 MiB at 0.99 KiB
+a chunk (derived). How long input takes to show its effect — a Ctrl-C's output
+behind that queue — was not measured. And the class stays opt-in: nothing in
+the package uses it.
+
+```sh
+# paced-old: a build at ba46f04, recipe as under *In the app*, into /tmp/app-old
+APP_OLD=/tmp/app-old/example.app/Contents/MacOS/example \
+  script/term_compare/spike.sh /tmp/pay /tmp/accept 5 "unpaced paced-old paced paced-span paced-noframe"
+python3 script/term_compare/spike_table.py /tmp/accept
+```
+
+At this tree `paced-noframe` is the shipped fallback. The zero-delay variant
+was a throwaway build — `_waitForNextFrame` arming `Timer(Duration.zero, ...)`
+instead of `Timer(_frameInterval, ...)` — and is not in the repo.
+
+## flutter_pty2 with coalesced reads — 2026-11-20
+
+Old: `flutter_pty2` 1.0.0 from pub.dev, which the example depends on. New: a
+**local, unreleased** checkout of flutter_pty2 3.0.0 at `2c525c8` (branch
+`perf/coalesce-output-reads`), in which reads are coalesced into events of up to
+64 KiB, output flow is controlled by automatic credits with a 256 KiB window,
+and pausing the stream subscription withholds credit. These are numbers for
+that commit, not for a release. Both builds are this tree with the fixed
+writer; "writer" below is `PacedTerminalWriter` as of `996a7b4` in every row.
+
+MiB/s / frames / longest gap ms:
+
+| config | ascii | unicode | cjk | sgr |
+|---|---|---|---|---|
+| 1.0.0, unpaced | 75.3 / 5 / 348 | 27.2 / 1 / 2264 | 22.9 / 1 / 2781 | 37.6 / 2 / 1185 |
+| 1.0.0, writer | 55.6 / 95 / 22 | 23.2 / 241 / 54 | 19.9 / 318 / 25 | 6.3 / 177 / 83 |
+| 3.0.0 local, unpaced | 77.4 / 16 / 149 | 28.6 / 18 / 296 | 24.6 / 18 / 259 | 27.8 / 18 / 243 |
+| 3.0.0 local, writer | 65.5 / 92 / 16 | 25.5 / 209 / 24 | 22.1 / 274 / 13 | 7.0 / 156 / 69 |
+| 3.0.0 local, writer + pause | 64.6 / 93 / 14 | 25.5 / 208 / 25 | 22.1 / 274 / 14 | 7.1 / 157 / 66 |
+
+KiB per `terminal.write` call / peak PTY bytes queued in the writer, MiB:
+
+| config | ascii | unicode | cjk | sgr |
+|---|---|---|---|---|
+| 1.0.0, unpaced | 0.99 / – | 0.99 / – | 0.99 / – | 0.99 / – |
+| 1.0.0, writer | 0.99 / 29.4\* | 0.99 / 59.5\* | 0.99 / 58.9\* | 0.99 / 60.8\* |
+| 3.0.0 local, unpaced | 38.4 / – | 19.8 / – | 13.3 / – | 22.2 / – |
+| 3.0.0 local, writer | 34.2 / 0.5 | 44.6 / 12.0 | 42.8 / 16.3 | 31.1 / 0.4 |
+| 3.0.0 local, writer + pause | 34.9 / 0.5 | 43.5 / 1.0 | 41.5 / 1.0 | 31.0 / 0.4 |
+
+\* derived: peak queued chunks × KiB per write.
+
+**Unpaced, the producer is throttled.** The driver's writes now return only as
+fast as the terminal parses — accepted and parsed are the same 2.23 s on
+unicode — so nothing piles up: at most 0.3 MiB unparsed when the driver finishes,
+against 12-52 MiB on 1.0.0, and peak RSS 283 → 216 MiB on unicode. Frames go
+from 1-5 to 16-18 per payload and the longest gap from 0.3-2.8 s to 149-296 ms:
+better, not smooth. Throughput moves +3-7% on ascii, unicode and cjk.
+
+**With the writer** the gaps on ascii, unicode and cjk are 13-25 ms and
+throughput is 10-18% above the writer on 1.0.0. But the writer still takes everything it is given, and on
+unicode and cjk its queue peaks at 12.0 and 16.3 MiB: that is growth over a
+64 MiB payload, not a bound.
+
+**Pausing the subscription bounds it.** A bench-only rule in
+`e2e_bench_pty3.dart` (`XB_PAUSE=1`): pause the output subscription above 1 MiB
+queued in the writer, resume below 256 KiB. Peak queue at most 1.0 MiB on every
+payload, and throughput, frames and gaps where they were without it. The pause
+only engaged on unicode and cjk, 46-54 times per run, so what it costs on
+ascii and `sgr` has not been exercised.
+
+**`sgr` with the writer is slow on either plugin**, 6.3 and 7.0 MiB/s, because
+one frame of that payload takes 44-52 ms to build (median per frame, in every
+`sgr` row; under 2 ms on ascii), so 156-177 frames fill most of the window. In one
+diagnostic run, 178 frames' builds summed to 8.9 s of a 10.5 s window. A paint
+cost, under investigation. It is also why unpaced `sgr` got slower on the new
+plugin: it draws 18 frames instead of 2, about 0.8 s of build at ~44 ms each,
+and the payload took 0.6 s longer (derived).
+
+The 3.x entrypoint is not part of the example, because the example depends on
+`flutter_pty2: ^1.0.0` and CI analyzes it against that: it lives in
+`script/term_compare/pty3/`, excluded from analysis, and is copied in for the
+build.
+
+```sh
+# Both binaries: recipe at the top of script/term_compare/spike_pty3.sh
+APP=/tmp/pty3/example.app/Contents/MacOS/example APP_OLD=/tmp/pty1/example.app/Contents/MacOS/example \
+  PAYLOADS="ascii unicode cjk sgr" script/term_compare/spike_pty3.sh /tmp/pay /tmp/pty3run 5
+PAYLOADS="ascii unicode cjk sgr" python3 script/term_compare/spike_table.py /tmp/pty3run
+```
+
+## Against Ghostty again — 2026-11-20
+
+The 2026-11-19 comparison, re-run with the writer as an extra xterm3 leg. Same
+driver, PTY and 100x37 grid; five interleaved rounds, medians, MiB/s. Two runs;
+compare only within one table.
+
+Run 1, `flutter_pty2` 1.0.0, writer as of `996a7b4`:
+
+| workload | xterm3 | xterm3 + writer | Ghostty 1.4.0 |
+|---|---|---|---|
+| ascii | 72.8 | 53.2 | **101.7** |
+| sgr | 36.5 | 6.1 | **71.2** |
+| cursor | 41.8 | 31.6 | **78.8** |
+| unicode | 26.4 | 22.2 | **85.6** |
+
+Run 2, the local flutter_pty2 3.0.0 build of the previous section, writer +
+pause:
+
+| workload | xterm3 | xterm3 + writer + pause | Ghostty 1.4.0 |
+|---|---|---|---|
+| ascii | 75.5 | 63.3 | **127.5** |
+| sgr | 25.9 | 6.9 | **89.0** |
+| cursor | 40.5 | 36.2 | **91.0** |
+| unicode | 28.1 | 24.9 | **103.5** |
+
+**Read the ratios as approximate.** Ghostty's own numbers moved 15-25% between
+the two runs, and run 1 sits 19-30% below the 2026-11-19 table, with the same
+Ghostty 1.4.0. xterm3's ascii and cursor rows stayed within 6% across all
+three; its unicode row moved with the grapheme work, and its `sgr` row with the
+frame cost of the previous section. The unicode gap to Ghostty was 6.7x on
+2026-11-19 and is 3.2x and 3.7x in these two runs.
+
+Throughput only: the clock is the DSR reply, and Ghostty's frames were not
+measured, so the writer columns have no Ghostty counterpart for smoothness. No
+Alacritty column: no binary was available on the day.
+
+```sh
+python3 script/term_compare/gen.py 64 /tmp/pay
+# Results land next to the payloads, so each run gets its own copy.
+mkdir -p /tmp/cmp1 /tmp/cmp2
+cp /tmp/pay/{ascii,sgr,unicode,cursor} /tmp/cmp1/ && cp /tmp/pay/{ascii,sgr,unicode,cursor} /tmp/cmp2/
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+script/term_compare/cmp_paced.sh /tmp/cmp1 5
+# /tmp/pty3: the 3.x build, recipe at the top of script/term_compare/spike_pty3.sh
+APP=/tmp/pty3/example.app/Contents/MacOS/example TAG=-pty3 PAUSE=1 \
+  script/term_compare/cmp_paced.sh /tmp/cmp2 5
+```
+
+### What is left
+
+- **Frame build cost on SGR-dense screens.** 44-52 ms per frame on `sgr` is
+  what holds the writer to 6-7 MiB/s there, and what slows unpaced `sgr` once
+  frames happen at all. It is paragraph-cache misses,
+  because colour is in the per-cell cache key, and as far as measured it is
+  confined to synthetic random colour (*Frame build on colour-dense screens*,
+  next). Whether to adopt the glyph atlas measured there is open.
+- **The per-code-point write path**, where the largest throughput gap to
+  Ghostty is: 3.2-3.7x on unicode, against 1.9-2.2x on cursor and 1.4-1.7x on
+  ascii.
+- **An adaptive budget for the writer** when frames are expensive. It has lost
+  the case that motivated it: real coloured output builds a frame in 0.3-2.5 ms
+  (next section). An idea, not measured.
+- **The pause logic in the package.** The bench's pause-above / resume-below
+  rule bounds the queue on the 3.x plugin; it could live in
+  `PacedTerminalWriter` or alongside it rather than in each application. An
+  idea, not measured as a package change.
+- **`combining`**: 8 ms of build and 56 paragraph layouts per frame, and a
+  longest gap of 237-283 ms even with the writer (next section). Not
+  investigated.
+
+## Frame build on colour-dense screens — 2026-11-20
+
+Why one `sgr` frame takes 44-52 ms to build (*flutter_pty2 with coalesced
+reads*), whether real programs pay it, and four ways out, tried in scratch
+copies of `lib/`. Every number here: the example app (`e2e_bench.dart`),
+release, real PTY, `flutter_pty2` 1.0.0, 100x37, `PacedTerminalWriter` on
+(`XB_PACED=1`) so that every frame is drawn, Apple M1 Pro, macOS, Impeller.
+Build and raster are medians over the frames inside the payload's DSR window,
+ms; raster is raster-thread CPU time. Two flags of `e2e_bench.dart` used here
+are uncommitted bench code at the time of writing: `XB_STATS=1` records
+`TerminalRenderStats` after every frame, and `XB_SHOT` writes a screen into the
+terminal and dumps the view to PNG. So are the helpers
+`script/term_compare/gen_sgr_ablate.py`, `rec_pty.py` and `shot_diff.py`.
+
+### The cause: colour is in the paragraph cache key
+
+`TerminalPainter.paintCellForeground` draws one `ui.Paragraph` per non-empty
+cell, cached under `(foreground ARGB, decoration ARGB, visual flags, cell
+content, text scaler, combining characters)`. Capacity is max(2048, cells ×
+1.25) with cells = columns × (rows + 1): 4750 at 100x37. The lookup is per
+cell, not per style run: with ligatures off, the default, the run path is never
+taken.
+
+A hit costs about 0.7 us including `drawParagraph` (ascii: 1.7 ms over 2478
+lookups, derived). A miss costs about 27 us, timed with stopwatches in a
+scratch copy of `lib/` on `sgr`:
+
+| step of one miss | us |
+|---|---|
+| `ParagraphBuilder` construction, with style conversion | 6.6 |
+| `pushStyle` | 5.4 |
+| `addText` | 0.3 |
+| `build` | 2.4 |
+| `layout` | 8.2 |
+| cache insert + evict + dispose | 3.5 |
+
+The stopwatches perturb a little: `sgr` builds in 47.3 ms stock and 47.6-48.2
+instrumented. In that copy (`sgr`, median frame 47.6 ms), `RenderTerminal.paint`
+is 47.5 ms, of which the foreground pass 47.3 and the background pass 0.11;
+`performLayout` is 0.00.
+
+**Ablation.** `gen_sgr_ablate.py` makes variants of `gen.py`'s `sgr` payload,
+one change each (the generator's comments say exactly what); the last three
+rows are real captures repeated to the same size. 16 MiB per variant, three
+rounds; lookups and misses are per frame.
+
+| variant | build ms (median / p90) | raster ms | lookups | misses |
+|---|---|---|---|---|
+| ascii | 1.7 / 2.1 | 2.7 | 2478 | 0 |
+| `sgr` | 47.3 / 51.6 | 3.3 | 1829 | 1656 |
+| fix8: 8 colours, attributes accumulate | 30.7 / 35.0 | 3.3 | 1814 | 915 |
+| fgonly: foreground colour only | 33.0 / 38.1 | 3.2 | 1826 | 1107 |
+| bgonly: background colour only | 20.4 / 25.2 | 3.2 | 1828 | 604 |
+| fg256: 256-colour foreground only | 31.9 / 36.4 | 3.2 | 1792 | 1074 |
+| attrs: attributes, no colour | 3.2 / 4.4 | 3.5 | 1818 | 0 |
+| bold, italic or inverse alone | 1.3 / 1.5 | 2.0 | 1810-1847 | 0 |
+| underline alone | 2.7 / 3.1 | 3.9 | 1829 | 0 |
+| reset: `ESC[0m` before every run | 24.0 / 26.8 | 2.7 | 1835 | 1113 |
+| samesgr: fixed SGR sequence, random text | 1.9 / 2.9 | 2.3 | 1823 | 0 |
+| sametext: random SGR, fixed text | 25.7 / 28.1 | 3.2 | 1884 | 1230 |
+| runs1: 1 style run per line | 26.9 / 30.8 | 3.7 | 2934 | 1284 |
+| runs4 | 58.3 / 62.6 | 4.3 | 2818 | 2220 |
+| runs15 | 59.4 / 62.7 | 4.3 | 2224 | 2096 |
+| runs40 | 40.0 / 42.7 | 4.5 | 1486 | 1398 |
+| `git log -p --color` | 1.0 / 1.7 | 1.3 | 1028 | 1 |
+| `ls -laG` | 1.6 / 2.2 | 2.2 | 1906 | 0 |
+| clang diagnostics | 1.3 / 2.0 | 2.0 | 1818 | 0 |
+
+**The number of misses decides it, not the number of style runs.** Frame build
+is about 1.3 ms + 20-32 us × misses per frame (derived from the rows above).
+`samesgr` has as many runs as `sgr` and builds in 1.9 ms; `runs1` has one run
+per line and takes 26.9 ms, because its colours are random. Attributes without
+colour never miss. `fix8` shows that a bounded palette can still thrash:
+colours times accumulating attributes times characters came to 13224 distinct
+keys over the run (counted, see the next table), against a capacity of 4750,
+and half its lookups miss.
+
+**Ceilings**, from throwaway switches in the instrumented copy — the output is
+wrong, so these are bounds, not candidates. Baselines are that copy's: `sgr`
+48.2, `fix8` 31.4 ms.
+
+| switch | `sgr` build ms | `fix8` build ms |
+|---|---|---|
+| none | 48.2 | 31.4 |
+| colour removed from the key | 2.8 | 2.7 |
+| cache capacity × 100 | 39.6 | 6.6 |
+
+Capacity helps `fix8` and barely moves `sgr`, whose key space is unbounded and
+which does not reach a steady state within 16 MiB. Menlo with an empty fallback
+list, instead of the default 24-family `fontFamilyFallback`: `sgr` 47.0 → 37.6.
+The background pass switched off: no change.
+
+### Real 256-colour and truecolor output does not hit it
+
+Captured from tools installed on the machine: vim 9.1 with `termguicolors` and
+unokai, and with 256-colour habamax, over this repo's sources, both as a
+recorded TUI session (`vim_*`, `rec_pty.py`) and as a `tmux capture-pane -e`
+stream (`vimcat_*`); htop 3.5.1; `rg --colors` with truecolor; `git log -p
+--color-moved` with truecolor `color.diff.*`; and the `cmatrix` and
+256-colour-table fixtures. **Not installed, therefore not measured:** bat,
+delta, eza, lsd, vivid, nvim, btop, tig, lazygit, pygmentize, chroma, lolcat —
+in particular no gradient or rainbow tool.
+
+Keys are counted in a scratch copy that records every key looked up (median
+distinct keys in one frame, and distinct keys over the whole run); misses (mean
+per frame) and build come from the stock leg of the candidate run below.
+
+| payload | keys per frame | keys over the run | misses per frame | build ms |
+|---|---|---|---|---|
+| vim_unokai | 78 | 292 | 3 | 0.5 |
+| vim_habamax256 | 76 | 310 | 4 | 0.5 |
+| vimcat_unokai | 99 | 280 | 3 | 0.9 |
+| vimcat_habamax256 | 103 | 286 | 3 | 1.0 |
+| htop | 214 | 271 | 1 | 1.2 |
+| rg_true | 89 | 136 | 1 | 1.5 |
+| git_true | 101 | 532 | 9 | 0.8 |
+| cmatrix | 143 | 536 | 4 | 0.3 |
+| colors256 | 389 | 728 | 0 | 2.5 |
+| `sgr` | 1716 | 66649 | 1662 | 46.1 |
+| `fix8` | 1585 | 13224 | 922 | 30.3 |
+
+Every real capture stays at or under 728 keys over the run, against a capacity
+of 4750: a theme's palette is 10-20 colours. Read the misses column with care:
+the captures are repeated 4-900 times to fill the payload, which flatters misses
+per frame; the count of keys over the run is the evidence. So the 45-50 ms frame
+is, as far as measured, a property of synthetic random colour — and, untested,
+perhaps of gradient tools — not of highlighters and TUIs.
+
+### Four candidates, in scratch copies
+
+None of this is in the package; the code is
+`script/term_compare/paint_spike/candidates.patch`, switched by environment
+variables (`lib/src/ui/xc.dart` in the patch).
+
+- **A1** cache capacity × 2, × 4, × 16 (`XC_CACHEX`).
+- **A2** `memo`: memoise the converted `ui` styles on a miss (`XC_MEMO=1`).
+- **A3** `nofb`: a short fallback list for printable ASCII (`XC_NOFB=1`).
+- **B** `tint`: a colour-independent paragraph, drawn inside a `saveLayer` with a
+  `srcIn` colour filter per style run (`XC_TINT=1`).
+- **C** `atlas`: glyph sprites in a `ui.Image` atlas, drawn with `drawRawAtlas`
+  once per line, `BlendMode.modulate` (`XC_ATLAS=1`).
+- **D** `runls`: one paragraph per style run on a miss, letter spacing set to
+  cell width minus advance (`XC_RUN=1 XC_RUNLS=1`).
+
+B and C key a glyph by a 3-bit luminance bucket (`XC_LUM=1 XC_LUMMODE=2`, next
+subsection). Two interleaved rounds, medians, build / raster ms
+(`paint_spike/main_table.txt`):
+
+| payload | stock | A3 `nofb` | B `tint` | C `atlas` | D `runls` |
+|---|---|---|---|---|---|
+| `sgr` | 46.1 / 3.1 | 37.7 / 3.2 | 16.7 / 9.0 | 1.5 / 4.7 | 11.9 / 1.1 |
+| `fix8` | 30.3 / 3.2 | 24.9 / 3.3 | 8.7 / 8.6 | 1.2 / 0.5 | 11.8 / 1.1 |
+| reset | 24.1 / 2.7 | 18.8 / 2.6 | 2.4 / 11.3 | 0.5 / 0.4 | 11.9 / 1.0 |
+| ascii | 1.7 / 2.7 | 1.7 / 2.7 | 1.7 / 3.7 | 0.7 / 0.5 | 3.5 / 0.6 |
+| gitlog | 1.0 / 1.3 | 1.0 / 1.3 | 1.1 / 2.5 | 0.5 / 0.3 | 2.8 / 0.8 |
+| htop | 1.2 / 1.9 | 1.3 / 2.0 | 1.6 / 9.5 | 0.4 / 0.3 | 1.0 / 1.0 |
+| vim_unokai | 0.5 / 0.6 | 0.5 / 0.6 | 0.5 / 1.5 | 0.3 / 0.2 | 0.9 / 0.4 |
+| colors256 | 2.5 / 3.9 | 2.6 / 4.2 | 2.6 / 5.2 | 0.8 / 0.6 | 1.3 / 1.8 |
+
+Paragraph layouts per frame on `sgr`: stock 1662, `nofb` 1663, `tint` 417,
+`atlas` 75, `runls` 326. The scratch copy with every switch off (`base`)
+matches stock (`sgr` 45.8 / 3.2). The table also has ls, clang, vimcat_unokai,
+git_true and cmatrix, and `paint_spike/extra_table.txt` rg_true and the two
+habamax captures; they read like the real rows above.
+
+A1, build ms (`paint_spike/a1_table.txt`):
+
+| payload | × 1 | × 2 | × 4 | × 16 |
+|---|---|---|---|---|
+| `fix8` | 30.2 | 15.8 | 6.8 | 6.6 |
+| `sgr` | 45.8 | 45.3 | 43.8 | 39.3 |
+| peak RSS on `sgr`, MiB | 279 | 339 | 457 | 1041 |
+
+**A2 does nothing**: `sgr` 46.4, `fix8` 30.7, within noise.
+
+**A1 helps bounded palettes only, and costs memory.** `fix8` falls to 6.8 ms at
+× 4; `sgr` stays at 39-45 ms while RSS reaches 1041 MiB at × 16.
+
+**A3 is pixel-identical and cuts 18-22% of the build on the colour-dense
+payloads** (`sgr` 46.1 → 37.7, `fix8` 30.3 → 24.9, reset 24.1 → 18.8; derived),
+with the controls unchanged. But the spike hard-codes `SF Mono,Menlo` as the
+short list; a real version would have to derive it from the configured font.
+
+**B is rejected.** It moves the cost to the raster thread on every payload —
+one layer per colour run: htop raster 1.9 → 9.5 ms, reset 2.7 → 11.3, ascii
+2.7 → 3.7. This file has now recorded that lesson three times: work taken off
+the UI thread has to be measured on the raster thread.
+
+**D is rejected as measured.** The controls build slower — ascii 1.7 → 3.5,
+gitlog 1.0 → 2.8 — because cells drawn as part of a run never warm the per-cell
+cache. Without the letter-spacing compensation (`XC_RUN=1` alone), runs drift
+0.17 px per glyph, the spike's check rejects them back to the per-cell path,
+and `sgr` takes 75.9 ms.
+
+**C is the only candidate that lowers both build and raster on every payload
+measured, controls included** — build 1.5-3x and raster 1.5-8x lower on the
+real and control rows (derived) — because it also replaces about 2500
+`drawParagraph` calls per frame with one atlas call per line. The one exception
+is `sgr`'s raster while the atlas pages fill: median 4.7 against 3.1, p90 build
+/ raster 7.6 / 11.6; in the second half of the run it is 1.0 / 0.5.
+
+### What the atlas does to pixels
+
+The repo's golden tests render with the Flutter test font, whose glyphs are
+boxes, so they cannot see a glyph-level difference. The oracle is a PNG of the
+real app instead: `shot_diff.py` shoots five screens (plain, `sgr`,
+decorations, wide characters, vim) at device pixel ratio 1 and 2, the first
+three also under a selection, and diffs them pixel by pixel. Stock is
+deterministic: two shots are identical.
+
+| screen | A1 / A2 / A3 | atlas, white sprites | atlas, luminance bucket |
+|---|---|---|---|
+| plain, ± selection | identical | identical | identical |
+| vim | identical | 2398-5071 px, max 53 | identical |
+| wide | identical | 3398-7240 px, max 54 | identical |
+| `sgr`, ± selection | identical | 38142-92397 px, max 91 | 6723-15078 px, max 2 at DPR 1, 5-6 at DPR 2 |
+| decorations | identical | 26275-55443 px, max 76 | 2790-6133 px, max 14 |
+| decorations + selection | identical | 29765-62420 px, max 73 | 3649-7112 px, max 32 |
+
+Pixels that differ, and the largest difference in any channel (0-255). White
+sprites tinted to the cell's colour are wrong in edge antialiasing: the glyph
+mask Impeller produces depends on the text colour. Keying the sprite by a 3-bit
+luminance bucket — the top 3 bits of `(54r + 183g + 19b) >> 8`, the sprite drawn
+in that bucket's grey — is what the tables above measured. With it, plain, vim,
+wide and a held-out screen not used while tuning are identical; `sgr` differs by
+at most 2 per channel at DPR 1 and 5-6 at DPR 2, with no pixel off by more than
+16; decorations by at most 14. Decorations under a selection differ by up to 32,
+with 739-1321 pixels off by more than 16, only on curly, dotted and dashed
+underlines — unexplained.
+(White sprites are also cheaper, `sgr` 0.6 / 0.5, because one sprite serves
+every colour; they are not a candidate.)
+
+What the spike's atlas covers: printable ASCII, Latin-1, Latin Extended-A and
+-B, Greek and Cyrillic; single-cell, no combining characters, glyph fits the
+cell; decorations when the decoration colour equals the foreground. Left on
+today's path: an explicit underline colour (SGR 58), combining characters,
+wide characters (CJK, emoji — emoji are never tinted), symbols, arrows and PUA
+glyphs, procedural glyphs, and everything when ligatures are on.
+
+### What it buys in throughput
+
+An overnight run: stock against the atlas candidate, five interleaved rounds,
+the writer on. The `gen.py` payloads are 64 MiB, gitlog and vimcat_unokai about
+16 MiB.
+
+| payload | MiB/s | frames | longest gap ms | build ms | raster ms |
+|---|---|---|---|---|---|
+| ascii | 56.1 → 62.9 | 94 → 91 | 24 → 20 | 1.7 → 0.7 | 2.6 → 0.5 |
+| unicode | 23.7 → 24.0 | 240 → 240 | 76 → 75 | 1.0 → 0.9 | 2.1 → 1.6 |
+| cjk | 20.3 → 20.0 | 311 → 314 | 46 → 46 | 0.8 → 0.8 | 1.5 → 1.4 |
+| emoji | 10.3 → 10.3 | 641 → 641 | 40 → 40 | 0.8 → 0.8 | 1.3 → 1.3 |
+| combining | 5.5 → 5.6 | 666 → 661 | 283 → 237 | 8.0 → 8.1 | 2.0 → 1.9 |
+| `sgr` | 6.6 → 32.4 | 175 → 176 | 89 → 77 | 46.1 → 0.7 | 3.2 → 0.5 |
+| gitlog | 36.1 → 37.7 | 40 → 41 | 22 → 21 | 1.1 → 0.5 | 1.3 → 0.3 |
+| vimcat_unokai | 36.1 → 37.1 | 43 → 43 | 24 → 19 | 0.9 → 0.5 | 1.3 → 0.3 |
+
+Outside `sgr` the throughput gain with the writer is between -1% and +12%
+(derived), because parsing, not painting, owns the thread. CJK, emoji and
+combining text are outside the spike's allowlist and do not move. `combining`
+shows something else: 8 ms of build per frame (56 paragraph layouts per frame on
+either build) and a longest gap of 237-283 ms even with the writer. Not
+investigated.
+
+### Status and limits
+
+Nothing from this spike is in the package. The decision — adopt an atlas, and
+whether opt-in, or stop paint work here — is open.
+
+- Two rounds for the candidate table.
+- The atlas was tuned while looking at `sgr` and `fix8` (page capacity,
+  padding), so the real-payload rows are the trustworthy ones.
+- No eviction: the cap is 8192 sprites. `sgr` reaches about 6000 (6013 after
+  16 MiB, 6016 after 64 MiB), about 35 MiB at DPR 2; real content 94-372
+  sprites, 0.5-2.1 MiB. A steady state on `sgr` is not proven.
+- macOS and Impeller only. Text gamma and the luminance-bucket rule are
+  unverified on Android, iOS, Windows, Linux and the web, as is
+  `toImageSync` on the web.
+- Verified only at whole-device-pixel cell origins, with nearest sampling.
+- Active hyperlinks and blink were not captured.
+- Raster figures are raster-thread CPU time; GPU cost was not measured.
+
+```sh
+# Payloads: the sgr ablations, 16 MiB each; real_dir holds captures (gitlog,
+# ls, clang) that are repeated to the same size.
+python3 script/term_compare/gen_sgr_ablate.py 16 /tmp/abl /tmp/real
+# A real program through a 100x37 PTY; reply-triggering queries are stripped.
+python3 script/term_compare/rec_pty.py /tmp/vim 'x60*\x06,:qa!\r' -- vim -u NONE -N -i NONE \
+  -c 'syntax on' -c 'set tgc nu' -c 'colo unokai' lib/src/ui/painter.dart
+# One paced process per payload per round, per-frame render stats in prof_*.jsonl.
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+T=$PWD/script/term_compare; O=/tmp/abl-run; mkdir -p $O
+APP=example/build/macos/Build/Products/Release/example.app/Contents/MacOS/example
+for r in 1 2 3; do for p in ascii sgr fix8; do
+  env XB_W=800 XB_H=600 XB_PACED=1 XB_STATS=1 XB_PROF=$O/prof_${p}_$r.jsonl \
+    XB_ARGS="$T/drive.py|$p#$r|$O/results.jsonl|/tmp/abl/$p" $APP
+done; done
+# Pixel oracle: SCREENS holds raw terminal bytes, one file per screen.
+python3 script/term_compare/shot_diff.py shot STOCK.app SCREENS /tmp/shot/stock
+python3 script/term_compare/shot_diff.py shot CAND.app SCREENS /tmp/shot/atlas XC_ATLAS=1 XC_LUM=1 XC_LUMMODE=2
+python3 script/term_compare/shot_diff.py diff /tmp/shot/stock /tmp/shot/atlas
+```
+
+The candidate builds need the patch applied to a copy of the package (`patch
+-p1 < script/term_compare/paint_spike/candidates.patch` in the copy's root) and
+the example built against that copy; the switches are read from the
+environment at startup. What does not reproduce from the repo as it stands: the
+candidate tables' layout and key counts came from a scratch `e2e_bench.dart`
+that appends the patch's `XC` counters to each stats row, and from scripts that
+join the stats to per-frame medians. Both are kept as they were, scratch paths
+and all, under `script/term_compare/paint_spike/tools/`; the screens and the
+real captures are in `screens/` and `captures/` beside them.
 
 ## Adding a workload
 
