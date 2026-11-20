@@ -166,6 +166,33 @@ class ByteConsumer {
     return offset - _currentOffset;
   }
 
+  /// The head block, without first stepping past it if it has been consumed
+  /// to its end, as [currentBlock] does. Right after [consume] it is the
+  /// block the unit it returned came from.
+  String get headBlock {
+    assert(_headIsCurrent);
+    return _head;
+  }
+
+  /// The offset into [headBlock] of the next code unit; right after [consume]
+  /// has returned a single code unit, one past where that unit sits.
+  int get headOffset => _currentOffset;
+
+  /// Where, in [headBlock], the run of [isSingleCellPrintable] and
+  /// [isWideRunUnit] code units starting at [headOffset] ends. Used to carry
+  /// on a run that a wide code unit, just consumed, has started.
+  int textRunEndInHead() {
+    assert(_headIsCurrent);
+    final data = _head;
+    var offset = _currentOffset;
+    while (offset < data.length) {
+      final codeUnit = data.codeUnitAt(offset);
+      if (!isSingleCellPrintable(codeUnit) && !isWideRunUnit(codeUnit)) break;
+      offset++;
+    }
+    return offset;
+  }
+
   /// Returns the most recently consumed [length] characters, as far as they
   /// are still retained (i.e. have not been discarded by a call to
   /// [unrefConsumedBlocks] since they were consumed). If part of the

@@ -337,6 +337,78 @@ class BufferLine with IndexedItem {
     }
   }
 
+  /// [setAsciiCells] for a run that also holds [isWideRunUnit] code units,
+  /// each written as a width-2 lead and a width-0 placeholder. The [count]
+  /// units cover [cells] cells.
+  ///
+  /// The run overwrites every cell in its span, so only a wide character
+  /// straddling either end of it can be left broken - the two
+  /// [clearWideCellAt] calls - just as for [setAsciiCells].
+  void setMixedWidthCells(
+    int start,
+    String text,
+    int textStart,
+    int count,
+    int cells,
+    CursorStyle style,
+  ) {
+    assert(start >= 0 && start + cells <= _length);
+    assert(textStart >= 0 && textStart + count <= text.length);
+    if (count <= 0) return;
+
+    _ensureCapacity(start + cells - 1);
+    clearWideCellAt(start, style);
+    clearWideCellAt(start + cells - 1, style);
+
+    final foreground = style.foreground;
+    final background = style.background;
+    final attributes = style.attrs |
+        (style.hyperlinkId << CellAttr.hyperlinkShift) |
+        style.semanticAttrs;
+    var cellOffset = start * _cellSize;
+    for (var offset = 0; offset < count; offset++) {
+      final codeUnit = text.codeUnitAt(textStart + offset);
+      _data[cellOffset + _cellForeground] = foreground;
+      _data[cellOffset + _cellBackground] = background;
+      _data[cellOffset + _cellAttributes] = attributes;
+      if (isWideRunUnit(codeUnit)) {
+        _data[cellOffset + _cellContent] =
+            codeUnit | (2 << CellContent.widthShift);
+        cellOffset += _cellSize;
+        _data[cellOffset + _cellForeground] = foreground;
+        _data[cellOffset + _cellBackground] = background;
+        _data[cellOffset + _cellAttributes] = attributes;
+        _data[cellOffset + _cellContent] = 0;
+      } else {
+        assert(isSingleCellPrintable(codeUnit));
+        _data[cellOffset + _cellContent] =
+            codeUnit | (1 << CellContent.widthShift);
+      }
+      cellOffset += _cellSize;
+    }
+    assert(cellOffset == (start + cells) * _cellSize);
+
+    final end = start + cells;
+    if (_combiningCharacters case final combiningCharacters?
+        when combiningCharacters.isNotEmpty) {
+      combiningCharacters.removeWhere(
+        (index, _) => index >= start && index < end,
+      );
+    }
+    if (style.underlineColor == 0) {
+      if (_underlineColors case final underlineColors?
+          when underlineColors.isNotEmpty) {
+        underlineColors.removeWhere(
+          (index, _) => index >= start && index < end,
+        );
+      }
+      return;
+    }
+    for (var index = start; index < end; index++) {
+      _mutableUnderlineColors[index] = style.underlineColor;
+    }
+  }
+
   void clearWideCellAt(int index, CursorStyle style) {
     if (index < 0 || index >= _length) return;
 

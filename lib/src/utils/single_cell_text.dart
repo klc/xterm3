@@ -24,8 +24,8 @@
 /// per-code-point path and a full grapheme segmentation, 27 times slower
 /// than the run it now joins.
 ///
-/// Wide scripts are deliberately absent: CJK is width 2 and needs the
-/// per-code-point path that allocates a lead and a placeholder.
+/// Wide scripts are absent: they take two cells each. [isWideRunUnit] is the
+/// set of them that can be written in a run all the same.
 bool isSingleCellPrintable(int codeUnit) {
   if (codeUnit >= 0x20 && codeUnit <= 0x7e) return true;
   if (codeUnit < 0xa0) return false;
@@ -40,6 +40,55 @@ bool isSingleCellPrintable(int codeUnit) {
   if (codeUnit < 0x2500) return false;
   if (codeUnit <= 0x259f) return true;
   return codeUnit >= 0x2800 && codeUnit <= 0x28ff;
+}
+
+/// Whether [codeUnit] can be written into two cells - a lead and a
+/// placeholder - inside a run of [isSingleCellPrintable] text, without
+/// consulting the width table or the grapheme cluster rules.
+///
+/// The same two properties as [isSingleCellPrintable], with width 2: every
+/// code unit here is a spacing character of width 2, and neither it nor
+/// anything [isSingleCellPrintable] accepts can continue a cluster that ends
+/// in one of them, or in an [isSingleCellPrintable] character. Hangul
+/// syllables do continue a cluster that ends in a leading jamo (GB6), and
+/// anything here continues one that ends in Prepend or, for the pictographs,
+/// a ZWJ (GB9b, GB11) - but no run character is any of those, so only the
+/// first unit of a run, whose cell before may be one, has to be checked.
+///
+/// Taken are the CJK punctuation, kana, bopomofo, Hangul compatibility
+/// jamo, CJK ideographs (Extension A and the unified block), Hangul
+/// syllables, compatibility ideographs, the vertical and small form variants
+/// and the fullwidth forms. Left out inside those stretches: the tone marks
+/// U+302A..U+302F and the voicing marks U+3099..U+309A (Extend), U+303F
+/// (width 1) and U+3164 HANGUL FILLER (width 0).
+bool isWideRunUnit(int codeUnit) {
+  if (codeUnit < 0x3000) return false;
+  if (codeUnit < 0x4e00) {
+    if (codeUnit <= 0x3029) return true;
+    if (codeUnit < 0x3030) return false;
+    if (codeUnit <= 0x303e) return true;
+    if (codeUnit < 0x3041) return false;
+    if (codeUnit <= 0x3096) return true;
+    if (codeUnit < 0x309b) return false;
+    if (codeUnit <= 0x30ff) return true;
+    if (codeUnit < 0x3105) return false;
+    if (codeUnit <= 0x312f) return true;
+    if (codeUnit < 0x3131) return false;
+    if (codeUnit <= 0x318e) return codeUnit != 0x3164;
+    return codeUnit >= 0x3400 && codeUnit <= 0x4dbf;
+  }
+  if (codeUnit <= 0x9fff) return true;
+  if (codeUnit < 0xac00) return false;
+  if (codeUnit <= 0xd7a3) return true;
+  if (codeUnit < 0xf900) return false;
+  if (codeUnit <= 0xfaff) return true;
+  if (codeUnit < 0xfe30) return false;
+  if (codeUnit <= 0xfe6b) {
+    return codeUnit != 0xfe53 && codeUnit != 0xfe67;
+  }
+  if (codeUnit < 0xff01) return false;
+  if (codeUnit <= 0xff60) return true;
+  return codeUnit >= 0xffe0 && codeUnit <= 0xffe6;
 }
 
 /// Whether [codePoint] has Grapheme_Cluster_Break=Prepend: it joins whatever

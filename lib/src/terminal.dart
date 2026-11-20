@@ -13,6 +13,7 @@ import 'package:xterm3/src/core/color_scheme.dart';
 import 'package:xterm3/src/core/cursor.dart';
 import 'package:xterm3/src/core/escape/emitter.dart';
 import 'package:xterm3/src/core/escape/handler.dart';
+import 'package:xterm3/src/core/escape/mixed_width_text_handler.dart';
 import 'package:xterm3/src/core/escape/parser.dart';
 import 'package:xterm3/src/core/input/handler.dart';
 import 'package:xterm3/src/core/input/keys.dart';
@@ -48,7 +49,11 @@ enum _ProtectionMode { off, iso, dec }
 /// understand.
 class Terminal
     with Observable, _SgrHandlers, _ContextSignalHandlers, _StatusStringReports
-    implements TerminalState, EscapeHandler, EscapeTextHandler {
+    implements
+        TerminalState,
+        EscapeHandler,
+        EscapeTextHandler,
+        MixedWidthTextHandler {
   static const _maxHyperlinks = 4096;
   static const _maxHyperlinkId =
       CellAttr.hyperlinkMask >> CellAttr.hyperlinkShift;
@@ -891,6 +896,14 @@ class Terminal
     if (start >= end) return;
     _captureITerm2ClipboardTextRange(text, start, end);
     _buffer.writeAscii(text, start, end);
+    _precedingCodepoint = text.codeUnitAt(end - 1);
+  }
+
+  @override
+  void writeMixedWidthText(String text, int start, int end) {
+    if (start >= end) return;
+    _captureITerm2ClipboardTextRange(text, start, end);
+    _buffer.writeMixedWidth(text, start, end);
     _precedingCodepoint = text.codeUnitAt(end - 1);
   }
 

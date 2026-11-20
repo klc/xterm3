@@ -138,6 +138,37 @@ void main() {
     }
   });
 
+  test('a run carried on from a wide code unit takes single-cell text too', () {
+    final consumer = ByteConsumer()..add('ab中文、ＡＢcd\u{0301}');
+
+    // The single-cell scan stops at the first wide character.
+    expect(consumer.printableTextRunLength, 2);
+    consumer.consumeAsciiCodeUnits(2);
+    expect(consumer.consume(), '中'.codeUnitAt(0));
+    expect(consumer.headBlock, 'ab中文、ＡＢcd\u{0301}');
+    expect(consumer.headOffset, 3);
+    // From there to the combining acute.
+    expect(consumer.textRunEndInHead(), 'ab中文、ＡＢcd'.length);
+  });
+
+  test('a run carried on from a wide code unit stops at the slow path', () {
+    // A voicing mark (Extend), an emoji (surrogate pair), a Hangul leading
+    // jamo and ESC end it; the end of the head block ends it too.
+    for (final (text, end) in [
+      ('中か\u{3099}a', 2),
+      ('中\u{1F600}', 1),
+      ('中a\u{1100}가', 2),
+      ('中a中\x1b[m', 3),
+      ('中a中', 3),
+    ]) {
+      final consumer = ByteConsumer()
+        ..add(text)
+        ..add('中');
+      expect(consumer.consume(), '中'.codeUnitAt(0), reason: text);
+      expect(consumer.textRunEndInHead(), end, reason: text);
+    }
+  });
+
   test('consumes printable ASCII runs without crossing controls or blocks', () {
     final consumer = ByteConsumer()
       ..add('abc\x1b')

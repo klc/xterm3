@@ -161,6 +161,86 @@ class Buffer {
     }
   }
 
+  /// [writeAscii] for a run that also holds [isWideRunUnit] code units, each
+  /// written as a width-2 lead and a width-0 placeholder.
+  ///
+  /// Each stretch of the run that fits on the line is written in one call.
+  /// What has to decide something goes through [writeChar] one unit at a
+  /// time, exactly as before: a wide first unit, which may continue the
+  /// cluster in the cell before the run (see [isWideRunUnit]), and a wide
+  /// unit that meets the right margin - with one column left, where it pads
+  /// and wraps or is dropped, or with none, where it wraps. None of them
+  /// comes up more than once a line.
+  void writeMixedWidth(String text, int start, int end) {
+    if (terminal.insertMode || !terminal.autoWrapMode || !charset.isAscii) {
+      for (var index = start; index < end; index++) {
+        writeChar(text.codeUnitAt(index));
+      }
+      return;
+    }
+
+    if (isWideRunUnit(text.codeUnitAt(start))) {
+      writeChar(text.codeUnitAt(start++));
+    }
+
+    while (start < end) {
+      if (_cursorX >= _rightLimit) {
+        // [writeChar] asks whether a wide character joins the cell before
+        // the cursor before it wraps, and that cell can still be one the run
+        // has not written: the first unit may have written nothing (a join
+        // that could not widen the cluster at width 1, or a drop). A narrow
+        // unit joins nothing, so wrapping first is what [writeChar] does too.
+        if (isWideRunUnit(text.codeUnitAt(start))) {
+          writeChar(text.codeUnitAt(start++));
+          continue;
+        }
+        _wrapInput();
+      }
+
+      final rightLimit = _rightLimit;
+      var x = _cursorX;
+      var index = start;
+      var wide = false;
+      while (index < end) {
+        if (isWideRunUnit(text.codeUnitAt(index))) {
+          if (x + 2 > rightLimit) break;
+          wide = true;
+          x += 2;
+        } else {
+          if (x >= rightLimit) break;
+          x++;
+        }
+        index++;
+      }
+
+      if (index == start) {
+        writeChar(text.codeUnitAt(start++));
+        continue;
+      }
+
+      if (wide) {
+        currentLine.setMixedWidthCells(
+          _cursorX,
+          text,
+          start,
+          index - start,
+          x - _cursorX,
+          terminal.cursor,
+        );
+      } else {
+        currentLine.setAsciiCells(
+          _cursorX,
+          text,
+          start,
+          index - start,
+          terminal.cursor,
+        );
+      }
+      _cursorX = x;
+      start = index;
+    }
+  }
+
   /// Writes a single character to the _terminal. Escape sequences or special
   /// characters are not interpreted and directly added to the buffer.
   ///

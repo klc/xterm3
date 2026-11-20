@@ -3,10 +3,12 @@ import 'dart:collection';
 import 'package:xterm3/src/core/color.dart';
 import 'package:xterm3/src/core/mouse/mode.dart';
 import 'package:xterm3/src/core/escape/handler.dart';
+import 'package:xterm3/src/core/escape/mixed_width_text_handler.dart';
 import 'package:xterm3/src/utils/ascii.dart';
 import 'package:xterm3/src/utils/byte_consumer.dart';
 import 'package:xterm3/src/utils/char_code.dart';
 import 'package:xterm3/src/utils/lookup_table.dart';
+import 'package:xterm3/src/utils/single_cell_text.dart';
 
 /// [EscapeParser] translates control characters and escape sequences into
 /// function calls that the terminal can handle.
@@ -34,7 +36,13 @@ class EscapeParser {
 
   final EscapeHandler handler;
 
-  EscapeParser(this.handler);
+  EscapeParser(this.handler)
+      : _mixedWidthHandler = handler is MixedWidthTextHandler
+            ? handler as MixedWidthTextHandler
+            : null;
+
+  /// [handler], when it also takes text runs that hold wide characters.
+  final MixedWidthTextHandler? _mixedWidthHandler;
 
   bool _isByteValue(int value) {
     return value >= 0 && value <= 0xff;
@@ -298,7 +306,30 @@ class EscapeParser {
       return;
     }
 
+    if (char >= 0x3000) {
+      if (_mixedWidthHandler case final mixedWidthHandler?
+          when isWideRunUnit(char)) {
+        _writeWideRun(mixedWidthHandler);
+        return;
+      }
+    }
+
     handler.writeChar(char);
+  }
+
+  /// The code unit just consumed, an [isWideRunUnit] one, starts a run: hands
+  /// it to [mixedWidthHandler] together with the [isSingleCellPrintable] and
+  /// [isWideRunUnit] code units that follow it in the head block.
+  ///
+  /// This sits where a character that no single-cell run took ends up, not
+  /// in the run scan [_process] makes for every token: that scan, which ASCII,
+  /// SGR-dense and cursor-addressed output go through, is left as it was.
+  void _writeWideRun(MixedWidthTextHandler mixedWidthHandler) {
+    final data = _queue.headBlock;
+    final start = _queue.headOffset - 1;
+    final end = _queue.textRunEndInHead();
+    if (end > start + 1) _queue.consumeAsciiCodeUnits(end - start - 1);
+    mixedWidthHandler.writeMixedWidthText(data, start, end);
   }
 
   /// Processes a sequence of characters that starts with an escape character.

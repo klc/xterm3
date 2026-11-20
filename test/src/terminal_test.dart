@@ -670,7 +670,7 @@ void main() {
     expect(line.getCodePoint(6), 0x78);
   });
 
-  test('Terminal keeps a wide character out of the batched run path', () {
+  test('Terminal writes a wide character inside a text run in two cells', () {
     final terminal = Terminal()..resize(20, 2);
 
     terminal.write('aö\u{4E00}b');
@@ -680,6 +680,121 @@ void main() {
     expect(line.getWidth(2), 2);
     expect(line.getWidth(3), 0);
     expect(line.getCodePoint(4), 0x62);
+  });
+
+  group('Terminal mixed-width text runs', () {
+    // A run holding CJK, kana or Hangul goes through Buffer.writeMixedWidth.
+    // Whatever it writes has to be what writing the same code points one at
+    // a time through Terminal.writeChar - the path such text took before -
+    // leaves behind, cell for cell, including the cursor and wrap flags.
+    String digest(Terminal terminal) {
+      final buffer = terminal.buffer;
+      final out = StringBuffer('${buffer.cursorX},${buffer.cursorY};');
+      for (var y = 0; y < buffer.lines.length; y++) {
+        final line = buffer.lines[y];
+        out.write('|${line.isWrapped ? 'w' : ''}');
+        for (var x = 0; x < terminal.viewWidth; x++) {
+          out.write('${line.getCodePoint(x)}/${line.getWidth(x)}/'
+              '${line.getForeground(x)}/${line.getBackground(x)}/'
+              '${line.getAttributes(x)}/${line.getCombiningCharacters(x)} ');
+        }
+      }
+      return out.toString();
+    }
+
+    void expectSameAsPerCharacter(String setup, String text, int width) {
+      final batched = Terminal(maxLines: 50)..resize(width, 4);
+      final perCharacter = Terminal(maxLines: 50)..resize(width, 4);
+      batched.write(setup);
+      perCharacter.write(setup);
+      batched.write(text);
+      for (final codePoint in text.runes) {
+        perCharacter.writeChar(codePoint);
+      }
+      expect(digest(batched), digest(perCharacter),
+          reason: 'width $width, setup ${jsonEncode(setup)}, '
+              'text ${jsonEncode(text)}');
+    }
+
+    const texts = [
+      '中文字符',
+      'a中b文c',
+      'ab中文cd、。ＡＢ',
+      'かなカナー한국어 abc',
+      '中中中中中中中中中中中中中中中',
+      'x中中中中中中中中中中中中中中',
+      '「日本語」の文章，全角！？',
+      '中\u{0301}文',
+      '〰〰〰',
+      'あい〰〰',
+      '〰a〰',
+    ];
+    const setups = [
+      '',
+      '\x1b[31;44;1m',
+      '\x1b[4;58:2:1:2:3m',
+      'xx',
+      'x\u{1100}',
+      'x\u{200D}',
+      'x\u{0600}',
+      'a\x1b[3G',
+      '\x1b[?69h\x1b[2;5s\x1b[3G',
+      '\x1b[?69h\x1b[2;3s\x1b[2G',
+      '\x1b[?2027l',
+      // A cell that a run's first unit joins without writing anything
+      // (width 1: the cluster cannot be widened) or drops: the next unit may
+      // still join it.
+      '\u{2764}\u{200D}',
+      '\u{2764}\u{200D}\r',
+      '\u{00A9}\u{200D}',
+      'x\x1b[?2027l\u{0600}\x1b[?2027h',
+      // The cursor beyond the right margin, and a cell left of the left
+      // margin that a wide character could join.
+      '\x1b[?69h\x1b[2;3s\x1b[5G',
+      '\u{2764}\u{200D}\x1b[?69h\x1b[2;3s\x1b[5G',
+      '\x1b[?69h\x1b[3;4s\x1b[2G\u{2764}\u{200D}\x1b[6G',
+    ];
+
+    test('match per-character writes at every width from 1 to 9', () {
+      for (var width = 1; width <= 9; width++) {
+        for (final setup in setups) {
+          for (final text in texts) {
+            expectSameAsPerCharacter(setup, text, width);
+          }
+        }
+      }
+    });
+
+    test('overwrite and split wide characters as per-character writes do', () {
+      for (final setup in [
+        '中文字符中文字符\r',
+        '中文字符中文字符\r\x1b[C',
+        'abcdefgh\r\x1b[2C',
+      ]) {
+        for (final text in texts) {
+          expectSameAsPerCharacter(setup, text, 8);
+        }
+      }
+    });
+
+    test('match per-character writes with insert mode and autowrap off', () {
+      for (final setup in ['\x1b[4h', '\x1b[?7l', '\x1b(0']) {
+        for (final text in texts) {
+          expectSameAsPerCharacter(setup, text, 6);
+        }
+      }
+    });
+
+    test('a Hangul syllable after a leading jamo still joins its cluster', () {
+      final terminal = Terminal()..resize(10, 2);
+
+      terminal.write('\u{1100}가나');
+
+      final line = terminal.buffer.lines[0];
+      expect(line.getCodePoint(0), 0x1100);
+      expect(line.getCombiningCharacters(0), '가');
+      expect(line.getCodePoint(2), '나'.codeUnitAt(0));
+    });
   });
 
   test('Terminal keeps Latin-1 letters in separate cells', () {

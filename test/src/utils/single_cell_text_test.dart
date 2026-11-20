@@ -37,6 +37,54 @@ void main() {
     }
   });
 
+  test('every wide run unit is width 2 and joins no run character', () {
+    // What Buffer.writeMixedWidth relies on, for every code unit accepted:
+    // two cells, and no cluster across it and a run character either way.
+    // The bases cover the narrow run set and the wide one.
+    const runBases = ['a', 'é', 'я', '─', '中', '가', 'あ', 'ー', '、', 'Ａ'];
+    var accepted = 0;
+    for (var codeUnit = 0; codeUnit <= 0xffff; codeUnit++) {
+      if (!isWideRunUnit(codeUnit)) continue;
+      accepted++;
+      final reason = 'U+${codeUnit.toRadixString(16)}';
+      expect(unicodeV11.wcwidth(codeUnit), 2, reason: reason);
+      expect(isSingleCellPrintable(codeUnit), isFalse, reason: reason);
+      final char = String.fromCharCode(codeUnit);
+      for (final base in [...runBases, char]) {
+        expect('$base$char'.characters.length, 2,
+            reason: '$reason after $base');
+        expect('$char$base'.characters.length, 2,
+            reason: '$reason before $base');
+      }
+    }
+    expect(accepted, greaterThan(39000));
+  });
+
+  test('wide run units take CJK punctuation, kana, Han, Hangul, fullwidth', () {
+    for (final codeUnit in [
+      0x3000, 0x3001, 0x300c, 0x3042, 0x30fc, 0x30fb, 0x4e00, 0x9fff, //
+      0x3400, 0xac00, 0xd7a3, 0x3131, 0xf900, 0xff01, 0xff21, 0xffe5,
+    ]) {
+      expect(isWideRunUnit(codeUnit), isTrue,
+          reason: 'U+${codeUnit.toRadixString(16)}');
+    }
+    // Extend marks, a width-1 and a width-0 code point inside those blocks,
+    // the Hangul leading jamo, and emoji (surrogates) stay out.
+    for (final codeUnit in [
+      0x302a,
+      0x3099,
+      0x303f,
+      0x3164,
+      0x1100,
+      0xd83d,
+      0x2e80,
+      0x61,
+    ]) {
+      expect(isWideRunUnit(codeUnit), isFalse,
+          reason: 'U+${codeUnit.toRadixString(16)}');
+    }
+  });
+
   // Every code point except the surrogates, which cannot stand alone in a
   // String.
   Iterable<int> allCodePoints() sync* {
