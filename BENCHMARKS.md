@@ -1940,6 +1940,91 @@ join the stats to per-frame medians. Both are kept as they were, scratch paths
 and all, under `script/term_compare/paint_spike/tools/`; the screens and the
 real captures are in `screens/` and `captures/` beside them.
 
+## One pass per CSI — 2026-11-20
+
+The leftover of *CSI parameter bulk scanning*: one scan per sequence, not per
+parameter. `EscapeParser._tryFastCsi` runs right after an ESC is consumed. If
+what follows in the head block is `[`, then only digits, `;` and `:`, then a
+final byte, it parses the parameters with locals in one loop, consumes the
+sequence with one `consumeAsciiCodeUnits` and calls the handler: `m` and `H`
+directly, the rest through `_csiHandlers`. Anything else - a private prefix,
+an intermediate or control byte, a sequence that runs past the head block or
+past 256 bytes - makes it return having consumed nothing, and
+`_processEscape` parses it as before. It leaves `_csi` as `_consumeCsi` does.
+
+What it removes per sequence: the `_pendingEscape` round trip, the prefix
+peek, a `consume()` and five range tests per byte, and two table lookups to
+reach the handler. A throwaway version that tried the fast path at the start
+of every token cost ascii's parser 5-7% (every CR and LF paid two getters and
+a call); trying it only after an ESC takes that to nothing (below).
+
+Headless, `write_budget_probe`, `4cc07c2` against this change, five
+interleaved passes, medians, MiB/s with the min-max of the five:
+
+| payload | mode | before | after | speedup | ns/byte |
+|---|---|---|---|---|---|
+| sgr | parser | 94.9 (94.7-95.0) | 169.1 (168.4-169.9) | 1.78 | −4.40 |
+| sgr | full | 65.3 (64.5-65.5) | 92.5 (90.8-93.1) | 1.42 | −4.29 |
+| cursor | parser | 98.6 (97.0-100.7) | 172.9 (169.9-174.0) | 1.75 | −4.16 |
+| cursor | full | 69.9 (69.6-70.4) | 100.1 (99.7-100.6) | 1.43 | −4.13 |
+| truecolor | full | 74.7 (74.3-75.1) | 128.8 (127.5-129.2) | 1.72 | −5.35 |
+| ascii | parser | 696.2 (693.6-697.1) | 698.1 (689.1-698.9) | 1.00 | 0.00 |
+| ascii | full | 126.4 (125.2-126.8) | 126.4 (125.6-127.9) | 1.00 | 0.00 |
+| ascii-utf8 | full | 122.3 (121.4-123.2) | 121.3 (120.2-123.4) | 0.99 | +0.06 |
+| unicode | full | 40.1 (40.1-40.6) | 40.3 (40.0-40.4) | 1.00 | −0.07 |
+| cjk-real | full | 32.1 (32.0-32.3) | 32.2 (31.8-32.3) | 1.00 | −0.13 |
+
+`truecolor`, `ascii-utf8` and `cjk-real` are new in `gen.py`: a lolcat-style
+24-bit foreground per character; ASCII with a non-ASCII character about every
+150 bytes; and Han and kana with ideographic punctuation and fullwidth forms.
+`full-1k` moves with `full` (sgr −4.10, cursor −3.91, truecolor −5.08).
+
+In the app (`e2e_bench.dart`, release, `flutter_pty2` 1.0.0, view on, real
+PTY, 100x37), the two builds and Ghostty 1.4.0 interleaved, five rounds, MiB/s:
+
+| payload | before | after | ns/byte | Ghostty | gap before | gap after |
+|---|---|---|---|---|---|---|
+| sgr | 48.0 | 60.8 | −4.19 | 89.8 | 1.87x | 1.48x |
+| cursor | 54.9 | 73.0 | −4.30 | 96.7 | 1.76x | 1.32x |
+| truecolor | 58.1 | 82.0 | −4.79 | 113.4 | 1.95x | 1.38x |
+| ascii | 78.4 | 78.4 | 0.00 | 152.6 | 1.95x | 1.95x |
+| unicode | 29.7 | 29.5 | +0.27 | 107.0 | 3.60x | 3.63x |
+
+The app gets what the core saves, byte for byte. `unicode`'s +0.27 is inside
+the two builds' ranges (29-30 against 29-29).
+
+**Accepted on.** Tests 1125, all passing. `terminal_state_dump.dart` - grid,
+attributes, modes, cursor, every callback and reply, under eleven ways of
+splitting each file into writes - is byte-identical before and after on the
+`gen_parser_corpus.py` corpus plus 1 MiB of `truecolor` and `cjk-real` and a
+file of edge cases for this path: sequences of 254-258 bytes after `[`, 30-40
+parameters, values above 65535, colon separators, empty parameters, prefixes
+and intermediates, C0, ESC, CAN, SUB and C1 inside a sequence, every final
+byte, and input that ends right after ESC or inside a sequence (59 files, 649
+digests). Two deliberately broken variants - the value clamp removed, the
+parameter cap lowered by one - changed 69 and 24 digests, so the oracle sees
+this path.
+
+```sh
+python3 script/term_compare/gen.py 64 /tmp/pay
+git worktree add --detach /tmp/xb 4cc07c2
+(cd /tmp/xb && dart pub get && dart compile exe script/write_budget_probe.dart -o /tmp/wbp-base &&
+  dart compile exe script/terminal_state_dump.dart -o /tmp/tsd-base)
+git worktree remove --force /tmp/xb
+dart compile exe script/write_budget_probe.dart -o /tmp/wbp-new
+dart compile exe script/terminal_state_dump.dart -o /tmp/tsd-new
+script/term_compare/wbp_ab.sh /tmp/wbp-base /tmp/wbp-new 5 /tmp/ab.log parser,full,full-1k \
+  /tmp/pay/{sgr,cursor,truecolor,ascii,ascii-utf8,unicode,cjk-real}
+python3 script/term_compare/gen_parser_corpus.py /tmp/corpus --payloads /tmp/pay --payload-mib 1
+cp script/term_compare/fastcsi_edges.txt /tmp/corpus/
+/tmp/tsd-base /tmp/corpus/* > /tmp/tsd-base.txt; /tmp/tsd-new /tmp/corpus/* > /tmp/tsd-new.txt
+cmp /tmp/tsd-base.txt /tmp/tsd-new.txt
+```
+
+The table above also had 1 MiB of `truecolor` and `cjk-real` and two files
+ending after ESC and inside a sequence in the corpus. The in-app run is
+`cmp_paced.sh`'s shape with the paced leg replaced by the second build.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
