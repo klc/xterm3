@@ -2182,6 +2182,98 @@ headless numbers say - a smaller cell (whose ceiling took the CLI's ascii
 scrollback cost down 70%) and recycling evicted lines, which was rejected
 twice on headless numbers only.
 
+## Emoji — 2026-11-21
+
+`emoji` was the widest gap left: 6.8x to Ghostty in the app. Split by kind
+(`gen_emoji.py`, 16 MiB each), ns per code point, headless before this:
+
+| payload | full | grapheme mode off | the grapheme rules' share |
+|---|---|---|---|
+| e-simple: one code point each | 91 | 76 | 15 |
+| e-mod: skin tones | 157 | 77 | 80 |
+| e-zwj: ZWJ sequences | 271 | 113 | 157 |
+| e-flag: regional indicator pairs | 276 | 58 | 218 |
+| e-vs16: text symbols with VS16 | 245 | 88 | 157 |
+
+Two things, then. Flags, ZWJ sequences and the narrow symbols that take
+VS16 (❤ ☀ ✔) passed every exit of `_joinsPreviousGrapheme` and went to
+segmentation, three string allocations a code point. And a plain emoji,
+which no rule joins to anything, took the per-character path all the same.
+
+**Grapheme rules.** A regional indicator or an Extended_Pictographic code
+point extends nothing, so only three rules can join one to the cluster
+before, and each is decided by the cluster's last code points: GB9b after
+Prepend, GB12/GB13 after an odd run of regional indicators, GB11 after
+ExtPict Extend* ZWJ. `_regionalIndicatorJoins` and `_pictographJoins` decide
+those before segmentation and hand back what they cannot - a cell holding a
+sequence the rules do not expect, which mode 2027 toggled can leave, or a
+lone surrogate as its base - to segmentation as before. They sit after the
+existing exits: placed first, every code point paid for the
+Extended_Pictographic lookup, and combining text lost 5%, plain emoji 7%.
+`isExtendedPictographic` is the segmenter's own set (78 ranges), checked
+against it for every code point.
+
+**Emoji in text runs.** `isWideRunEmoji` - an Extended_Pictographic code
+point above the BMP of width 2 - joins the wide run units of *Wide characters
+in text runs*: no run character continues a cluster that ends in one, and
+the marks that do attach to an emoji (skin tones, VS16, ZWJ) are no run
+characters, so a run stops before them. A run that would hold one character
+- an emoji before its skin tone - is not started: the code unit after it is
+looked at first, and a skin tone or regional indicator is turned away before
+anything else is asked. Without that, skin-toned text lost 6%; and CJK gains a
+little from the same shortcut, at line ends.
+
+Headless, `write_budget_probe`, `full`, the bytes-in decoder commit against
+this change, five interleaved passes, MiB/s:
+
+| payload | before | after | speedup | ns/byte |
+|---|---|---|---|---|
+| emoji | 14.5 | 17.9 | 1.23 | −12.22 |
+| e-simple | 36.0 | 55.2 | 1.53 | −9.21 |
+| e-mod | 22.2 | 22.1 | 1.00 | +0.07 |
+| e-zwj | 12.5 | 14.7 | 1.18 | −11.40 |
+| e-flag | 13.3 | 19.6 | 1.47 | −22.79 |
+| e-vs16 | 11.1 | 15.6 | 1.40 | −24.52 |
+| unicode | 51.2 | 61.2 | 1.20 | −3.06 |
+| cjk-real | 76.7 | 84.9 | 1.11 | −1.19 |
+| cjk | 78.6 | 84.5 | 1.07 | −0.84 |
+| ascii, ascii-utf8, sgr, cursor, truecolor, combining, latin-ext, box | | | 0.99-1.01 | |
+
+In the app (`flutter_pty2` 1.0.0, view on, real PTY, 100x37), the two builds
+and Ghostty 1.4.0 interleaved, five rounds, MiB/s:
+
+| payload | before | after | Ghostty | gap before | gap after |
+|---|---|---|---|---|---|
+| emoji | 12.2 | 14.9 | 83.0 | 6.83x | 5.56x |
+| e-simple | 28.0 | 39.7 | 125.0 | 4.47x | 3.15x |
+| e-mod | 18.2 | 18.0 | 98.6 | 5.42x | 5.47x |
+| e-zwj | 10.5 | 12.6 | 84.8 | 8.07x | 6.75x |
+| e-flag | 11.1 | 16.0 | 99.9 | 8.98x | 6.24x |
+| e-vs16 | 9.4 | 13.2 | 74.7 | 7.91x | 5.64x |
+| unicode | 36.1 | 42.0 | 109.4 | 3.03x | 2.60x |
+| cjk-real | 49.1 | 54.1 | 155.9 | 3.18x | 2.88x |
+
+**Accepted on.** Tests 1143, among them exhaustive checks of
+`isExtendedPictographic` and `isWideRunEmoji` against segmentation, a test
+that flags, ZWJ sequences, VS16, skin tones and tag sequences end up one
+cluster per cell, write-versus-`writeChar` comparisons at widths 1-9 with
+emoji, REP after an emoji, and the lone-surrogate case below.
+`grid_oracle.sh` (356 files, now with a slice of each `e-*` payload) shows no
+difference in any configuration, and `terminal_state_dump.dart` is identical
+on 76 files under eleven splits. Four deliberately broken variants changed
+53-363 state digests.
+
+A review found one case: a cell whose base is a lone high surrogate and whose
+combining string starts with a lone low one reads as an astral character to
+segmentation, which sees the two as one string, but not to the new rules,
+which read them apart. Only malformed UTF-16 passed to `write(String)` or
+`writeChar` builds such a cell; the rules now leave a surrogate base to
+segmentation, and the case is a test.
+
+What is left: skin tones still cost 80 ns a code point in the grapheme rules
+(`_isEmojiModifierBase` and `addCombiningCharacter`), and a ZWJ sequence pays
+the per-character path for every code point in it.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
