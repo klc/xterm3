@@ -18,6 +18,10 @@
 //   scroll0   = Terminal(maxLines: 0): the ring is one screen, nothing is kept
 //   no-graph  = full with DEC mode 2027 off
 //   scroll0-no-graph = both of the above
+//   full-dec  = the chunked Utf8Decoder and Terminal.write timed together, at
+//               64 KiB - bytes in, as an application feeds them today
+//   full-bytes = Terminal.writeBytes on the same chunks
+//   full-dec-1k, full-bytes-1k = the same at 1 KiB
 //
 // --counts prints, once per payload and untimed, what the budget divides by:
 // code points, lines, CSI sequences by final byte, printable code points.
@@ -43,6 +47,10 @@ const _allModes = [
   'scroll0',
   'no-graph',
   'scroll0-no-graph',
+  'full-dec',
+  'full-dec-1k',
+  'full-bytes',
+  'full-bytes-1k',
 ];
 
 int _sink = 0;
@@ -106,6 +114,25 @@ void main(List<String> args) {
             sw.start();
             for (final s in strings) {
               terminal.write(s);
+            }
+            sw.stop();
+            _sink += terminal.buffer.height;
+          case 'full-dec' || 'full-dec-1k':
+            final terminal = Terminal(maxLines: 10000)..resize(100, 37);
+            sw.start();
+            final decoder = const Utf8Decoder(allowMalformed: true)
+                .startChunkedConversion(_StringSink(terminal.write));
+            for (final c in chunks) {
+              decoder.add(c);
+            }
+            decoder.close();
+            sw.stop();
+            _sink += terminal.buffer.height;
+          case 'full-bytes' || 'full-bytes-1k':
+            final terminal = Terminal(maxLines: 10000)..resize(100, 37);
+            sw.start();
+            for (final c in chunks) {
+              terminal.writeBytes(c);
             }
             sw.stop();
             _sink += terminal.buffer.height;
@@ -231,6 +258,15 @@ class _ListSink implements Sink<String> {
   final List<String> out;
   @override
   void add(String data) => out.add(data);
+  @override
+  void close() {}
+}
+
+class _StringSink implements Sink<String> {
+  _StringSink(this.add_);
+  final void Function(String) add_;
+  @override
+  void add(String data) => add_(data);
   @override
   void close() {}
 }

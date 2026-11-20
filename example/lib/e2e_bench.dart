@@ -85,8 +85,16 @@ final _stats = <List<int>>[];
 // <results>. (Feeding the chunks from a helper isolate through a ReceivePort was
 // tried and cost ~0.9 ms per message, where the PTY plugin's messages cost
 // ~12 us, so it does not stand for the plugin and was removed.)
+// XB_BYTES=1: PTY output goes to Terminal.writeBytes instead of through a
+// Utf8Decoder transform into Terminal.write (the default path only).
+final _bytes = _env['XB_BYTES'] == '1';
 final _mem = _env['XB_MEM'];
 final _memChunk = int.parse(_env['XB_CHUNK'] ?? '1024');
+// XB_MAXLINES=<n>: scrollback of the default terminal (10000).
+final _maxLines = int.parse(_env['XB_MAXLINES'] ?? '10000');
+// XB_MEM_WAIT=<s>: waits that long before the first file and after the last,
+// so a profiler can attach to the VM service and collect samples.
+final _memWait = Duration(seconds: int.parse(_env['XB_MEM_WAIT'] ?? '0'));
 
 Uint8List _onlcr(Uint8List b) {
   var lf = 0;
@@ -145,7 +153,8 @@ class _BenchState extends State<_Bench> {
   final terminal = _lever
       ? _TimedTerminal()
       : Terminal(
-          maxLines: _iso ? 100 : 10000, platform: TerminalTargetPlatform.macos);
+          maxLines: _iso ? 100 : _maxLines,
+          platform: TerminalTargetPlatform.macos);
 
   @override
   void initState() {
@@ -188,7 +197,9 @@ class _BenchState extends State<_Bench> {
           rows: terminal.viewHeight);
       final decoded =
           pty.output.cast<List<int>>().transform(const Utf8Decoder());
-      if (_prof == null) {
+      if (_bytes) {
+        pty.output.listen((b) => terminal.writeBytes(b));
+      } else if (_prof == null) {
         decoded.listen(terminal.write);
       } else {
         decoded.listen((s) {
@@ -227,6 +238,7 @@ class _BenchState extends State<_Bench> {
 
   Future<void> _runMem() async {
     final parts = _mem!.split('|');
+    await Future<void>.delayed(_memWait);
     for (final path in parts.skip(2)) {
       terminal.write('\x1b[?1049l\x1b[0m\x1b[H\x1b[2J');
       await WidgetsBinding.instance.endOfFrame;
@@ -253,6 +265,7 @@ class _BenchState extends State<_Bench> {
               })}\n',
           mode: FileMode.append);
     }
+    await Future<void>.delayed(_memWait);
     exit(0);
   }
 
