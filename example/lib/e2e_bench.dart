@@ -36,6 +36,7 @@ import 'dart:isolate';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_pty2/flutter_pty.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:xterm3/xterm.dart';
@@ -70,6 +71,20 @@ final _lever = _ack ||
 final _ackBelow = int.parse(_env['XB_ACK_BELOW'] ?? '2048');
 var _chunks = 0, _pendMax = 0, _rssMax = 0, _qUnitsMax = 0;
 final _snaps = <List<int>>[];
+// XB_STATS=1 (with XB_PROF): after every frame, cumulative TerminalRenderStats,
+// write count and a hash of the top visible line; frames then also carry their
+// frameNumber so the two can be joined.
+final _statsOn = _env['XB_STATS'] == '1';
+final _stats = <List<int>>[];
+// XB_SHOT=<file> (pixel oracle, no PTY): writes the file into the terminal,
+// optionally selects XB_SEL="x1,y1,x2,y2", waits a few frames and saves the
+// view as a PNG to XB_SHOT_OUT, rendered at XB_DPR (default 1). The DPR also
+// overrides MediaQuery, so the painter snaps cells to the same ratio. Prints
+// one JSON line (dpr, isShaderFilterSupported = Impeller) and exits.
+final _shot = _env['XB_SHOT'];
+final _shotDpr = double.parse(_env['XB_DPR'] ?? '1');
+final _shotKey = GlobalKey();
+final _shotCtl = TerminalController();
 
 class _Sink implements Sink<String> {
   _Sink(this.f);
@@ -116,9 +131,28 @@ class _BenchState extends State<_Bench> {
                 t.timestampInMicroseconds(FramePhase.buildStart),
                 t.buildDuration.inMicroseconds,
                 t.rasterDuration.inMicroseconds,
+                if (_statsOn) t.frameNumber,
               ])));
+      if (_statsOn) {
+        SchedulerBinding.instance.addPersistentFrameCallback((_) {
+          final b = terminal.buffer;
+          _stats.add([
+            PlatformDispatcher.instance.frameData.frameNumber,
+            Timeline.now,
+            _writes,
+            TerminalRenderStats.paints,
+            TerminalRenderStats.paintedLines,
+            TerminalRenderStats.paragraphCacheHits,
+            TerminalRenderStats.paragraphCacheMisses,
+            TerminalRenderStats.glyphCacheHits,
+            TerminalRenderStats.glyphCacheMisses,
+            b.lines[b.scrollBack].getText().hashCode,
+          ]);
+        });
+      }
     }
     WidgetsBinding.instance.endOfFrame.then((_) {
+      if (_shot != null) return unawaited(_takeShot());
       if (_iso) return unawaited(_startIso());
       if (_lever) return _startLevers();
       final pty = Pty.start('/usr/bin/python3',
@@ -164,6 +198,32 @@ class _BenchState extends State<_Bench> {
     });
   }
 
+  Future<void> _takeShot() async {
+    terminal.write(File(_shot!).readAsStringSync());
+    final sel = _env['XB_SEL'];
+    if (sel != null) {
+      final v = sel.split(',').map(int.parse).toList();
+      final b = terminal.buffer;
+      _shotCtl.setSelection(b.createAnchor(v[0], b.scrollBack + v[1]),
+          b.createAnchor(v[2], b.scrollBack + v[3]));
+    }
+    for (var i = 0; i < 4; i++) {
+      WidgetsBinding.instance.scheduleFrame();
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    final boundary =
+        _shotKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage(pixelRatio: _shotDpr);
+    final png = await image.toByteData(format: ImageByteFormat.png);
+    File(_env['XB_SHOT_OUT']!).writeAsBytesSync(png!.buffer.asUint8List());
+    stdout.writeln(jsonEncode({
+      'dpr': _shotDpr,
+      'impeller': ImageFilter.isShaderFilterSupported,
+      'size': [image.width, image.height],
+    }));
+    exit(0);
+  }
+
   Future<void> _dumpAndExit() async {
     if (_prof != null) {
       for (var i = 0; i < 20; i++) {
@@ -177,6 +237,7 @@ class _BenchState extends State<_Bench> {
                 'replies': _replies,
                 'frames': _frames,
                 'snaps': _snaps,
+                if (_statsOn) 'stats': _stats,
                 'screen': [
                   for (var y = 0; y < 3; y++)
                     terminal.buffer.lines[terminal.buffer.scrollBack + y]
@@ -362,7 +423,17 @@ class _BenchState extends State<_Bench> {
           child: SizedBox(
               width: _w,
               height: _h,
-              child: _noView ? null : TerminalView(terminal)),
+              child: _noView
+                  ? null
+                  : _shot != null
+                      ? MediaQuery(
+                          data: MediaQuery.of(context)
+                              .copyWith(devicePixelRatio: _shotDpr),
+                          child: RepaintBoundary(
+                              key: _shotKey,
+                              child:
+                                  TerminalView(terminal, controller: _shotCtl)))
+                      : TerminalView(terminal)),
         ),
       );
 }

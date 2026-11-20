@@ -1,0 +1,36 @@
+[?25l[H[2Jclass TerminalPainter {
+  TerminalPainter({
+    required TerminalTheme theme,
+    required TerminalStyle textStyle,
+    required TextScaler textScaler,
+    double devicePixelRatio = 1.0,
+    int paragraphCacheSize = _defaultParagraphCacheSize,
+    int proceduralGlyphCacheSize = _defaultProceduralGlyphCacheSize,
+  })  : _textStyle = textStyle,
+        _theme = theme,
+        _textScaler = textScaler,
+        _devicePixelRatio = devicePixelRatio,
+        _minParagraphCacheSize = paragraphCacheSize,
+        _paragraphCache = ParagraphCache(paragraphCacheSize),
+        _proceduralGlyphCache = ProceduralGlyphCache(proceduralGlyphCacheSize);
+
+  /// A lookup table from terminal colors to Flutter colors.
+  late var _colorPalette = PaletteBuilder(_theme).build();
+
+  /// Size of each character in the terminal.
+  late var _cellSize = _measureCharSize();
+
+  /// The cached for cells in the terminal. Should be cleared when the same
+  /// cell no longer produces the same visual output. For example, when
+  /// [_textStyle] is changed, or when the system font changes.
+  final ParagraphCache _paragraphCache;
+
+  final int _minParagraphCacheSize;
+
+  /// Sizes the paragraph cache so that one screen of [columns] x [rows] fits.
+  ///
+  /// Keys carry the cell's colour, so a screen where most cells differ in
+  /// colour - a truecolor gradient, 256-colour output - needs about one entry
+  /// per cell. A cache smaller than that does not degrade, it stops working:
+  /// cells are looked up in the same order every frame, so each frame evicts
+  /// what the next one needs, and at a fixed 2048 entries an 8060-cell screen
