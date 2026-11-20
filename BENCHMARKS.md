@@ -2109,6 +2109,79 @@ Left out: a run's narrow prefix could be taken into the mixed run, and the
 first unit's join check could be cheaper than a full `writeChar` - together
 the gap between ×1.27 and the ×1.41 the first shape measured.
 
+## A UTF-8 decoder for bytes in — 2026-11-20
+
+`Terminal.writeBytes(Uint8List)` decodes the program's output itself and
+gives exactly what a chunked `Utf8Decoder(allowMalformed: true)` gives -
+U+FFFD placement, a sequence split across chunks, a BOM at the start dropped
+and one after it kept - which 3000 random streams of valid and malformed
+bytes, each cut six ways, check against the SDK decoder.
+
+Why it can be faster: the SDK decoder builds one two-byte string out of any
+chunk that holds a non-ASCII byte, and building a two-byte string from
+UTF-16 units costs 1.7 ns a unit in Dart (`String.fromCharCodes(Uint16List)`),
+against 0.04 ns a byte for a one-byte string from `Uint8List`. So a mostly-
+ASCII chunk is cut into ASCII runs (found four bytes at a time), each a one-
+byte string, and the non-ASCII stretches between them, decoded by the SDK on
+their own, and the pieces are joined - 0.34 ns a byte where the SDK takes
+2.2. A dense chunk would make too many pieces; judged from its first 64 bytes
+it goes to a loop into UTF-16 units instead, which is also faster than the SDK
+on CJK, emoji and accented alphabets.
+
+Headless, `write_budget_probe`, `full-dec` (`Utf8Decoder` + `write`) against
+`full-bytes` (`writeBytes`), 1 KiB chunks, n=5, MiB/s:
+
+| payload | Utf8Decoder + write | writeBytes | speedup |
+|---|---|---|---|
+| ascii | 111.6 | 113.5 | 1.02 |
+| ascii-utf8 | 90.1 | 96.0 | 1.07 |
+| latin-ext | 109.1 | 112.4 | 1.03 |
+| cyrillic | 107.0 | 110.6 | 1.03 |
+| box | 135.7 | 142.2 | 1.05 |
+| unicode | 42.1 | 43.1 | 1.02 |
+| cjk-real | 64.5 | 65.3 | 1.01 |
+| sgr, cursor, truecolor, emoji, combining | | | 1.00-1.02 |
+
+In the app (`XB_BYTES=1` against the same build without it, `flutter_pty2`
+1.0.0, view on, five rounds), the gain mostly does not survive: ascii-utf8
+69.4 → 71.0, ascii 79.8 → 81.6, sgr 61.3 → 62.7, box 90.6 → 92.2 MiB/s, and
+latin-ext, cyrillic, unicode and cjk-real within 1%. The decoder was 2-7% of
+the headless time; in the app it is a smaller share still.
+
+## Where the app's extra time goes — 2026-11-20
+
+The same `Terminal.write`, fed from memory inside the example app
+(`XB_MEM`, no view, 1 KiB chunks through `Utf8Decoder`), took 1.35 ns a byte
+longer on ascii than the headless probe, and the Faz 0 end-to-end runs put
+up to 1.8 ns a byte between the app and a Dart command-line target on the
+same PTY plugin. A CPU profile of the app (profile build, VM service sampler)
+put a quarter of `Terminal.write` in allocating line storage
+(`Uint32List`, runtime slow path, GC included).
+
+The app against the CLI, ns per byte, five rounds each:
+
+| payload | app, no scrollback | CLI, no scrollback | scrollback in the app | scrollback in the CLI |
+|---|---|---|---|---|
+| ascii | 6.00 | 6.20 | 3.86 | 2.00 |
+| cjk-real | 13.06 | 12.90 | 2.79 | 1.80 |
+| unicode | 20.97 | 20.65 | 2.64 | 2.01 |
+| sgr | 9.74 | 9.86 | 1.71 | 1.30 |
+
+"No scrollback" is `XB_MAXLINES=0` in the app and `scroll0` plus `decode-1k`
+in the probe; the scrollback columns are the difference to 10000 lines. With
+no scrollback the app is as fast as the CLI; all of the difference is in
+keeping 10000 lines. A micro-benchmark run in both says the same from the
+other side: a compute loop takes the same time, a 2 KiB store kept in a
+10000-entry ring nearly the same, and a small object kept that way 26-30 ns
+in the app against 15-19 in the CLI. The VM's GC flags in the app are the
+defaults (new space up to 16 MiB). Not found: why the app's heap makes
+retention dearer.
+
+What this changes: the line storage levers are worth more in the app than
+headless numbers say - a smaller cell (whose ceiling took the CLI's ascii
+scrollback cost down 70%) and recycling evicted lines, which was rejected
+twice on headless numbers only.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
