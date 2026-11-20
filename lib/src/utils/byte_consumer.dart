@@ -178,18 +178,36 @@ class ByteConsumer {
   /// has returned a single code unit, one past where that unit sits.
   int get headOffset => _currentOffset;
 
-  /// Where, in [headBlock], the run of [isSingleCellPrintable] and
-  /// [isWideRunUnit] code units starting at [headOffset] ends. Used to carry
-  /// on a run that a wide code unit, just consumed, has started.
-  int textRunEndInHead() {
+  /// Consumes the run of [isSingleCellPrintable] and [isWideRunUnit] code
+  /// units and [isWideRunEmoji] surrogate pairs starting at [headOffset], and
+  /// returns where in [headBlock] it ends. Used to carry on a run that a wide
+  /// character, just consumed, has started; like [consume], it counts a pair
+  /// as one.
+  int consumeTextRunInHead() {
     assert(_headIsCurrent);
     final data = _head;
-    var offset = _currentOffset;
+    final start = _currentOffset;
+    var offset = start;
+    var codePoints = 0;
     while (offset < data.length) {
       final codeUnit = data.codeUnitAt(offset);
-      if (!isSingleCellPrintable(codeUnit) && !isWideRunUnit(codeUnit)) break;
-      offset++;
+      if (isSingleCellPrintable(codeUnit) || isWideRunUnit(codeUnit)) {
+        offset++;
+      } else if (_isHighSurrogate(codeUnit) &&
+          offset + 1 < data.length &&
+          _isLowSurrogate(data.codeUnitAt(offset + 1)) &&
+          isWideRunEmoji(
+              _combineSurrogates(codeUnit, data.codeUnitAt(offset + 1)))) {
+        offset += 2;
+      } else {
+        break;
+      }
+      codePoints++;
     }
+    _currentOffset = offset;
+    _remainingCodeUnits -= offset - start;
+    _totalConsumed += codePoints;
+    _rollbackAvailable += codePoints;
     return offset;
   }
 
@@ -311,6 +329,9 @@ int _decodeCodePoint(String data, int offset, int first) {
   if (!_isLowSurrogate(second)) return first;
   return 0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00);
 }
+
+int _combineSurrogates(int high, int low) =>
+    0x10000 + ((high - 0xd800) << 10) + (low - 0xdc00);
 
 int _codePointCodeUnitLength(String data, int offset, int first) {
   if (!_isHighSurrogate(first) || offset + 1 >= data.length) return 1;

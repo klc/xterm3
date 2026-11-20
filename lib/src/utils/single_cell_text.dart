@@ -1,3 +1,5 @@
+import 'package:xterm3/src/utils/unicode_v11.dart';
+
 /// Whether [codeUnit] can be written straight into one cell, without
 /// consulting the width table or the grapheme cluster rules.
 ///
@@ -89,6 +91,82 @@ bool isWideRunUnit(int codeUnit) {
   if (codeUnit < 0xff01) return false;
   if (codeUnit <= 0xff60) return true;
   return codeUnit >= 0xffe0 && codeUnit <= 0xffe6;
+}
+
+/// Whether [codePoint], above the BMP, can be written into two cells inside a
+/// text run, as [isWideRunUnit] code units are: an emoji (Extended_
+/// Pictographic) of width 2.
+///
+/// No run character continues a cluster that ends in one, and one continues
+/// a cluster only after Prepend or ExtPict Extend* ZWJ (GB9b, GB11) - neither
+/// of which a run character is. The marks that do attach to an emoji - skin
+/// tones, VS16, ZWJ - are no run characters, so a run stops before them and
+/// they take the per-character path as before.
+bool isWideRunEmoji(int codePoint) {
+  if (codePoint < 0x1f000) return false;
+  // The emoji blocks most text holds, first; skin tones (U+1F3FB..U+1F3FF)
+  // fall between the first two and are turned away as cheaply.
+  if (codePoint >= 0x1f300 && codePoint <= 0x1f64f) {
+    if (codePoint >= 0x1f3fb && codePoint <= 0x1f3ff) return false;
+  } else if (codePoint < 0x1f680 || codePoint > 0x1faff) {
+    if (codePoint >= 0x1f1e6 && codePoint <= 0x1f1ff) return false;
+  }
+  return isExtendedPictographic(codePoint) &&
+      unicodeV11.wcwidth(codePoint) == 2;
+}
+
+/// Whether [codePoint] is Extended_Pictographic, the property GB11 joins
+/// across a ZWJ: emoji, and the symbols that have an emoji form.
+///
+/// The ranges are the ones the grapheme segmenter (`characters`) uses; a test
+/// checks every code point against it. None of them is Extend, so nothing in
+/// here continues a cluster on its own - only after Prepend (GB9b) or after
+/// ExtPict Extend* ZWJ (GB11).
+bool isExtendedPictographic(int codePoint) {
+  if (codePoint < 0xa9) return false;
+  if (codePoint >= 0x1f000) {
+    return switch (codePoint) {
+      <= 0x1f0ff || >= 0x1f10d && <= 0x1f10f || 0x1f12f => true,
+      >= 0x1f16c && <= 0x1f171 || >= 0x1f17e && <= 0x1f17f || 0x1f18e => true,
+      >= 0x1f191 && <= 0x1f19a || >= 0x1f1ad && <= 0x1f1e5 => true,
+      >= 0x1f201 && <= 0x1f20f || 0x1f21a || 0x1f22f => true,
+      >= 0x1f232 && <= 0x1f23a || >= 0x1f23c && <= 0x1f23f => true,
+      >= 0x1f249 && <= 0x1f3fa || >= 0x1f400 && <= 0x1f53d => true,
+      >= 0x1f546 && <= 0x1f64f || >= 0x1f680 && <= 0x1f6ff => true,
+      >= 0x1f774 && <= 0x1f77f || >= 0x1f7d5 && <= 0x1f7ff => true,
+      >= 0x1f80c && <= 0x1f80f || >= 0x1f848 && <= 0x1f84f => true,
+      >= 0x1f85a && <= 0x1f85f || >= 0x1f888 && <= 0x1f88f => true,
+      >= 0x1f8ae && <= 0x1f8ff || >= 0x1f90c && <= 0x1f93a => true,
+      >= 0x1f93c && <= 0x1f945 || >= 0x1f947 && <= 0x1faff => true,
+      >= 0x1fc00 && <= 0x1fffd => true,
+      _ => false,
+    };
+  }
+  return switch (codePoint) {
+    0xa9 || 0xae || 0x203c || 0x2049 || 0x2122 || 0x2139 => true,
+    >= 0x2194 && <= 0x2199 || >= 0x21a9 && <= 0x21aa => true,
+    >= 0x231a && <= 0x231b || 0x2328 || 0x2388 || 0x23cf => true,
+    >= 0x23e9 && <= 0x23f3 || >= 0x23f8 && <= 0x23fa || 0x24c2 => true,
+    >= 0x25aa && <= 0x25ab ||
+    0x25b6 ||
+    0x25c0 ||
+    >= 0x25fb && <= 0x25fe =>
+      true,
+    >= 0x2600 && <= 0x2605 || >= 0x2607 && <= 0x2612 => true,
+    >= 0x2614 && <= 0x2685 || >= 0x2690 && <= 0x2705 => true,
+    >= 0x2708 && <= 0x2712 || 0x2714 || 0x2716 || 0x271d || 0x2721 => true,
+    0x2728 || >= 0x2733 && <= 0x2734 || 0x2744 || 0x2747 || 0x274c => true,
+    0x274e ||
+    >= 0x2753 && <= 0x2755 ||
+    0x2757 ||
+    >= 0x2763 && <= 0x2767 =>
+      true,
+    >= 0x2795 && <= 0x2797 || 0x27a1 || 0x27b0 || 0x27bf => true,
+    >= 0x2934 && <= 0x2935 || >= 0x2b05 && <= 0x2b07 => true,
+    >= 0x2b1b && <= 0x2b1c || 0x2b50 || 0x2b55 || 0x3030 || 0x303d => true,
+    0x3297 || 0x3299 => true,
+    _ => false,
+  };
 }
 
 /// Whether [codePoint] has Grapheme_Cluster_Break=Prepend: it joins whatever

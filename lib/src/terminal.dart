@@ -924,7 +924,12 @@ class Terminal
     if (start >= end) return;
     _captureITerm2ClipboardTextRange(text, start, end);
     _buffer.writeMixedWidth(text, start, end);
-    _precedingCodepoint = text.codeUnitAt(end - 1);
+    final last = text.codeUnitAt(end - 1);
+    _precedingCodepoint = last >= 0xdc00 && last <= 0xdfff && end - start > 1
+        ? 0x10000 +
+            ((text.codeUnitAt(end - 2) - 0xd800) << 10) +
+            (last - 0xdc00)
+        : last;
   }
 
   /* SBC */

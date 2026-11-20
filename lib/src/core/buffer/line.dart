@@ -337,9 +337,9 @@ class BufferLine with IndexedItem {
     }
   }
 
-  /// [setAsciiCells] for a run that also holds [isWideRunUnit] code units,
-  /// each written as a width-2 lead and a width-0 placeholder. The [count]
-  /// units cover [cells] cells.
+  /// [setAsciiCells] for a run that also holds [isWideRunUnit] code units and
+  /// [isWideRunEmoji] surrogate pairs, each written as a width-2 lead and a
+  /// width-0 placeholder. The [count] code units cover [cells] cells.
   ///
   /// The run overwrites every cell in its span, so only a wide character
   /// straddling either end of it can be left broken - the two
@@ -366,23 +366,31 @@ class BufferLine with IndexedItem {
         (style.hyperlinkId << CellAttr.hyperlinkShift) |
         style.semanticAttrs;
     var cellOffset = start * _cellSize;
-    for (var offset = 0; offset < count; offset++) {
-      final codeUnit = text.codeUnitAt(textStart + offset);
+    var offset = textStart;
+    final textEnd = textStart + count;
+    while (offset < textEnd) {
+      final codeUnit = text.codeUnitAt(offset++);
       _data[cellOffset + _cellForeground] = foreground;
       _data[cellOffset + _cellBackground] = background;
       _data[cellOffset + _cellAttributes] = attributes;
-      if (isWideRunUnit(codeUnit)) {
+      if (isSingleCellPrintable(codeUnit)) {
         _data[cellOffset + _cellContent] =
-            codeUnit | (2 << CellContent.widthShift);
+            codeUnit | (1 << CellContent.widthShift);
+      } else {
+        var codePoint = codeUnit;
+        if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+          codePoint = 0x10000 +
+              ((codeUnit - 0xd800) << 10) +
+              (text.codeUnitAt(offset++) - 0xdc00);
+        }
+        assert(isWideRunUnit(codePoint) || isWideRunEmoji(codePoint));
+        _data[cellOffset + _cellContent] =
+            codePoint | (2 << CellContent.widthShift);
         cellOffset += _cellSize;
         _data[cellOffset + _cellForeground] = foreground;
         _data[cellOffset + _cellBackground] = background;
         _data[cellOffset + _cellAttributes] = attributes;
         _data[cellOffset + _cellContent] = 0;
-      } else {
-        assert(isSingleCellPrintable(codeUnit));
-        _data[cellOffset + _cellContent] =
-            codeUnit | (1 << CellContent.widthShift);
       }
       cellOffset += _cellSize;
     }

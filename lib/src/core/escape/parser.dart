@@ -306,10 +306,16 @@ class EscapeParser {
       return;
     }
 
-    if (char >= 0x3000) {
+    // Skin tones and regional indicators attach to what came before them and
+    // never start a run; they are common enough after emoji to turn away
+    // before anything else is asked.
+    if (char >= 0x3000 &&
+        (char < 0x1f1e6 ||
+            char > 0x1f3ff ||
+            char > 0x1f1ff && char < 0x1f3fb)) {
       if (_mixedWidthHandler case final mixedWidthHandler?
-          when isWideRunUnit(char)) {
-        _writeWideRun(mixedWidthHandler);
+          when _runGoesOn() && (isWideRunUnit(char) || isWideRunEmoji(char))) {
+        _writeWideRun(mixedWidthHandler, char);
         return;
       }
     }
@@ -317,18 +323,45 @@ class EscapeParser {
     handler.writeChar(char);
   }
 
-  /// The code unit just consumed, an [isWideRunUnit] one, starts a run: hands
-  /// it to [mixedWidthHandler] together with the [isSingleCellPrintable] and
-  /// [isWideRunUnit] code units that follow it in the head block.
+  /// Whether the code unit after the character just consumed can carry a
+  /// run on. Asked first, because it is cheap: an emoji followed by its skin
+  /// tone, a flag's second half or anything no run takes would make a run of
+  /// one, which costs more than the character alone.
+  bool _runGoesOn() {
+    final data = _queue.headBlock;
+    final offset = _queue.headOffset;
+    if (offset >= data.length) return false;
+    final codeUnit = data.codeUnitAt(offset);
+    if (isSingleCellPrintable(codeUnit) || isWideRunUnit(codeUnit)) return true;
+    if (codeUnit < 0xd800 || codeUnit > 0xdbff) return false;
+    // U+1F1E6..U+1F1FF regional indicators and U+1F3FB..U+1F3FF skin tones.
+    if (codeUnit == 0xd83c && offset + 1 < data.length) {
+      final low = data.codeUnitAt(offset + 1);
+      if (low >= 0xdde6 && low <= 0xddff || low >= 0xdffb && low <= 0xdfff) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// [char], just consumed, an [isWideRunUnit] code unit or an
+  /// [isWideRunEmoji] code point, starts a run: hands it to
+  /// [mixedWidthHandler] together with the run characters that follow it in
+  /// the head block.
   ///
   /// This sits where a character that no single-cell run took ends up, not
   /// in the run scan [_process] makes for every token: that scan, which ASCII,
   /// SGR-dense and cursor-addressed output go through, is left as it was.
-  void _writeWideRun(MixedWidthTextHandler mixedWidthHandler) {
+  void _writeWideRun(MixedWidthTextHandler mixedWidthHandler, int char) {
     final data = _queue.headBlock;
-    final start = _queue.headOffset - 1;
-    final end = _queue.textRunEndInHead();
-    if (end > start + 1) _queue.consumeAsciiCodeUnits(end - start - 1);
+    final start = _queue.headOffset - (char > 0xffff ? 2 : 1);
+    final end = _queue.consumeTextRunInHead();
+    // Nothing followed it - an emoji before its skin tone or ZWJ, say: the
+    // run would only cost more than the one character.
+    if (end - start == (char > 0xffff ? 2 : 1)) {
+      handler.writeChar(char);
+      return;
+    }
     mixedWidthHandler.writeMixedWidthText(data, start, end);
   }
 

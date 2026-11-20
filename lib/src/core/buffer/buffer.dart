@@ -161,8 +161,9 @@ class Buffer {
     }
   }
 
-  /// [writeAscii] for a run that also holds [isWideRunUnit] code units, each
-  /// written as a width-2 lead and a width-0 placeholder.
+  /// [writeAscii] for a run that also holds [isWideRunUnit] code units and
+  /// [isWideRunEmoji] surrogate pairs, each written as a width-2 lead and a
+  /// width-0 placeholder.
   ///
   /// Each stretch of the run that fits on the line is written in one call.
   /// What has to decide something goes through [writeChar] one unit at a
@@ -173,14 +174,14 @@ class Buffer {
   /// comes up more than once a line.
   void writeMixedWidth(String text, int start, int end) {
     if (terminal.insertMode || !terminal.autoWrapMode || !charset.isAscii) {
-      for (var index = start; index < end; index++) {
-        writeChar(text.codeUnitAt(index));
+      while (start < end) {
+        start = _writeCharAt(text, start);
       }
       return;
     }
 
-    if (isWideRunUnit(text.codeUnitAt(start))) {
-      writeChar(text.codeUnitAt(start++));
+    if (!isSingleCellPrintable(text.codeUnitAt(start))) {
+      start = _writeCharAt(text, start);
     }
 
     while (start < end) {
@@ -190,31 +191,35 @@ class Buffer {
         // has not written: the first unit may have written nothing (a join
         // that could not widen the cluster at width 1, or a drop). A narrow
         // unit joins nothing, so wrapping first is what [writeChar] does too.
-        if (isWideRunUnit(text.codeUnitAt(start))) {
-          writeChar(text.codeUnitAt(start++));
+        if (!isSingleCellPrintable(text.codeUnitAt(start))) {
+          start = _writeCharAt(text, start);
           continue;
         }
         _wrapInput();
       }
 
+      // Everything in the run that is not single-cell is two cells wide: an
+      // [isWideRunUnit] code unit or an [isWideRunEmoji] surrogate pair.
       final rightLimit = _rightLimit;
       var x = _cursorX;
       var index = start;
       var wide = false;
       while (index < end) {
-        if (isWideRunUnit(text.codeUnitAt(index))) {
+        final codeUnit = text.codeUnitAt(index);
+        if (isSingleCellPrintable(codeUnit)) {
+          if (x >= rightLimit) break;
+          x++;
+          index++;
+        } else {
           if (x + 2 > rightLimit) break;
           wide = true;
           x += 2;
-        } else {
-          if (x >= rightLimit) break;
-          x++;
+          index += _isHighSurrogate(codeUnit) ? 2 : 1;
         }
-        index++;
       }
 
       if (index == start) {
-        writeChar(text.codeUnitAt(start++));
+        start = _writeCharAt(text, start);
         continue;
       }
 
@@ -240,6 +245,24 @@ class Buffer {
       start = index;
     }
   }
+
+  /// [writeChar] for the code point at [index] of [text], a surrogate pair
+  /// included; returns the index after it.
+  int _writeCharAt(String text, int index) {
+    final codeUnit = text.codeUnitAt(index);
+    if (_isHighSurrogate(codeUnit) && index + 1 < text.length) {
+      final low = text.codeUnitAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        writeChar(0x10000 + ((codeUnit - 0xd800) << 10) + (low - 0xdc00));
+        return index + 2;
+      }
+    }
+    writeChar(codeUnit);
+    return index + 1;
+  }
+
+  static bool _isHighSurrogate(int codeUnit) =>
+      codeUnit >= 0xd800 && codeUnit <= 0xdbff;
 
   /// Writes a single character to the _terminal. Escape sequences or special
   /// characters are not interpreted and directly added to the buffer.
@@ -502,6 +525,26 @@ class Buffer {
       return false;
     }
 
+    // Regional indicators and Extended_Pictographic code points (emoji and
+    // the symbols with an emoji form) extend nothing, so the rules that can
+    // join one to the cluster before are few, and each is decided by the
+    // cluster's last code points: GB9b after Prepend, GB12 and GB13 for a
+    // regional indicator after an odd run of them, GB11 for a pictograph
+    // after ExtPict Extend* ZWJ. Without these, every flag and every emoji
+    // with a ZWJ or VS16 in it came down to segmentation, at three string
+    // allocations a code point. They come after the exits above so that the
+    // code points those settle - wide emoji among them - do not pay for them.
+    // What they cannot decide - a cell holding a sequence the rules do not
+    // expect, which mode 2027 switched off and on can leave behind - still
+    // goes to segmentation.
+    if (_isRegionalIndicator(codePoint)) {
+      final joins = _regionalIndicatorJoins(base, combining, last);
+      if (joins != null) return joins;
+    } else if (isExtendedPictographic(codePoint)) {
+      final joins = _pictographJoins(base, combining, last);
+      if (joins != null) return joins;
+    }
+
     final previous = String.fromCharCode(base) + (combining ?? '');
     final storedGraphemes = previous.characters;
     final character = String.fromCharCode(codePoint);
@@ -512,6 +555,50 @@ class Buffer {
     final extensionCandidate = 'a$character';
     return extensionCandidate.characters.length == 1;
   }
+
+  /// Whether a regional indicator joins the cluster `base + combining`, which
+  /// ends in [last]; null where only segmentation can tell.
+  static bool? _regionalIndicatorJoins(int base, String? combining, int last) {
+    if (_isSurrogate(base)) return null;
+    if (isGraphemePrepend(last)) return true;
+    if (!_isRegionalIndicator(last)) return false;
+    // One regional indicator: the second of a flag. Two: a flag, which a third
+    // does not join.
+    if (combining == null) return true;
+    if (_isRegionalIndicator(base) && combining.length == 2) return false;
+    return null;
+  }
+
+  /// Whether an Extended_Pictographic code point joins the cluster
+  /// `base + combining`, which ends in [last]; null where only segmentation
+  /// can tell.
+  static bool? _pictographJoins(int base, String? combining, int last) {
+    if (_isSurrogate(base)) return null;
+    if (isGraphemePrepend(last)) return true;
+    if (last != 0x200d) return false;
+    if (combining == null) return null;
+    // GB11: ExtPict Extend* ZWJ, with Extend narrowed to the marks emoji
+    // sequences hold - variation selectors, skin tone modifiers, tags.
+    final runes = combining.runes.toList();
+    for (var i = runes.length - 2; i >= -1; i--) {
+      final rune = i < 0 ? base : runes[i];
+      if (rune >= 0xfe00 && rune <= 0xfe0f ||
+          _isEmojiModifier(rune) ||
+          rune >= 0xe0020 && rune <= 0xe007f) {
+        continue;
+      }
+      return isExtendedPictographic(rune) ? true : null;
+    }
+    return null;
+  }
+
+  /// A lone surrogate as a cell's base - only malformed UTF-16 puts one there
+  /// - can pair with a lone low surrogate at the start of its combining
+  /// string once the two are one string, as segmentation sees them. The rules
+  /// above read the base and the combining string apart, so they leave such a
+  /// cell to segmentation.
+  static bool _isSurrogate(int codePoint) =>
+      codePoint >= 0xd800 && codePoint <= 0xdfff;
 
   static bool _hasConjunctLinker(String? combining) {
     if (combining == null) return false;

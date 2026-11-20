@@ -60,6 +60,30 @@ void main() {
     expect(accepted, greaterThan(39000));
   });
 
+  test('every wide run emoji is width 2 and joins no run character', () {
+    const runBases = ['a', 'é', '─', '中', '가', 'あ', '、', 'Ａ', '😀', '🚀'];
+    var accepted = 0;
+    for (var codePoint = 0x10000; codePoint <= 0x10ffff; codePoint++) {
+      if (!isWideRunEmoji(codePoint)) continue;
+      accepted++;
+      final reason = 'U+${codePoint.toRadixString(16)}';
+      expect(unicodeV11.wcwidth(codePoint), 2, reason: reason);
+      final char = String.fromCharCode(codePoint);
+      for (final base in [...runBases, char]) {
+        expect('$base$char'.characters.length, 2,
+            reason: '$reason after $base');
+        expect('$char$base'.characters.length, 2,
+            reason: '$reason before $base');
+      }
+    }
+    expect(accepted, greaterThan(1000));
+    // Skin tones and regional indicators attach to what comes before them.
+    for (final codePoint in [0x1f3fb, 0x1f3ff, 0x1f1e6, 0x1f1ff]) {
+      expect(isWideRunEmoji(codePoint), isFalse,
+          reason: 'U+${codePoint.toRadixString(16)}');
+    }
+  });
+
   test('wide run units take CJK punctuation, kana, Han, Hangul, fullwidth', () {
     for (final codeUnit in [
       0x3000, 0x3001, 0x300c, 0x3042, 0x30fc, 0x30fb, 0x4e00, 0x9fff, //
@@ -101,6 +125,18 @@ void main() {
     for (final codePoint in allCodePoints()) {
       final joins = '${String.fromCharCode(codePoint)}a'.characters.length == 1;
       expect(isGraphemePrepend(codePoint), joins, reason: hex(codePoint));
+    }
+  });
+
+  test('isExtendedPictographic matches segmentation for every code point', () {
+    // GB11 joins a code point after "emoji ZWJ" only if it is ExtPict; one
+    // that also joins after "a ZWJ" is Extend or SpacingMark instead.
+    for (final codePoint in allCodePoints()) {
+      final char = String.fromCharCode(codePoint);
+      final pictograph = '\u{1F600}\u200d$char'.characters.length == 1 &&
+          'a\u200d$char'.characters.length == 2;
+      expect(isExtendedPictographic(codePoint), pictograph,
+          reason: hex(codePoint));
     }
   });
 

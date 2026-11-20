@@ -138,34 +138,39 @@ void main() {
     }
   });
 
-  test('a run carried on from a wide code unit takes single-cell text too', () {
-    final consumer = ByteConsumer()..add('ab中文、ＡＢcd\u{0301}');
+  test('a run carried on from a wide character takes single-cell text too', () {
+    final consumer = ByteConsumer()..add('ab中文、ＡＢcd😀ef\u{0301}');
 
     // The single-cell scan stops at the first wide character.
     expect(consumer.printableTextRunLength, 2);
     consumer.consumeAsciiCodeUnits(2);
     expect(consumer.consume(), '中'.codeUnitAt(0));
-    expect(consumer.headBlock, 'ab中文、ＡＢcd\u{0301}');
+    expect(consumer.headBlock, 'ab中文、ＡＢcd😀ef\u{0301}');
     expect(consumer.headOffset, 3);
-    // From there to the combining acute.
-    expect(consumer.textRunEndInHead(), 'ab中文、ＡＢcd'.length);
+    final before = consumer.totalConsumed;
+    // From there to the combining acute, the emoji counted as one.
+    expect(consumer.consumeTextRunInHead(), 'ab中文、ＡＢcd😀ef'.length);
+    expect(consumer.totalConsumed - before, '文、ＡＢcd😀ef'.runes.length);
+    expect(consumer.consume(), 0x0301);
   });
 
-  test('a run carried on from a wide code unit stops at the slow path', () {
-    // A voicing mark (Extend), an emoji (surrogate pair), a Hangul leading
-    // jamo and ESC end it; the end of the head block ends it too.
+  test('a run carried on from a wide character stops at the slow path', () {
+    // A voicing mark (Extend), a skin tone, a ZWJ, a regional indicator, a
+    // Hangul leading jamo and ESC end it; the end of the head block too.
     for (final (text, end) in [
       ('中か\u{3099}a', 2),
-      ('中\u{1F600}', 1),
+      ('中😀\u{1F3FB}', 3),
+      ('中😀\u200d😀', 3),
+      ('中\u{1F1FA}\u{1F1F8}', 1),
       ('中a\u{1100}가', 2),
       ('中a中\x1b[m', 3),
-      ('中a中', 3),
+      ('中a😀', 4),
     ]) {
       final consumer = ByteConsumer()
         ..add(text)
         ..add('中');
       expect(consumer.consume(), '中'.codeUnitAt(0), reason: text);
-      expect(consumer.textRunEndInHead(), end, reason: text);
+      expect(consumer.consumeTextRunInHead(), end, reason: text);
     }
   });
 

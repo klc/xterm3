@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:characters/characters.dart';
 import 'package:test/test.dart';
 import 'package:xterm3/core.dart';
 
@@ -703,6 +704,68 @@ void main() {
     expect(viaBytes.buffer.cursorY, viaString.buffer.cursorY);
   });
 
+  test('Terminal stores emoji sequences one grapheme cluster per cell', () {
+    // Flags in odd and even runs, ZWJ sequences, VS16, skin tones, tags, and
+    // pictographs after a ZWJ that GB11 does not apply to. Each cell has to
+    // hold exactly one cluster. Not here: a Prepend, which is zero width and
+    // dropped where it cannot join, and a skin tone after an emoji that is no
+    // modifier base, which the terminal shows as a swatch of its own.
+    const texts = [
+      '🇺🇸🇯🇵🇩🇪',
+      '🇺🇸🇯',
+      'a🇺b🇺🇸🇯🇵🇺',
+      '👨‍👩‍👧‍👦x👩‍💻 🏳️‍🌈👨‍🚀',
+      '❤️☀️✔️✌️❤☀',
+      '👍🏽👋🏻✋🏼',
+      '🏴󠁧󠁢󠁳󠁣󠁴󠁿x',
+      'a\u200d😀',
+      '中\u200d👍',
+      '😀\u200d\u200d😀',
+      '❤\uFE0F\u200d🔥',
+      '©\u200d😀',
+    ];
+    for (final text in texts) {
+      final terminal = Terminal()..resize(80, 2);
+      terminal.write(text);
+      final line = terminal.buffer.lines[0];
+      final cells = <String>[];
+      for (var x = 0; x < terminal.viewWidth; x++) {
+        final codePoint = line.getCodePoint(x);
+        if (codePoint == 0) continue;
+        cells.add(String.fromCharCode(codePoint) +
+            (line.getCombiningCharacters(x) ?? ''));
+      }
+      expect(cells, text.characters.toList(), reason: text);
+    }
+  });
+
+  test(
+      'Terminal joins a regional indicator to a cell built from lone '
+      'surrogates as segmentation does', () {
+    // Malformed UTF-16: a lone high surrogate, then (after an SGR) a lone low
+    // one, which pair into U+1F1E6 in the cell; U+1F1E7 completes the flag.
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('\uD83C\x1b[m\uDDE6\u{1F1E7}');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0xD83C);
+    expect(line.getCombiningCharacters(0), '\uDDE6\u{1F1E7}');
+    expect(terminal.buffer.cursorX, 2);
+  });
+
+  test('Terminal repeats an emoji that ends a text run (REP)', () {
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('a😀\x1b[2b');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(1), 0x1F600);
+    expect(line.getCodePoint(3), 0x1F600);
+    expect(line.getCodePoint(5), 0x1F600);
+    expect(terminal.buffer.cursorX, 7);
+  });
+
   group('Terminal mixed-width text runs', () {
     // A run holding CJK, kana or Hangul goes through Buffer.writeMixedWidth.
     // Whatever it writes has to be what writing the same code points one at
@@ -749,6 +812,13 @@ void main() {
       '〰〰〰',
       'あい〰〰',
       '〰a〰',
+      '😀🚀a🔥',
+      '中😀文😀😀',
+      '😀👍🏽😀',
+      '😀\u200d👩😀',
+      '😀❤️😀',
+      '🇺🇸😀🇯🇵',
+      'a😀\u{1F004}😀',
     ];
     const setups = [
       '',
@@ -5492,6 +5562,12 @@ class _TrackingTerminal extends Terminal {
   void writeText(String text, int start, int end) {
     bulkWrites++;
     super.writeText(text, start, end);
+  }
+
+  @override
+  void writeMixedWidthText(String text, int start, int end) {
+    bulkWrites++;
+    super.writeMixedWidthText(text, start, end);
   }
 }
 
