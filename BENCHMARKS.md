@@ -2025,6 +2025,90 @@ The table above also had 1 MiB of `truecolor` and `cjk-real` and two files
 ending after ESC and inside a sequence in the corpus. The in-app run is
 `cmp_paced.sh`'s shape with the paced leg replaced by the second build.
 
+## Wide characters in text runs — 2026-11-20
+
+CJK, kana and Hangul took the per-code-point path one character at a time:
+`writeChar`, its width lookup, the grapheme join check and two `setCell`
+calls for every character. `isWideRunUnit` names the wide BMP characters that
+can be written in a run the way `isSingleCellPrintable` names the narrow ones:
+CJK punctuation, kana, bopomofo, Hangul compatibility jamo, Han (Extension A
+and the unified block), Hangul syllables, compatibility ideographs, vertical
+and small forms, fullwidth forms - every one width 2 and joining no run
+character either way, which a test checks for each of them against
+segmentation.
+
+When the parser's per-character path meets one, it takes it and the narrow
+and wide run characters after it in the head block to
+`Terminal.writeMixedWidthText`, through an interface that is not exported, so
+handlers written against `EscapeTextHandler.writeText` still only see
+single-cell text. `Buffer.writeMixedWidth` writes each stretch that fits on
+the line with one `setMixedWidthCells`, and hands three cases to `writeChar`
+as before: the first unit, which may join the cell before the run (a Hangul
+syllable after a leading jamo, anything after Prepend or ZWJ); a wide unit with
+one column left; and a wide unit at the margin, where `writeChar` asks about a
+join before it wraps.
+
+The single-cell run scan that every token goes through is left as it was.
+Two earlier shapes put the wide test there - a combined narrow-and-wide scan,
+then an inline check after every run - and each cost the controls 2-5% (sgr
+and cursor, ranges disjoint), for a unicode gain of ×1.41 instead of the
+×1.27 below: in this shape a run's narrow prefix is written on its own.
+
+Headless, `write_budget_probe`, the one-pass CSI commit against this change,
+five interleaved passes, medians, MiB/s with the min-max of the five:
+
+| payload | before | after | speedup | ns/byte |
+|---|---|---|---|---|
+| unicode | 40.2 (40.1-40.5) | 51.4 (48.4-51.5) | 1.28 | −5.13 |
+| cjk-real | 32.0 (31.6-32.2) | 77.4 (73.2-77.7) | 2.42 | −17.50 |
+| cjk | 30.3 (30.2-30.5) | 79.8 (75.7-80.0) | 2.64 | −19.55 |
+| emoji | 14.6 (14.5-14.7) | 14.6 (14.2-14.6) | 1.00 | +0.03 |
+| combining | 14.0 (14.0-14.1) | 13.9 (13.6-14.0) | 0.99 | +0.53 |
+| ascii | 127.5 (125.9-127.9) | 126.5 (124.7-127.5) | 0.99 | +0.06 |
+| box | 230.2 (227.5-232.5) | 228.8 (226.8-235.9) | 0.99 | +0.02 |
+| latin-ext | 173.7 (171.0-176.8) | 174.0 (172.5-175.9) | 1.00 | −0.01 |
+| sgr | 92.0 (80.1-93.2) | 91.8 (90.8-92.3) | 1.00 | +0.03 |
+| cursor | 99.6 (94.3-100.6) | 99.4 (99.3-101.2) | 1.00 | +0.01 |
+
+`full` mode; `full-1k` moves with it. With the no-op handler (`parser` mode)
+CJK and combining text are 3-4% slower: every character that reaches the
+per-character path now pays a test for U+3000 and up.
+
+In the app (`flutter_pty2` 1.0.0, view on, real PTY, 100x37), the two builds
+and Ghostty 1.4.0 interleaved, five rounds, MiB/s:
+
+| payload | before | after | ns/byte | Ghostty | gap before | gap after |
+|---|---|---|---|---|---|---|
+| unicode | 29.9 | 36.2 | −5.53 | 106.8 | 3.57x | 2.95x |
+| cjk-real | 25.4 | 50.0 | −18.49 | 165.0 | 6.50x | 3.30x |
+| cjk | 24.6 | 53.7 | −20.95 | 132.2 | 5.37x | 2.46x |
+| emoji | 12.4 | 12.3 | +0.45 | 83.8 | 6.78x | 6.82x |
+| ascii | 80.4 | 79.5 | +0.13 | 156.5 | 1.95x | 1.97x |
+| sgr | 62.5 | 62.4 | +0.01 | 94.2 | 1.51x | 1.51x |
+
+**Accepted on.** Tests 1133, all passing, among them a comparison of
+`Terminal.write` against the same code points through `Terminal.writeChar` at
+widths 1 to 9, after colour, underline colour, a ZWJ, a Prepend and a leading
+jamo, inside DECSLRM margins with the cursor inside and beyond them, with
+insert mode, autowrap off and DEC special graphics, and over existing wide
+characters. `grid_oracle.sh` (351 files: the 335 of `gen_corpus.py`, 12
+hand-written edge cases, slices of `cjk-real`, `ascii-utf8` and `truecolor`,
+and every wide run unit) shows no file differing in any of its four
+configurations, and `terminal_state_dump.dart` is byte-identical on 71 files
+under eleven splits. Two deliberately broken variants changed 44 and 7 state
+digests.
+
+A review found what neither oracle could, since both run at 7 columns and
+wider: in a one-column window with mode 2027 on, after `❤ ZWJ`, the run's
+first `〰` joins the cluster without writing anything (it cannot be widened to
+two columns), so the cell before the second still ends in ZWJ and the second
+joins it too. The first version wrapped before asking. It now leaves a wide
+unit at the margin to `writeChar`; the case is in the tests.
+
+Left out: a run's narrow prefix could be taken into the mixed run, and the
+first unit's join check could be cheaper than a full `writeChar` - together
+the gap between ×1.27 and the ×1.41 the first shape measured.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
