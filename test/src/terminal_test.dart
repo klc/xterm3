@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:xterm3/core.dart';
@@ -680,6 +681,26 @@ void main() {
     expect(line.getWidth(2), 2);
     expect(line.getWidth(3), 0);
     expect(line.getCodePoint(4), 0x62);
+  });
+
+  test('Terminal.writeBytes writes what write does with the bytes decoded', () {
+    const text = 'plain \x1b[1mbold\x1b[0m café — 中文 😀\r\n'
+        'second line ğüş\r\n';
+    final bytes = utf8.encode(text);
+    final viaString = Terminal()..resize(30, 5);
+    viaString.write(text);
+    // Split inside the multi-byte characters and the escape sequence.
+    final viaBytes = Terminal()..resize(30, 5);
+    for (var i = 0; i < bytes.length; i += 5) {
+      viaBytes.writeBytes(Uint8List.fromList(
+          bytes.sublist(i, i + 5 > bytes.length ? bytes.length : i + 5)));
+    }
+    for (var y = 0; y < 3; y++) {
+      expect(viaBytes.buffer.lines[y].getText(),
+          viaString.buffer.lines[y].getText());
+    }
+    expect(viaBytes.buffer.cursorX, viaString.buffer.cursorX);
+    expect(viaBytes.buffer.cursorY, viaString.buffer.cursorY);
   });
 
   group('Terminal mixed-width text runs', () {
