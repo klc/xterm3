@@ -42,3 +42,36 @@ def motion(r):
 emit('cursor', motion)
 with open(os.path.join(out, 'cursor'), 'r+') as f:
     body = f.read(); f.seek(0); f.write('\x1b[?1049h' + body + '\x1b[?1049l')
+# Realistic text the synthetic rows above miss (Faz 0 of the Ghostty-gap plan).
+# CJK prose: kana and kanji with the ideographic punctuation and fullwidth
+# forms (U+3000-303F, U+FF01-FF60) that gen.py's `cjk` lacks.
+KANA = [chr(c) for c in range(0x3041, 0x3094)] + [chr(c) for c in range(0x30A1, 0x30F7)]
+CJKP = list('、。「」『』（）！？・：；') + [chr(c) for c in range(0xFF10, 0xFF1A)] + [chr(c) for c in range(0xFF21, 0xFF3B)]
+def cjk_real(r):
+    w = []
+    for _ in range(r.randint(8, 45)):
+        a = r.random()
+        w.append(chr(r.randint(0x4E00, 0x9FFF)) if a < .45 else r.choice(KANA) if a < .85 else r.choice(CJKP))
+    return ''.join(w) + '\n'
+emit('cjk-real', cjk_real)
+# English-like ASCII with an occasional non-ASCII character, about one per 150
+# bytes: logs and prose, where no 1 KiB chunk is pure ASCII.
+RARE = list('éüñ—’“”…•°€')
+def ascii_utf8(r):
+    s = list(''.join(r.choices(PR, k=r.randint(1, 200))))
+    for i in range(len(s)):
+        if r.random() < 1 / 150: s[i] = r.choice(RARE)
+    return ''.join(s) + '\n'
+emit('ascii-utf8', ascii_utf8)
+# lolcat-style truecolor gradient: a 24-bit foreground per character, hue moving
+# along the line and down the screen. Meant to resemble termbench's FGPerChar;
+# that is from memory and has not been checked against termbench's source.
+import colorsys
+def truecolor(r):
+    line = r.randint(0, 1 << 20); w = []
+    for col in range(r.randint(20, 100)):
+        h = ((line * 7 + col * 3) % 360) / 360
+        R, G, B = (int(v * 255) for v in colorsys.hsv_to_rgb(h, .8, 1))
+        w.append(f'\x1b[38;2;{R};{G};{B}m' + r.choice(PR))
+    return ''.join(w) + '\x1b[0m\n'
+emit('truecolor', truecolor)

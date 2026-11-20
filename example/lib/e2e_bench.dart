@@ -33,6 +33,8 @@ import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' show min;
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -76,6 +78,30 @@ final _snaps = <List<int>>[];
 // frameNumber so the two can be joined.
 final _statsOn = _env['XB_STATS'] == '1';
 final _stats = <List<int>>[];
+// XB_MEM='<results>|<term>|<file>|...' (glue attribution, no PTY): each file,
+// LF turned into CRLF as the PTY's ONLCR does, is written to Terminal.write in
+// XB_CHUNK-byte chunks (default 1024) through a chunked Utf8Decoder, in one
+// synchronous loop, and one drive.py-shaped JSON line per file goes to
+// <results>. (Feeding the chunks from a helper isolate through a ReceivePort was
+// tried and cost ~0.9 ms per message, where the PTY plugin's messages cost
+// ~12 us, so it does not stand for the plugin and was removed.)
+final _mem = _env['XB_MEM'];
+final _memChunk = int.parse(_env['XB_CHUNK'] ?? '1024');
+
+Uint8List _onlcr(Uint8List b) {
+  var lf = 0;
+  for (final c in b) {
+    if (c == 10) lf++;
+  }
+  final o = Uint8List(b.length + lf);
+  var j = 0;
+  for (final c in b) {
+    if (c == 10) o[j++] = 13;
+    o[j++] = c;
+  }
+  return o;
+}
+
 // XB_SHOT=<file> (pixel oracle, no PTY): writes the file into the terminal,
 // optionally selects XB_SEL="x1,y1,x2,y2", waits a few frames and saves the
 // view as a PNG to XB_SHOT_OUT, rendered at XB_DPR (default 1). The DPR also
@@ -154,6 +180,7 @@ class _BenchState extends State<_Bench> {
     WidgetsBinding.instance.endOfFrame.then((_) {
       if (_shot != null) return unawaited(_takeShot());
       if (_iso) return unawaited(_startIso());
+      if (_mem != null) return unawaited(_runMem());
       if (_lever) return _startLevers();
       final pty = Pty.start('/usr/bin/python3',
           arguments: _args.split('|'),
@@ -196,6 +223,37 @@ class _BenchState extends State<_Bench> {
         exit(0);
       });
     });
+  }
+
+  Future<void> _runMem() async {
+    final parts = _mem!.split('|');
+    for (final path in parts.skip(2)) {
+      terminal.write('\x1b[?1049l\x1b[0m\x1b[H\x1b[2J');
+      await WidgetsBinding.instance.endOfFrame;
+      final sw = Stopwatch();
+      final dec =
+          const Utf8Decoder().startChunkedConversion(_Sink(terminal.write));
+      final b = _onlcr(File(path).readAsBytesSync());
+      sw.start();
+      for (var i = 0; i < b.length; i += _memChunk) {
+        dec.add(Uint8List.sublistView(b, i, min(i + _memChunk, b.length)));
+      }
+      dec.close();
+      sw.stop();
+      final size = File(path).lengthSync();
+      File(parts[0]).writeAsStringSync(
+          '${jsonEncode({
+                'term': parts[1],
+                'payload': path.split('/').last,
+                'size': size,
+                'cols': terminal.viewWidth,
+                'rows': terminal.viewHeight,
+                'parsed': sw.elapsedMicroseconds / 1e6,
+                'mibs': size / 1048576 / (sw.elapsedMicroseconds / 1e6),
+              })}\n',
+          mode: FileMode.append);
+    }
+    exit(0);
   }
 
   Future<void> _takeShot() async {

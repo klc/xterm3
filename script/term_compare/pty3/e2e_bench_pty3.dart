@@ -29,6 +29,9 @@ final _w = double.parse(_env['XB_W'] ?? '800');
 final _h = double.parse(_env['XB_H'] ?? '600');
 final _args = _env['XB_ARGS'] ?? '';
 final _prof = _env['XB_PROF'];
+// XB_NOVIEW=1: no TerminalView, the terminal sized to 100x37 by hand (as in
+// e2e_bench.dart), so the run is PTY + decode + Terminal.write only.
+final _noView = _env['XB_NOVIEW'] == '1';
 final _paced = _env['XB_PACED'] == '1';
 final _pause = _paced && _env['XB_PAUSE'] == '1';
 const _pauseAbove = 1 << 20,
@@ -92,6 +95,7 @@ class _BenchState extends State<_Bench> {
   @override
   void initState() {
     super.initState();
+    if (_noView) terminal.resize(100, 37);
     if (_prof != null) {
       WidgetsBinding.instance
           .addTimingsCallback((ts) => _frames.addAll(ts.map((t) => [
@@ -112,7 +116,7 @@ class _BenchState extends State<_Bench> {
       }
       File(_prof!).writeAsStringSync(
           '${jsonEncode({
-                'view': true,
+                'view': !_noView,
                 'mode': ['pty3', _paced, _pause, _pauseAbove, _resumeBelow],
                 'pauses': _pauses,
                 'replies': _replies,
@@ -194,7 +198,10 @@ class _BenchState extends State<_Bench> {
         backgroundColor: Colors.black,
         body: Align(
           alignment: Alignment.topLeft,
-          child: SizedBox(width: _w, height: _h, child: TerminalView(terminal)),
+          child: SizedBox(
+              width: _w,
+              height: _h,
+              child: _noView ? null : TerminalView(terminal)),
         ),
       );
 }
