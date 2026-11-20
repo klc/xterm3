@@ -149,6 +149,7 @@ class EscapeParser {
       final char = _queue.consume();
 
       if (char == Ascii.ESC) {
+        if (_tryFastCsi()) continue;
         final processed = _processEscape();
         if (!processed) {
           _queue.rollback(tokenEnd - tokenBegin);
@@ -164,6 +165,85 @@ class EscapeParser {
         _processChar(char);
       }
     }
+  }
+
+  /// Parses the common CSI - `[`, then only digits, `;` and `:`, then a final
+  /// byte - in one pass over the head block, right after its ESC was consumed,
+  /// and dispatches it. Returns false, having consumed nothing, for anything
+  /// else: a private prefix, an intermediate or control byte, a sequence that
+  /// runs past the head block or past [_maxCsiRawLength]; [_processEscape]
+  /// then parses it as before, byte by byte.
+  ///
+  /// The byte-by-byte path pays for its generality on every sequence: a
+  /// `_pendingEscape` round trip, a peek for the prefix, a queue call and five
+  /// range tests per byte, and two table lookups to reach the handler. On
+  /// SGR-dense and cursor-addressed output, where a sequence comes every 10-15
+  /// bytes, that was most of the parser's time.
+  ///
+  /// It leaves [_csi] as [_consumeCsi] does for the same sequence: no prefix,
+  /// no intermediates, the same clamped parameters and separators, and
+  /// [_csiOverflowed] false.
+  bool _tryFastCsi() {
+    if (_queue.isEmpty) return false;
+    final data = _queue.currentBlock;
+    final start = _queue.currentCodeUnitOffset;
+    if (data.codeUnitAt(start) != Ascii.openBracket) return false;
+    final csi = _csi;
+    final params = csi.params;
+    final separators = csi.paramSeparators;
+    params.clear();
+    separators.clear();
+    // The bytes after `[`, final byte included, may number _maxCsiRawLength.
+    final limit = start + 1 + _maxCsiRawLength;
+    final end = limit < data.length ? limit : data.length;
+    var index = start + 1;
+    var param = 0;
+    var hasParam = false;
+    var hasParamSeparator = false;
+    var char = 0;
+    while (true) {
+      if (index >= end) return false;
+      char = data.codeUnitAt(index);
+      if (char >= Ascii.num0 && char <= Ascii.num9) {
+        param = param * 10 + char - Ascii.num0;
+        if (param > _maxCsiParamValue) param = _maxCsiParamValue;
+        hasParam = true;
+      } else if (char == Ascii.semicolon || char == Ascii.colon) {
+        if (params.length < _maxCsiParams) {
+          params.add(hasParam ? param : 0);
+          separators.add(char);
+        }
+        param = 0;
+        hasParam = false;
+        hasParamSeparator = true;
+      } else {
+        break;
+      }
+      index++;
+    }
+    if (char < Ascii.atSign || char > Ascii.tilde) return false;
+    if ((hasParam || hasParamSeparator) && params.length < _maxCsiParams) {
+      params.add(param);
+    }
+    csi.prefix = null;
+    if (csi.intermediates.isNotEmpty) csi.intermediates.clear();
+    csi.finalByte = char;
+    _csiOverflowed = false;
+    _queue.consumeAsciiCodeUnits(index + 1 - start);
+    switch (char) {
+      case 0x6d: // m
+        _csiHandleSgr();
+      case 0x48: // H
+        _csiHandleCursorPosition();
+      default:
+        final csiHandler = _csiHandlers[char];
+        if (csiHandler == null) {
+          handler.unknownCSI(char);
+        } else {
+          csiHandler();
+        }
+    }
+    return true;
   }
 
   bool _processC1(int char) {
