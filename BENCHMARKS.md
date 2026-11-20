@@ -1610,16 +1610,335 @@ APP=/tmp/pty3/example.app/Contents/MacOS/example TAG=-pty3 PAUSE=1 \
 
 - **Frame build cost on SGR-dense screens.** 44-52 ms per frame on `sgr` is
   what holds the writer to 6-7 MiB/s there, and what slows unpaced `sgr` once
-  frames happen at all.
+  frames happen at all. It is paragraph-cache misses,
+  because colour is in the per-cell cache key, and as far as measured it is
+  confined to synthetic random colour (*Frame build on colour-dense screens*,
+  next). Whether to adopt the glyph atlas measured there is open.
 - **The per-code-point write path**, where the largest throughput gap to
   Ghostty is: 3.2-3.7x on unicode, against 1.9-2.2x on cursor and 1.4-1.7x on
   ascii.
-- **An adaptive budget for the writer** when frames are expensive — giving
-  parsing more of the frame when the paint takes 45 ms. An idea, not measured.
+- **An adaptive budget for the writer** when frames are expensive. It has lost
+  the case that motivated it: real coloured output builds a frame in 0.3-2.5 ms
+  (next section). An idea, not measured.
 - **The pause logic in the package.** The bench's pause-above / resume-below
   rule bounds the queue on the 3.x plugin; it could live in
   `PacedTerminalWriter` or alongside it rather than in each application. An
   idea, not measured as a package change.
+- **`combining`**: 8 ms of build and 56 paragraph layouts per frame, and a
+  longest gap of 237-283 ms even with the writer (next section). Not
+  investigated.
+
+## Frame build on colour-dense screens — 2026-11-20
+
+Why one `sgr` frame takes 44-52 ms to build (*flutter_pty2 with coalesced
+reads*), whether real programs pay it, and four ways out, tried in scratch
+copies of `lib/`. Every number here: the example app (`e2e_bench.dart`),
+release, real PTY, `flutter_pty2` 1.0.0, 100x37, `PacedTerminalWriter` on
+(`XB_PACED=1`) so that every frame is drawn, Apple M1 Pro, macOS, Impeller.
+Build and raster are medians over the frames inside the payload's DSR window,
+ms; raster is raster-thread CPU time. Two flags of `e2e_bench.dart` used here
+are uncommitted bench code at the time of writing: `XB_STATS=1` records
+`TerminalRenderStats` after every frame, and `XB_SHOT` writes a screen into the
+terminal and dumps the view to PNG. So are the helpers
+`script/term_compare/gen_sgr_ablate.py`, `rec_pty.py` and `shot_diff.py`.
+
+### The cause: colour is in the paragraph cache key
+
+`TerminalPainter.paintCellForeground` draws one `ui.Paragraph` per non-empty
+cell, cached under `(foreground ARGB, decoration ARGB, visual flags, cell
+content, text scaler, combining characters)`. Capacity is max(2048, cells ×
+1.25) with cells = columns × (rows + 1): 4750 at 100x37. The lookup is per
+cell, not per style run: with ligatures off, the default, the run path is never
+taken.
+
+A hit costs about 0.7 us including `drawParagraph` (ascii: 1.7 ms over 2478
+lookups, derived). A miss costs about 27 us, timed with stopwatches in a
+scratch copy of `lib/` on `sgr`:
+
+| step of one miss | us |
+|---|---|
+| `ParagraphBuilder` construction, with style conversion | 6.6 |
+| `pushStyle` | 5.4 |
+| `addText` | 0.3 |
+| `build` | 2.4 |
+| `layout` | 8.2 |
+| cache insert + evict + dispose | 3.5 |
+
+The stopwatches perturb a little: `sgr` builds in 47.3 ms stock and 47.6-48.2
+instrumented. In that copy (`sgr`, median frame 47.6 ms), `RenderTerminal.paint`
+is 47.5 ms, of which the foreground pass 47.3 and the background pass 0.11;
+`performLayout` is 0.00.
+
+**Ablation.** `gen_sgr_ablate.py` makes variants of `gen.py`'s `sgr` payload,
+one change each (the generator's comments say exactly what); the last three
+rows are real captures repeated to the same size. 16 MiB per variant, three
+rounds; lookups and misses are per frame.
+
+| variant | build ms (median / p90) | raster ms | lookups | misses |
+|---|---|---|---|---|
+| ascii | 1.7 / 2.1 | 2.7 | 2478 | 0 |
+| `sgr` | 47.3 / 51.6 | 3.3 | 1829 | 1656 |
+| fix8: 8 colours, attributes accumulate | 30.7 / 35.0 | 3.3 | 1814 | 915 |
+| fgonly: foreground colour only | 33.0 / 38.1 | 3.2 | 1826 | 1107 |
+| bgonly: background colour only | 20.4 / 25.2 | 3.2 | 1828 | 604 |
+| fg256: 256-colour foreground only | 31.9 / 36.4 | 3.2 | 1792 | 1074 |
+| attrs: attributes, no colour | 3.2 / 4.4 | 3.5 | 1818 | 0 |
+| bold, italic or inverse alone | 1.3 / 1.5 | 2.0 | 1810-1847 | 0 |
+| underline alone | 2.7 / 3.1 | 3.9 | 1829 | 0 |
+| reset: `ESC[0m` before every run | 24.0 / 26.8 | 2.7 | 1835 | 1113 |
+| samesgr: fixed SGR sequence, random text | 1.9 / 2.9 | 2.3 | 1823 | 0 |
+| sametext: random SGR, fixed text | 25.7 / 28.1 | 3.2 | 1884 | 1230 |
+| runs1: 1 style run per line | 26.9 / 30.8 | 3.7 | 2934 | 1284 |
+| runs4 | 58.3 / 62.6 | 4.3 | 2818 | 2220 |
+| runs15 | 59.4 / 62.7 | 4.3 | 2224 | 2096 |
+| runs40 | 40.0 / 42.7 | 4.5 | 1486 | 1398 |
+| `git log -p --color` | 1.0 / 1.7 | 1.3 | 1028 | 1 |
+| `ls -laG` | 1.6 / 2.2 | 2.2 | 1906 | 0 |
+| clang diagnostics | 1.3 / 2.0 | 2.0 | 1818 | 0 |
+
+**The number of misses decides it, not the number of style runs.** Frame build
+is about 1.3 ms + 20-32 us × misses per frame (derived from the rows above).
+`samesgr` has as many runs as `sgr` and builds in 1.9 ms; `runs1` has one run
+per line and takes 26.9 ms, because its colours are random. Attributes without
+colour never miss. `fix8` shows that a bounded palette can still thrash:
+colours times accumulating attributes times characters came to 13224 distinct
+keys over the run (counted, see the next table), against a capacity of 4750,
+and half its lookups miss.
+
+**Ceilings**, from throwaway switches in the instrumented copy — the output is
+wrong, so these are bounds, not candidates. Baselines are that copy's: `sgr`
+48.2, `fix8` 31.4 ms.
+
+| switch | `sgr` build ms | `fix8` build ms |
+|---|---|---|
+| none | 48.2 | 31.4 |
+| colour removed from the key | 2.8 | 2.7 |
+| cache capacity × 100 | 39.6 | 6.6 |
+
+Capacity helps `fix8` and barely moves `sgr`, whose key space is unbounded and
+which does not reach a steady state within 16 MiB. Menlo with an empty fallback
+list, instead of the default 24-family `fontFamilyFallback`: `sgr` 47.0 → 37.6.
+The background pass switched off: no change.
+
+### Real 256-colour and truecolor output does not hit it
+
+Captured from tools installed on the machine: vim 9.1 with `termguicolors` and
+unokai, and with 256-colour habamax, over this repo's sources, both as a
+recorded TUI session (`vim_*`, `rec_pty.py`) and as a `tmux capture-pane -e`
+stream (`vimcat_*`); htop 3.5.1; `rg --colors` with truecolor; `git log -p
+--color-moved` with truecolor `color.diff.*`; and the `cmatrix` and
+256-colour-table fixtures. **Not installed, therefore not measured:** bat,
+delta, eza, lsd, vivid, nvim, btop, tig, lazygit, pygmentize, chroma, lolcat —
+in particular no gradient or rainbow tool.
+
+Keys are counted in a scratch copy that records every key looked up (median
+distinct keys in one frame, and distinct keys over the whole run); misses (mean
+per frame) and build come from the stock leg of the candidate run below.
+
+| payload | keys per frame | keys over the run | misses per frame | build ms |
+|---|---|---|---|---|
+| vim_unokai | 78 | 292 | 3 | 0.5 |
+| vim_habamax256 | 76 | 310 | 4 | 0.5 |
+| vimcat_unokai | 99 | 280 | 3 | 0.9 |
+| vimcat_habamax256 | 103 | 286 | 3 | 1.0 |
+| htop | 214 | 271 | 1 | 1.2 |
+| rg_true | 89 | 136 | 1 | 1.5 |
+| git_true | 101 | 532 | 9 | 0.8 |
+| cmatrix | 143 | 536 | 4 | 0.3 |
+| colors256 | 389 | 728 | 0 | 2.5 |
+| `sgr` | 1716 | 66649 | 1662 | 46.1 |
+| `fix8` | 1585 | 13224 | 922 | 30.3 |
+
+Every real capture stays at or under 728 keys over the run, against a capacity
+of 4750: a theme's palette is 10-20 colours. Read the misses column with care:
+the captures are repeated 4-900 times to fill the payload, which flatters misses
+per frame; the count of keys over the run is the evidence. So the 45-50 ms frame
+is, as far as measured, a property of synthetic random colour — and, untested,
+perhaps of gradient tools — not of highlighters and TUIs.
+
+### Four candidates, in scratch copies
+
+None of this is in the package; the code is
+`script/term_compare/paint_spike/candidates.patch`, switched by environment
+variables (`lib/src/ui/xc.dart` in the patch).
+
+- **A1** cache capacity × 2, × 4, × 16 (`XC_CACHEX`).
+- **A2** `memo`: memoise the converted `ui` styles on a miss (`XC_MEMO=1`).
+- **A3** `nofb`: a short fallback list for printable ASCII (`XC_NOFB=1`).
+- **B** `tint`: a colour-independent paragraph, drawn inside a `saveLayer` with a
+  `srcIn` colour filter per style run (`XC_TINT=1`).
+- **C** `atlas`: glyph sprites in a `ui.Image` atlas, drawn with `drawRawAtlas`
+  once per line, `BlendMode.modulate` (`XC_ATLAS=1`).
+- **D** `runls`: one paragraph per style run on a miss, letter spacing set to
+  cell width minus advance (`XC_RUN=1 XC_RUNLS=1`).
+
+B and C key a glyph by a 3-bit luminance bucket (`XC_LUM=1 XC_LUMMODE=2`, next
+subsection). Two interleaved rounds, medians, build / raster ms
+(`paint_spike/main_table.txt`):
+
+| payload | stock | A3 `nofb` | B `tint` | C `atlas` | D `runls` |
+|---|---|---|---|---|---|
+| `sgr` | 46.1 / 3.1 | 37.7 / 3.2 | 16.7 / 9.0 | 1.5 / 4.7 | 11.9 / 1.1 |
+| `fix8` | 30.3 / 3.2 | 24.9 / 3.3 | 8.7 / 8.6 | 1.2 / 0.5 | 11.8 / 1.1 |
+| reset | 24.1 / 2.7 | 18.8 / 2.6 | 2.4 / 11.3 | 0.5 / 0.4 | 11.9 / 1.0 |
+| ascii | 1.7 / 2.7 | 1.7 / 2.7 | 1.7 / 3.7 | 0.7 / 0.5 | 3.5 / 0.6 |
+| gitlog | 1.0 / 1.3 | 1.0 / 1.3 | 1.1 / 2.5 | 0.5 / 0.3 | 2.8 / 0.8 |
+| htop | 1.2 / 1.9 | 1.3 / 2.0 | 1.6 / 9.5 | 0.4 / 0.3 | 1.0 / 1.0 |
+| vim_unokai | 0.5 / 0.6 | 0.5 / 0.6 | 0.5 / 1.5 | 0.3 / 0.2 | 0.9 / 0.4 |
+| colors256 | 2.5 / 3.9 | 2.6 / 4.2 | 2.6 / 5.2 | 0.8 / 0.6 | 1.3 / 1.8 |
+
+Paragraph layouts per frame on `sgr`: stock 1662, `nofb` 1663, `tint` 417,
+`atlas` 75, `runls` 326. The scratch copy with every switch off (`base`)
+matches stock (`sgr` 45.8 / 3.2). The table also has ls, clang, vimcat_unokai,
+git_true and cmatrix, and `paint_spike/extra_table.txt` rg_true and the two
+habamax captures; they read like the real rows above.
+
+A1, build ms (`paint_spike/a1_table.txt`):
+
+| payload | × 1 | × 2 | × 4 | × 16 |
+|---|---|---|---|---|
+| `fix8` | 30.2 | 15.8 | 6.8 | 6.6 |
+| `sgr` | 45.8 | 45.3 | 43.8 | 39.3 |
+| peak RSS on `sgr`, MiB | 279 | 339 | 457 | 1041 |
+
+**A2 does nothing**: `sgr` 46.4, `fix8` 30.7, within noise.
+
+**A1 helps bounded palettes only, and costs memory.** `fix8` falls to 6.8 ms at
+× 4; `sgr` stays at 39-45 ms while RSS reaches 1041 MiB at × 16.
+
+**A3 is pixel-identical and cuts 18-22% of the build on the colour-dense
+payloads** (`sgr` 46.1 → 37.7, `fix8` 30.3 → 24.9, reset 24.1 → 18.8; derived),
+with the controls unchanged. But the spike hard-codes `SF Mono,Menlo` as the
+short list; a real version would have to derive it from the configured font.
+
+**B is rejected.** It moves the cost to the raster thread on every payload —
+one layer per colour run: htop raster 1.9 → 9.5 ms, reset 2.7 → 11.3, ascii
+2.7 → 3.7. This file has now recorded that lesson three times: work taken off
+the UI thread has to be measured on the raster thread.
+
+**D is rejected as measured.** The controls build slower — ascii 1.7 → 3.5,
+gitlog 1.0 → 2.8 — because cells drawn as part of a run never warm the per-cell
+cache. Without the letter-spacing compensation (`XC_RUN=1` alone), runs drift
+0.17 px per glyph, the spike's check rejects them back to the per-cell path,
+and `sgr` takes 75.9 ms.
+
+**C is the only candidate that lowers both build and raster on every payload
+measured, controls included** — build 1.5-3x and raster 1.5-8x lower on the
+real and control rows (derived) — because it also replaces about 2500
+`drawParagraph` calls per frame with one atlas call per line. The one exception
+is `sgr`'s raster while the atlas pages fill: median 4.7 against 3.1, p90 build
+/ raster 7.6 / 11.6; in the second half of the run it is 1.0 / 0.5.
+
+### What the atlas does to pixels
+
+The repo's golden tests render with the Flutter test font, whose glyphs are
+boxes, so they cannot see a glyph-level difference. The oracle is a PNG of the
+real app instead: `shot_diff.py` shoots five screens (plain, `sgr`,
+decorations, wide characters, vim) at device pixel ratio 1 and 2, the first
+three also under a selection, and diffs them pixel by pixel. Stock is
+deterministic: two shots are identical.
+
+| screen | A1 / A2 / A3 | atlas, white sprites | atlas, luminance bucket |
+|---|---|---|---|
+| plain, ± selection | identical | identical | identical |
+| vim | identical | 2398-5071 px, max 53 | identical |
+| wide | identical | 3398-7240 px, max 54 | identical |
+| `sgr`, ± selection | identical | 38142-92397 px, max 91 | 6723-15078 px, max 2 at DPR 1, 5-6 at DPR 2 |
+| decorations | identical | 26275-55443 px, max 76 | 2790-6133 px, max 14 |
+| decorations + selection | identical | 29765-62420 px, max 73 | 3649-7112 px, max 32 |
+
+Pixels that differ, and the largest difference in any channel (0-255). White
+sprites tinted to the cell's colour are wrong in edge antialiasing: the glyph
+mask Impeller produces depends on the text colour. Keying the sprite by a 3-bit
+luminance bucket — the top 3 bits of `(54r + 183g + 19b) >> 8`, the sprite drawn
+in that bucket's grey — is what the tables above measured. With it, plain, vim,
+wide and a held-out screen not used while tuning are identical; `sgr` differs by
+at most 2 per channel at DPR 1 and 5-6 at DPR 2, with no pixel off by more than
+16; decorations by at most 14. Decorations under a selection differ by up to 32,
+with 739-1321 pixels off by more than 16, only on curly, dotted and dashed
+underlines — unexplained.
+(White sprites are also cheaper, `sgr` 0.6 / 0.5, because one sprite serves
+every colour; they are not a candidate.)
+
+What the spike's atlas covers: printable ASCII, Latin-1, Latin Extended-A and
+-B, Greek and Cyrillic; single-cell, no combining characters, glyph fits the
+cell; decorations when the decoration colour equals the foreground. Left on
+today's path: an explicit underline colour (SGR 58), combining characters,
+wide characters (CJK, emoji — emoji are never tinted), symbols, arrows and PUA
+glyphs, procedural glyphs, and everything when ligatures are on.
+
+### What it buys in throughput
+
+An overnight run: stock against the atlas candidate, five interleaved rounds,
+the writer on. The `gen.py` payloads are 64 MiB, gitlog and vimcat_unokai about
+16 MiB.
+
+| payload | MiB/s | frames | longest gap ms | build ms | raster ms |
+|---|---|---|---|---|---|
+| ascii | 56.1 → 62.9 | 94 → 91 | 24 → 20 | 1.7 → 0.7 | 2.6 → 0.5 |
+| unicode | 23.7 → 24.0 | 240 → 240 | 76 → 75 | 1.0 → 0.9 | 2.1 → 1.6 |
+| cjk | 20.3 → 20.0 | 311 → 314 | 46 → 46 | 0.8 → 0.8 | 1.5 → 1.4 |
+| emoji | 10.3 → 10.3 | 641 → 641 | 40 → 40 | 0.8 → 0.8 | 1.3 → 1.3 |
+| combining | 5.5 → 5.6 | 666 → 661 | 283 → 237 | 8.0 → 8.1 | 2.0 → 1.9 |
+| `sgr` | 6.6 → 32.4 | 175 → 176 | 89 → 77 | 46.1 → 0.7 | 3.2 → 0.5 |
+| gitlog | 36.1 → 37.7 | 40 → 41 | 22 → 21 | 1.1 → 0.5 | 1.3 → 0.3 |
+| vimcat_unokai | 36.1 → 37.1 | 43 → 43 | 24 → 19 | 0.9 → 0.5 | 1.3 → 0.3 |
+
+Outside `sgr` the throughput gain with the writer is between -1% and +12%
+(derived), because parsing, not painting, owns the thread. CJK, emoji and
+combining text are outside the spike's allowlist and do not move. `combining`
+shows something else: 8 ms of build per frame (56 paragraph layouts per frame on
+either build) and a longest gap of 237-283 ms even with the writer. Not
+investigated.
+
+### Status and limits
+
+Nothing from this spike is in the package. The decision — adopt an atlas, and
+whether opt-in, or stop paint work here — is open.
+
+- Two rounds for the candidate table.
+- The atlas was tuned while looking at `sgr` and `fix8` (page capacity,
+  padding), so the real-payload rows are the trustworthy ones.
+- No eviction: the cap is 8192 sprites. `sgr` reaches about 6000 (6013 after
+  16 MiB, 6016 after 64 MiB), about 35 MiB at DPR 2; real content 94-372
+  sprites, 0.5-2.1 MiB. A steady state on `sgr` is not proven.
+- macOS and Impeller only. Text gamma and the luminance-bucket rule are
+  unverified on Android, iOS, Windows, Linux and the web, as is
+  `toImageSync` on the web.
+- Verified only at whole-device-pixel cell origins, with nearest sampling.
+- Active hyperlinks and blink were not captured.
+- Raster figures are raster-thread CPU time; GPU cost was not measured.
+
+```sh
+# Payloads: the sgr ablations, 16 MiB each; real_dir holds captures (gitlog,
+# ls, clang) that are repeated to the same size.
+python3 script/term_compare/gen_sgr_ablate.py 16 /tmp/abl /tmp/real
+# A real program through a 100x37 PTY; reply-triggering queries are stripped.
+python3 script/term_compare/rec_pty.py /tmp/vim 'x60*\x06,:qa!\r' -- vim -u NONE -N -i NONE \
+  -c 'syntax on' -c 'set tgc nu' -c 'colo unokai' lib/src/ui/painter.dart
+# One paced process per payload per round, per-frame render stats in prof_*.jsonl.
+(cd example && flutter build macos --release -t lib/e2e_bench.dart)
+T=$PWD/script/term_compare; O=/tmp/abl-run; mkdir -p $O
+APP=example/build/macos/Build/Products/Release/example.app/Contents/MacOS/example
+for r in 1 2 3; do for p in ascii sgr fix8; do
+  env XB_W=800 XB_H=600 XB_PACED=1 XB_STATS=1 XB_PROF=$O/prof_${p}_$r.jsonl \
+    XB_ARGS="$T/drive.py|$p#$r|$O/results.jsonl|/tmp/abl/$p" $APP
+done; done
+# Pixel oracle: SCREENS holds raw terminal bytes, one file per screen.
+python3 script/term_compare/shot_diff.py shot STOCK.app SCREENS /tmp/shot/stock
+python3 script/term_compare/shot_diff.py shot CAND.app SCREENS /tmp/shot/atlas XC_ATLAS=1 XC_LUM=1 XC_LUMMODE=2
+python3 script/term_compare/shot_diff.py diff /tmp/shot/stock /tmp/shot/atlas
+```
+
+The candidate builds need the patch applied to a copy of the package (`patch
+-p1 < script/term_compare/paint_spike/candidates.patch` in the copy's root) and
+the example built against that copy; the switches are read from the
+environment at startup. What does not reproduce from the repo as it stands: the
+candidate tables' layout and key counts came from a scratch `e2e_bench.dart`
+that appends the patch's `XC` counters to each stats row, and from scripts that
+join the stats to per-frame medians. Both are kept as they were, scratch paths
+and all, under `script/term_compare/paint_spike/tools/`; the screens and the
+real captures are in `screens/` and `captures/` beside them.
 
 ## Adding a workload
 
