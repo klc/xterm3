@@ -1894,7 +1894,8 @@ investigated.
 ### Status and limits
 
 Nothing from this spike is in the package. The decision — adopt an atlas, and
-whether opt-in, or stop paint work here — is open.
+whether opt-in, or stop paint work here — is open. *(Later: adopted as an opt-in, see* Glyph atlas,
+opt-in.*)*
 
 - Two rounds for the candidate table.
 - The atlas was tuned while looking at `sgr` and `fix8` (page capacity,
@@ -2347,6 +2348,120 @@ whose 10000-line scrollback recycles, is byte-identical on 77 files under
 eleven splits. A review of every reader of an evicted line found none that
 reads one after the eviction hook: selection and prompt anchors check that
 their line is attached.
+
+## Glyph atlas, opt-in — 2026-11-21
+
+The atlas of *Frame build on colour-dense screens* is now in the package,
+off by default: `TerminalStyle(useGlyphAtlas: true)`. `GlyphAtlas`
+(`lib/src/ui/glyph_atlas.dart`) keeps the spike's rule - a sprite per glyph,
+style and 3-bit luminance band, drawn in that band's grey and tinted with
+`BlendMode.modulate` - and the painter sends a cell to it when it can.
+
+What changed from the spike:
+
+- **Coverage.** Single-cell ASCII, Latin-1, Latin Extended-A and -B, Greek and
+  Cyrillic as before, and now wide characters too: the CJK, kana, Hangul and
+  fullwidth units a text run takes, from a second atlas with two-cell sprites,
+  leaving out the few with an emoji form. Still on the paragraph path:
+  combining characters, emoji, symbols, procedural box drawing, an underline
+  coloured apart from the text, curly, dotted and dashed underlines (up to 32
+  levels off when tinted), framed and encircled cells, glyphs that do not fit
+  their cell, and everything while ligatures are on.
+- **Pages.** Each line with new glyphs adds a page; past 16 pages they are
+  merged by copying every sprite into a dense grid, sprite `n` to cell `n`. The
+  spike stacked the pages, one sprite row per line, and its merged image passed
+  8192 pixels long before the 8192-sprite cap. The capacity - 8192 sprites, or
+  fewer when that many tall sprites do not fit a page - is now enforced as
+  sprites are added: a line that reaches it draws the rest of its new glyphs
+  the normal way, and the next line starts over. A cell too large for a page
+  gets no sprites at all.
+- **Draw order.** Sprites are stamped in one `drawRawAtlas` call per page at
+  the end of a line, so a glyph drawn the normal way (box drawing, an emoji)
+  would have gone under its left neighbour's overhanging ink. Queued sprites
+  are now flushed before every normal-path cell that is not a space. A space's
+  underline is not flushed for: `sgr` keeps SGR 4 to the end of a line, and a
+  flush at every underlined space took its median frame build from 5 to 6.4 ms.
+  The flush that stays costs `sgr` about 1 ms of build against the spike-era
+  build without it (3.8-5.5 → 4.9-5.3 ms per round), within its throughput
+  noise.
+
+Every number below: the example app, release, real PTY, 100x37, M1 Pro, macOS,
+Impeller, same build with and without `XB_ATLAS=1`.
+
+**Pixels** (`shot_diff.py`, eight screens at DPR 1 and 2, most also under a
+selection): plain, vim, wide characters and a CJK screen (`zcjk`) identical;
+`sgr` at most 2 levels a channel at DPR 1 and 5 at DPR 2, no pixel off by more
+than 16; decorations 2-6; `lumedge`, saturated colours at the edges of
+luminance bands, up to 28, with 47-356 pixels off by more than 16. The new
+`screens/order` puts italic letters against block and box-drawing glyphs,
+emoji and arrows in other colours, underlined spaces between coloured letters,
+Latin against CJK, and framed cells: at most 1 level at DPR 1 and 3 at DPR 2.
+A build without the flush differs from stock there in 24-36 pixels, up to 22
+levels, so the screen sees the order; the cases left unflushed stay within
+the 3 levels.
+
+**Frames** (`flutter_pty2` 1.0.0, `XB_PACED=1`, three interleaved rounds;
+build and raster are median ms over the frames in the DSR window):
+
+| payload | build | raster | MiB/s |
+|---|---|---|---|
+| `sgr` | 48.1 → 5.1 | 3.3 → 0.6 | 12.1 → 32.7 |
+| truecolor | 41.0 → 0.6 | 2.9 → 0.4 | 17.7 → 60.4 |
+| ascii | 2.0 → 0.8 | 2.7 → 0.5 | 54.0 → 52.5 |
+| vimcat_unokai | 1.3 → 0.9 | 1.4 → 0.3 | 50.3 → 55.6 |
+| htop | 1.5 → 0.6 | 2.2 → 0.3 | 36.3 → 36.6 |
+| gitlog | 1.3 → 0.8 | 1.4 → 0.3 | 38.9 → 38.6 |
+| rg_true | 2.0 → 0.9 | 2.8 → 0.3 | 45.4 → 49.5 |
+| cjk-zipf | 16.1 → 14.8 | 5.5 → 0.4 | 23.4 → 23.8 |
+
+The last three rows are from the run before the space change, which touches
+none of them; a run after the capacity change gave `sgr` 5.3 ms and 32.9
+MiB/s, truecolor 0.6 and 58.8, ascii 0.7 and 56.1. On CJK the build barely moves: a 64 MiB stream of Zipf-distributed
+Han keeps bringing glyphs not seen yet, and each is a layout either way; the
+raster falls 14 times.
+
+**End to end** (`flutter_pty2` 3.x, frames drawn during the payload; stock,
+atlas, the same build without a view, and Ghostty 1.4.0 interleaved, five
+rounds, MiB/s; the last column is what drawing still costs with the atlas,
+ns/B):
+
+| payload | Ghostty | stock | atlas | no view | gap stock | gap atlas | atlas − no view |
+|---|---|---|---|---|---|---|---|
+| truecolor | 104.0 | 19.6 | 83.7 | 103.2 | 5.29x | 1.24x | +2.1 |
+| `sgr` | 91.7 | 18.2 | 41.9 | 83.5 | 5.04x | 2.19x | +11.3 |
+| ascii | 139.0 | 76.6 | 90.5 | 109.6 | 1.81x | 1.54x | +1.8 |
+| cursor | 92.2 | 69.7 | 81.4 | 87.7 | 1.32x | 1.13x | +0.8 |
+| unicode | 105.1 | 41.2 | 42.0 | 48.0 | 2.55x | 2.50x | +2.8 |
+| cjk-zipf | 158.8 | 28.3 | 29.1 | 78.4 | 5.61x | 5.46x | +20.7 |
+
+Without a view, truecolor runs at Ghostty's speed: what is left of its gap is
+drawing. `sgr` still pays 11 ns/B, from the sprites it keeps adding - random
+styles on random colours make about 6000 - which are layouts like any other.
+CJK pays 21 ns/B and the atlas does not help it: the cost there is laying out
+glyphs not seen before, which the atlas does too.
+
+**Accepted on.** Tests 1153. The atlas tests compare it with the paragraph
+path pixel for pixel at DPR 1 and 2 (within 8 levels: the test rasteriser's
+tint rounds differently from a direct draw), after a hundred sprites have gone
+through six merges (a build that leaves sprites where they were fails it), keep
+every page within 8192 pixels while one line adds 200 sprites to an atlas that
+holds 128 (stacking, or adding past the capacity, fails it), start over on the
+next line, take no sprite for a cell wider than a page, and check that a box-drawing cell between
+two letters is drawn between their two atlas calls (no flush fails it).
+
+**Limits.**
+
+- Off by default. The cost is exactness: a few levels on arbitrary 24-bit
+  colour, up to 28 at band edges.
+- macOS and Impeller only. Text gamma, the luminance rule and `toImageSync`
+  are unverified on Android, iOS, Windows, Linux and the web.
+- Sprites are sampled nearest at the device pixel ratio: under a scaling
+  transform text looks blockier than on the paragraph path.
+- Narrow against wide sprites, sprites on different pages, and a space's
+  underline are not kept in left-to-right order; only ink overhanging onto a
+  differently coloured neighbour can show it.
+- At most 8192 sprites an atlas, about 50 MB of texture at DPR 2 when full;
+  past that it starts over. Real output uses a few hundred.
 
 ## Adding a workload
 
