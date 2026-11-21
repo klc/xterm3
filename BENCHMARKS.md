@@ -2438,7 +2438,8 @@ Without a view, truecolor runs at Ghostty's speed: what is left of its gap is
 drawing. `sgr` still pays 11 ns/B, from the sprites it keeps adding - random
 styles on random colours make about 6000 - which are layouts like any other.
 CJK pays 21 ns/B and the atlas does not help it: the cost there is laying out
-glyphs not seen before, which the atlas does too.
+glyphs not seen before, which the atlas does too. *(Later: laying new CJK glyphs out together took this to about 5 ns/B; see* CJK glyphs
+laid out together.*)*
 
 **Accepted on.** Tests 1153. The atlas tests compare it with the paragraph
 path pixel for pixel at DPR 1 and 2 (within 8 levels: the test rasteriser's
@@ -2462,6 +2463,112 @@ two letters is drawn between their two atlas calls (no flush fails it).
   differently coloured neighbour can show it.
 - At most 8192 sprites an atlas, about 50 MB of texture at DPR 2 when full;
   past that it starts over. Real output uses a few hundred.
+
+## CJK glyphs laid out together — 2026-11-21
+
+*Glyph atlas, opt-in* left `cjk-zipf` 5x behind Ghostty with the atlas on.
+Where that goes, in the example app (macOS, M1 Pro, Impeller):
+
+- **First sight, not steady state.** A glyph is laid out once, when it is
+  first drawn. Ten passes of `cjk-zipf` in one process, `flutter_pty2` 3.x:
+  the atlas went from 30 to 67.5 MiB/s and its frame build from 18 to 0.7 ms
+  as the glyphs on screen stopped being new; without a view, 78 MiB/s
+  throughout. (Stock levels off at 40 MiB/s and 7 ms a frame; a 16384-entry
+  paragraph cache gave 43-45, so its plateau is not the cache size.) The
+  payloads are worst cases: `cjk-zipf` holds 5179 distinct glyphs, and
+  `cjk-real`, despite its name, is uniform over all 20992 of the unified Han
+  block, so that nearly every glyph a frame draws is new.
+- **A CJK glyph costs 80 us to lay out**, against 25-29 for a Latin letter
+  (a scratch release app timing `ParagraphBuilder` + `layout`), and the same
+  again the second time: nothing is cached per glyph. About 20 us of it is
+  the 28-family fallback list, the rest finding the system font and shaping.
+- **Many to a paragraph is cheaper**, 12-15 us a glyph sixteen or more on
+  one line, **but not always exact**: a paragraph tries the fonts it has
+  already resolved first. A full stop after kana takes the kana's font where
+  alone it takes PingFang (13.0 against 13.27 px wide), and Han after Hangul
+  takes the Hangul font's Hanja. Han only (U+4E00-9FFF and U+3400-4DBF, 27584
+  glyphs) and Hangul syllables only (11172) came out of such paragraphs with
+  the advance, baseline and line height each has alone; kana and CJK
+  punctuation did not, nor did a blank line or a space between glyphs stop
+  the carry-over.
+
+So the atlas lays a line's new Han, and separately its new Hangul, out
+together: when one misses, the rest of the line and the lines painted after
+it (`paintLineForegrounds(followingLines:)`) are searched for new glyphs of
+the same kind, shaping styles and luminance band, up to 64. They go on one
+line with a letter spacing of four wide cells, so that no neighbour reaches
+into a sprite, and each sprite is cut out of that paragraph, shifted back by
+its glyph's offset. The line starts with a common glyph of the kind (一 or
+가), so that the font tried first is the one such glyphs get alone rather
+than one a rare leading glyph found; with or without it, 202 lines led by
+rare Han (U+9FA6-9FFF, the ends of extension A) and rare Hangul matched their
+glyphs alone pixel for pixel. Decorated glyphs (underline, strikethrough,
+overline, an active hyperlink) are laid out alone, because a decoration runs
+on through the spacing. A line whose glyphs do not all have the anchor's
+tight box - a font of other metrics would move every glyph's baseline - is
+not used and its glyphs are laid out alone until the atlas starts over; none
+was seen. Nor is a line laid out together when the atlas has no room left
+for it.
+
+Two layouts were tried first and dropped. One glyph per paragraph line, a
+blank line between, cost 23-27 us a glyph whatever the batch size - a line
+costs about 8-10 us - and needed whole-pixel shifts that a fractional device
+pixel ratio still rasterised apart. Placeholders between glyphs on one line
+cost 61-70 us a glyph.
+
+**Pixels.** In the scratch app, the shipped construction - 一 or 가, then up
+to 64 glyphs on one line spaced 62.6 px apart - over every glyph of the two
+kinds in shuffled order (27584 Han, 11172 Hangul): advance, tight box,
+baseline and height as each has alone, and 12644 of them, bold and italic
+among them, identical pixel for pixel at device pixel ratios 2 and 3, at
+every position in the line. Earlier, shorter lines matched at 1, 1.25 and 1.5
+and font sizes 11-17.3. In the
+example app, `shot_diff.py` against the atlas without batching: `zcjk`,
+`wide`, `sgr`, plain, vim, `order` and two decorated screens identical; the
+new `screens/cjkmix` - Han, extension A, Hangul, kana and punctuation in eight
+styles and 255 colours - identical at DPR 1 and 32-39 pixels off by 1 level
+at DPR 2 - not explained by the layout, which matched in the scratch app.
+Against stock, the atlas's usual few levels.
+
+**Frames** (`flutter_pty2` 1.0.0, paced, two rounds; median build ms; the build
+before the anchor and the review fixes): `cjk-real` 37.8 → 10.6, `cjk-zipf`
+14.6 → 4.1; stock 37.9 and 15.7.
+
+**End to end** (`flutter_pty2` 3.x, frames drawn; the atlas without batching,
+with this, the same build without a view, stock and Ghostty 1.4.0, five
+interleaved rounds, MiB/s). Each process runs `cjk-zipf` first and `cjk-real`
+second, so both rows are mostly first sight of their glyphs; that is why
+"before" reads 4.90x here and 5.17-5.61x in *Glyph atlas, opt-in*, where
+`cjk-zipf` ran later:
+
+| payload | Ghostty | stock | atlas before | atlas | no view | gap before | gap after |
+|---|---|---|---|---|---|---|---|
+| cjk-zipf | 145.2 | 29.7 | 29.6 | 51.3 | 71.3 | 4.90x | 2.83x |
+| cjk-real | 169.1 | 17.1 | 16.8 | 50.1 | 70.0 | 10.09x | 3.38x |
+| unicode | 102.7 | 42.3 | 42.6 | 42.6 | 48.8 | 2.41x | 2.41x |
+| truecolor | 114.8 | 19.9 | 92.4 | 91.7 | 115.1 | 1.24x | 1.25x |
+| ascii | 162.9 | 77.9 | 93.9 | 92.9 | 109.1 | 1.73x | 1.75x |
+
+With the atlas, drawing now costs `cjk-zipf` 5.2 ns/B and `cjk-real` 5.4 over
+no view, from 19-45. The one-glyph-a-line layout reached 36.4 and 24.3 MiB/s
+in the same run; searching only the rest of the line (an earlier run), 34.2
+and 24.2. Stock is unchanged: the
+paragraph path still lays out one glyph a paragraph.
+
+**Accepted on.** Tests 1155: sprites cut from a shared paragraph against the
+same glyphs alone, in the test font's distinct p and É (a build that ignores
+the shift fails it); Han and Hangul painted with the atlas against stock, with
+the count of sprites cut from shared paragraphs, across a following line, and
+underlined glyphs left alone (a build that batches them fails it); room and
+the solo marks cleared when the atlas starts over. A review found the full
+atlas and the rejected line repeating their work for the rest of a line;
+both fixed.
+
+**Limits.** macOS only; which glyphs may share a paragraph depends on the
+system's fallback fonts, and the two kinds were checked on this machine's.
+Kana, CJK punctuation, fullwidth forms and decorated glyphs are laid out
+alone. Scratch tools: `olcumler/faz2c/` in the plan folder keeps the timing
+app's last source and its outputs.
 
 ## Adding a workload
 
