@@ -2635,6 +2635,136 @@ so that link and plain glyphs of two kinds could share a line and swap
 underlines; the id is now group times four plus kind, and the hovered-link
 test fails the old one.
 
+## The write path, token by token — 2026-11-21
+
+The atlas work left the app's gap to Ghostty where it was without a view:
+parsing and the buffer. A budget at the atlas commit, headless,
+`write_budget_probe`, ns per byte:
+
+| payload | decode | parser | full | grapheme mode off | full, bytes in |
+|---|---|---|---|---|---|
+| ascii | 0.77 | 1.39 | 7.68 | 7.00 | 7.37 |
+| sgr | 0.76 | 5.72 | 10.01 | 9.59 | 9.93 |
+| cursor | 0.90 | 5.58 | 9.62 | 9.59 | 9.93 |
+| unicode | 3.77 | 4.72 | 14.9 | 13.9 | 17.7 |
+| cjk-real | 2.23 | 3.53 | 10.4 | 10.1 | 12.1 |
+| emoji | 3.07 | 6.76 | 52.8 | 27.6 | 55.1 |
+
+The `parser` column of the wide payloads had been wrong since *Wide
+characters in text runs*: `NoopEscapeHandler` did not take mixed-width runs,
+so the parser sent every wide character down the per-character path. The
+generator now adds `MixedWidthTextHandler`; the unicode parser column went
+from 6.2 to 4.7 ns/B, CJK from 5.0 to 3.5.
+
+A toy core - bytes in, local variables, no width, wrap, grapheme clustering or
+scrollback - runs `ascii` at 2.3, `sgr` at 4.1 and `cursor` at 3.6 ns/B. It is
+no ceiling for a real terminal, but it says where the time goes: per-token
+fixed costs and per-byte field updates, not the language. Seven levers were
+built apart, each checked by the tests and both oracles, and measured
+together against the atlas commit; five went in.
+
+**One scan of the head block.** `_process` took every token on its own: its
+five state flags, an interface type test, three or four `ByteConsumer` calls
+that each stepped past a consumed block, and for a CSI a `consume()` for the
+ESC before its one-pass scan. `_scanHeadBlock` now takes the tokens most
+output is made of - single-cell runs, C0 controls, the common CSI and
+characters one at a time - one after another from the head block through a
+local index, committing each to the queue right before it is dispatched,
+since `tokenBegin` and `capturedToken` may be read then. Anything else - an
+ESC that ends the block or starts something other than the common CSI, C1,
+text without a text handler - goes back to `_process` as before. A handler
+that writes to the parser again moves the head block on; the scan sees that
+and returns.
+
+**Per run and per line.** The text handler is resolved in the constructor.
+`writeText` asks the clipboard capture whether it is active before calling
+it. `writeAscii` reads the cursor style and the right limit once. The
+circular buffer finds a slot by a conditional subtract instead of `%`.
+Margins are no longer `late`; CR, wrap and index take shortcuts when no
+margin or mode is in the way; `clamp` became comparisons. A line's anchor
+list is made the first time an anchor is.
+
+**The narrow prefix of a mixed run.** A run of narrow text that a wide
+character carries on - `abc中文` - was written as two runs and a per-character
+token in between. It now goes in one mixed-width run. Below U+3000 nothing
+carries a run on, so ASCII, SGR-dense and cursor-addressed output pay one
+comparison a run for it.
+
+**Combining characters on the emoji path.** Most of what was left of emoji
+was not the grapheme decision but the combining-character map: a
+`removeWhere` scan per run write, a map remove per `setCell`, a list per
+ZWJ join. Writers now skip the map when the cells they write lie above every
+key in it, which holds because a line's keys never outlive its used length;
+recycling a line's storage now clears its maps so that it holds there too.
+
+Left out:
+- Direct calls for LF, CR, BS and HT instead of the handler table. On their
+  own they made emoji 2.3 ns/B slower; moved into the scan, they cost sgr,
+  truecolor and emoji 0.3-0.9 ns/B and gave ascii, unicode and cjk-real
+  0.07-0.15, within noise. The cause in the generated code was not found.
+- A decoder that copies ASCII stretches of mixed chunks faster. No payload
+  moved.
+- A two-word cell: 8 bytes instead of 16, colours not stored, so a ceiling.
+  It is still the largest lever in the core - ascii −1.7, cjk-real −1.2,
+  unicode −0.9, sgr −0.6 ns/B with bytes in - and needs a style table and a
+  major version.
+
+Headless, `write_budget_probe`, the atlas commit against this change, five
+interleaved passes, ns per byte (all ranges disjoint unless marked):
+
+| payload | before, bytes in | after | Δ | before, full | Δ | parser Δ |
+|---|---|---|---|---|---|---|
+| ascii | 7.28 | 6.64 | −0.64 | 7.55 | −0.63 | −0.23 |
+| ascii-utf8 | 8.53 | 7.75 | −0.78 | 7.67 | −0.64 | −0.23 |
+| sgr | 9.97 | 7.79 | −2.18 | 9.80 | −2.16 | −1.54 |
+| truecolor | 7.79 | 6.09 | −1.70 | 7.46 | −1.70 | −1.39 |
+| cursor | 9.97 | 7.27 | −2.70 | 9.70 | −2.65 | −1.89 |
+| unicode | 17.81 | 16.14 | −1.67 | 15.01 | −1.59 | −0.45 |
+| cjk-real | 12.08 | 10.98 | −1.10 | 10.63 | −0.97 | −0.19 |
+| emoji | 55.23 | 44.21 | −11.02 | 52.54 | −11.01 | −0.70 |
+| combining | 70.59 | 59.29 | −11.30 | 66.82 | −11.31 | −1.95 |
+| box | 6.56 | 6.15 | −0.41 | 4.49 | −0.48 | −0.23 |
+| latin-ext | 8.21 | 7.39 | −0.82 | 5.72 | −0.64 | −0.35 |
+| cyrillic | 8.22 | 7.59 | −0.63 (ranges touch) | 5.97 | −0.84 | −0.34 |
+
+In the app (`flutter_pty2` 3.x, atlas on, view on, real PTY, 100x37), the
+atlas commit's build, this change's build and Ghostty interleaved, five rounds,
+medians, MiB/s; "without view" is this change with `XB_NOVIEW`:
+
+| payload | before | after | without view | Ghostty | gap before | gap after |
+|---|---|---|---|---|---|---|
+| sgr | 54.6 | 63.0 | 92.3 | 86.8 | 1.59x | 1.38x |
+| truecolor | 102.3 | 121.5 | 139.8 | 107.5 | 1.05x | 0.88x |
+| ascii | 92.3 | 101.8 | 118.6 | 138.7 | 1.50x | 1.36x |
+| cursor | 82.7 | 107.7 | 121.4 | 97.8 | 1.18x | 0.91x |
+| unicode | 40.8 | 44.3 | 52.6 | 105.6 | 2.59x | 2.38x |
+| cjk-zipf | 59.3 | 64.7 | 87.1 | 145.8 | 2.46x | 2.25x |
+
+`truecolor` and `cursor` are level with Ghostty or ahead of it in this run -
+by medians; `cursor`'s rounds overlap Ghostty's, and Ghostty moves 15-25%
+from run to run. Before and after are apart in every round. Without a view
+`sgr` is level with Ghostty too: what it still lacks is drawing.
+
+**Accepted on.** Tests 1162. Among the new ones, a token-per-character check
+through `TerminalDebugger`, a DECSLRM wrap from beyond the right margin,
+inserts into a full circular buffer and a recycled line that held a combining
+character each fail on the final tree with their fix taken out; a test of
+narrow text taken into a mixed run was checked the same way on its own patch.
+`terminal_state_dump.dart` (59 files, eleven splits) and `grapheme_grid_dump`
+(356 files; default, grapheme mode off, 13 columns) are identical to the atlas
+commit, and so is the state oracle over 200 generated files that mix text,
+wide characters and C0 controls with scroll regions, left and right margins,
+origin mode, autowrap off, reverse wrap, insert mode, the alternate screen,
+tab stops, REP, hyperlinks and grapheme mode toggled (2200 digests). The
+review also fed 180 files under 10-12 splits with handlers
+writing back into the terminal - `write` asserts against that, release builds
+allow it - and found the state identical. It found the recycled-line case
+above and one difference it left in: after `write` has thrown - the only
+trigger found, before and after, is a lone surrogate passed to
+`write(String)` - a
+narrow prefix and the mixed run it carried on are lost together, where before
+the mixed run was replayed by the next write.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
