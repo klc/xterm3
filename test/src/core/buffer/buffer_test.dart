@@ -2,6 +2,59 @@ import 'package:test/test.dart';
 import 'package:xterm3/xterm.dart';
 
 void main() {
+  group('Buffer line storage recycling', () {
+    // Lines of different lengths, colours and wide characters, written past
+    // the scrollback so lines are evicted and their storage reused.
+    String output(int lines) => [
+          for (var i = 0; i < lines; i++)
+            '\x1b[3${i % 8}m${'x' * (i * 7 % 150)}中${i % 3 == 0 ? '😀' : ''}'
+                '\x1b[0m'
+        ].join('\r\n');
+
+    test('a large scrollback reuses evicted storage and reads the same', () {
+      // 8000 lines at 100 columns is past the recycling threshold. The
+      // reference keeps all 20000 lines, so it never evicts or reuses
+      // anything; the last 8000 must read the same in both.
+      expect(8000 * 100, greaterThanOrEqualTo(Buffer.recycleThresholdCells));
+      final recycling = Terminal(maxLines: 8000)..resize(100, 10);
+      final reference = Terminal(maxLines: 30000)..resize(100, 10);
+      final text = output(20000);
+      recycling.write(text);
+      reference.write(text);
+      final kept = recycling.buffer.lines.length;
+      final offset = reference.buffer.lines.length - kept;
+      for (var y = 0; y < kept; y++) {
+        final a = recycling.buffer.lines[y],
+            b = reference.buffer.lines[y + offset];
+        expect(a.getText(), b.getText(), reason: 'line $y');
+        for (var x = 0; x < 100; x++) {
+          expect(a.getForeground(x), b.getForeground(x), reason: 'line $y, $x');
+          expect(a.getWidth(x), b.getWidth(x), reason: 'line $y, $x');
+        }
+      }
+    });
+
+    test('an evicted line reads as empty once its storage is reused', () {
+      final terminal = Terminal(maxLines: 8000)..resize(100, 10);
+      terminal.write(output(10));
+      final first = terminal.buffer.lines[0];
+      expect(first.getText(), isNotEmpty);
+      terminal.write('\r\n' * 9000);
+      expect(first.attached, isFalse);
+      expect(first.getText(), isEmpty);
+    });
+
+    test('a small scrollback leaves evicted lines alone', () {
+      final terminal = Terminal(maxLines: 100)..resize(100, 10);
+      terminal.write(output(10));
+      final first = terminal.buffer.lines[0];
+      final text = first.getText();
+      terminal.write('\r\n' * 500);
+      expect(first.attached, isFalse);
+      expect(first.getText(), text);
+    });
+  });
+
   group('Buffer.writeChar()', () {
     test('returns the resolved display width', () {
       final terminal = Terminal();

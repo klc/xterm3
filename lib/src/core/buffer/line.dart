@@ -66,6 +66,36 @@ class BufferLine with IndexedItem {
     _data = grown;
   }
 
+  /// Hands this line's cell storage over, cleared, and leaves the line with
+  /// none: it reads as empty afterwards. Returns null if it had no storage.
+  ///
+  /// For a line that has fallen off a large scrollback, so that the next new
+  /// line can use the storage instead of allocating - see
+  /// `Buffer.recycleThresholdCells`. Only the cells below [_used] can hold
+  /// anything, so only they are cleared, cell by cell: `fillRange` costs over
+  /// three times as much.
+  @internal
+  Uint32List? takeStorage() {
+    final data = _data;
+    if (data.isEmpty) return null;
+    final words = _used * _cellSize;
+    for (var i = 0; i < words; i++) {
+      data[i] = 0;
+    }
+    _data = _noCells;
+    _used = 0;
+    return data;
+  }
+
+  /// Gives this line, which has no storage yet, the cleared [storage] another
+  /// line handed over with [takeStorage]. Whatever its size: the line grows
+  /// it, as it would grow its own, if it needs more.
+  @internal
+  void adoptStorage(Uint32List storage) {
+    assert(_data.isEmpty && _used == 0);
+    _data = storage;
+  }
+
   /// A cell field, or 0 for a cell this line has never had storage for.
   int _field(int index, int field) {
     final offset = index * _cellSize + field;

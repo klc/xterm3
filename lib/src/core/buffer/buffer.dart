@@ -1,4 +1,5 @@
 import 'dart:math' show max, min;
+import 'dart:typed_data';
 
 import 'package:characters/characters.dart';
 import 'package:xterm3/src/core/buffer/cell_offset.dart';
@@ -79,8 +80,54 @@ class Buffer {
   /// greater than [viewHeight].
   late final lines = IndexAwareCircularBuffer<BufferLine>(
     max(maxLines, terminal.viewHeight),
-    onEvict: onLineEvicted,
+    onEvict: _onLineEvicted,
   );
+
+  /// Cell storage taken from the last line that fell off a large scrollback,
+  /// cleared, for the next new line to use instead of allocating.
+  ///
+  /// A field rather than a list of spares, deliberately: what comes out of a
+  /// field assigned only from [BufferLine]'s own storage is known to the
+  /// compiler to be the same concrete typed-data class. Taken out of a
+  /// `List<Uint32List>`, a store could be any [Uint32List] - a view, say -
+  /// and every cell read and write in the package paid a type check for it:
+  /// 7-9% on output that never recycled a line.
+  Uint32List? _spareStorage;
+
+  /// Scrollbacks at least this many cells large (lines times columns) recycle
+  /// the storage of the lines they evict.
+  ///
+  /// A line that falls off a large scrollback has lived long enough for its
+  /// storage to have left the young generation, and so does each new line's,
+  /// at a cost the example app pays at about twice the command-line rate:
+  /// reusing the evicted storage, cleared, saves that. A line that falls off
+  /// a small scrollback - or the alternate screen, or a terminal with none -
+  /// dies young, where allocating is close to free and clearing is the
+  /// dearer of the two. Measured in the example app at 100 columns, recycling
+  /// lost 12-20% up to 3000 lines, broke even at 5000 and won 10-19% from
+  /// 7000; the threshold is that point, as cells, on the assumption that the
+  /// crossover follows the bytes the scrollback keeps.
+  ///
+  /// The cost is memory. A recycled store goes to the next line whatever its
+  /// size, and a line grows a store that is too small for it to the full
+  /// width, so once the scrollback has filled, every line's storage tends to
+  /// the full width - the size every line had before lines were sized to
+  /// their text. 10000 lines at 100 columns hold 19.5 MiB of cells either way,
+  /// against 10.8-14.3 MiB for the same output without recycling. Handing a
+  /// store only to a line that would have allocated one of exactly its size
+  /// kept memory where it was and gave up most of the speed: ascii 6% faster
+  /// instead of 19%, and nothing on output written in several runs a line,
+  /// whose first store is too small and is grown.
+  static const recycleThresholdCells = 700000;
+
+  void _onLineEvicted(BufferLine line) {
+    // The terminal reads the evicted line's hyperlinks first.
+    onLineEvicted?.call(line);
+    if (_spareStorage == null &&
+        lines.maxLength * viewWidth >= recycleThresholdCells) {
+      _spareStorage = line.takeStorage();
+    }
+  }
 
   /// Total number of lines in the buffer. Always equal or greater than
   /// [viewHeight].
@@ -1967,6 +2014,10 @@ class Buffer {
   /// is not specified.
   BufferLine _newEmptyLine([int? width]) {
     final line = BufferLine(width ?? viewWidth);
+    if (_spareStorage case final storage?) {
+      _spareStorage = null;
+      line.adoptStorage(storage);
+    }
     return line;
   }
 
