@@ -22,8 +22,13 @@ void main() {
   final stripped = _stripComments(source);
 
   final out = StringBuffer(_header(_imports(stripped)));
+  // MixedWidthTextHandler lives in its own file and has one member. Without
+  // it the parser sends every wide character down the per-character path,
+  // so the `parser` column of unicode, CJK and emoji payloads would measure
+  // a path the real `Terminal` does not take.
   out.writeln(
-    'class NoopEscapeHandler implements ${_interfaces.join(', ')} {',
+    'class NoopEscapeHandler implements ${_interfaces.join(', ')}, '
+    'MixedWidthTextHandler {',
   );
 
   var count = 0;
@@ -38,6 +43,11 @@ void main() {
       count++;
     }
   }
+
+  out.writeln();
+  out.writeln('  @override');
+  out.writeln('  void writeMixedWidthText(String text, int start, int end) {}');
+  count++;
 
   out.writeln('}');
 
@@ -78,6 +88,7 @@ String _header(String imports) => '''
 // patch by hand.
 
 import 'package:xterm3/src/core/escape/handler.dart';
+import 'package:xterm3/src/core/escape/mixed_width_text_handler.dart';
 $imports
 ''';
 

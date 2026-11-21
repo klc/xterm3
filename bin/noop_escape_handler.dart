@@ -22,9 +22,11 @@
 // patch by hand.
 
 import 'package:xterm3/src/core/escape/handler.dart';
+import 'package:xterm3/src/core/escape/mixed_width_text_handler.dart';
 import 'package:xterm3/src/core/mouse/mode.dart';
 
-class NoopEscapeHandler implements EscapeHandler, EscapeTextHandler {
+class NoopEscapeHandler
+    implements EscapeHandler, EscapeTextHandler, MixedWidthTextHandler {
   @override
   void writeChar(int char) {}
 
@@ -752,4 +754,7 @@ class NoopEscapeHandler implements EscapeHandler, EscapeTextHandler {
 
   @override
   void writeText(String text, int start, int end) {}
+
+  @override
+  void writeMixedWidthText(String text, int start, int end) {}
 }
