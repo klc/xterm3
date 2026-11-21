@@ -59,7 +59,6 @@ build/
 coverage/
 example2/
 test/src/failures/
-/graphify-out
 
 # --- tracked in git, but not worth publishing ---
 
