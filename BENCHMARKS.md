@@ -2570,6 +2570,71 @@ Kana, CJK punctuation, fullwidth forms and decorated glyphs are laid out
 alone. Scratch tools: `olcumler/faz2c/` in the plan folder keeps the timing
 app's last source and its outputs.
 
+## SGR-dense output: ASCII and decorations laid out together — 2026-11-21
+
+With the atlas, `sgr` was the widest gap left (2.2-2.3x, drawing 11 ns/B over
+no view). It is first sight again: random colour on random bold, italic and
+underline gives about 6000 keys (94 glyphs, 8 luminance bands, 8 style
+combinations), and eight passes in one process take the atlas from 38.5 to
+73-76 MiB/s, its first-pass frame build from 7.5 to 0.7 ms; without a view,
+76 then 87-89.
+
+Three steps, each measured end to end:
+
+1. **ASCII laid out together.** Printable ASCII is all in the terminal's own
+   font, so it shares a paragraph like Han: a letter costs 16-34 us alone and
+   1-2 us on a letter-spaced line, rasterising identically (scratch app, every
+   glyph, DPR 1, 1.5, 2). Half of the keys are decorated, though, and were
+   still laid out alone. `sgr` 37.6 → 41.2 MiB/s.
+2. **Decorations from a reference glyph.** A decoration spans the advance,
+   whatever the glyph, and every ASCII glyph has the same advance. So a
+   decorated group is laid out without its decorations, and each sprite is
+   drawn with the decorations of one glyph laid out alone in transparent ink.
+   Every printable ASCII glyph, and Han and Hangul of the reference's
+   advance, came out identical in pixels to the glyph laid out decorated, in
+   single, double, through and over lines, bold and italic, at DPR 1, 1.5, 2
+   and 3; a CJK glyph of another advance (51 of 400 Han sampled, 35 of 200
+   Hangul) is laid out alone. A style run per glyph with undecorated spaces
+   between was exact too but cost 15 us a glyph. `sgr` → 44.5 MiB/s.
+3. **One scan for every group.** Each group's first miss searched the rest of
+   the screen for its own company, computing every cell's key - about 64
+   searches a frame on `sgr`, against about one on CJK prose. One search now
+   collects every new key of every kind and group, up to 1024, and lays each
+   group out in lines of up to 64; a key it has seen starts no search of its
+   own until the atlas starts over. `sgr` → 53.7 MiB/s, first-pass frame
+   build summed over the pass 216 → 84 ms.
+
+**End to end** (`flutter_pty2` 3.x, frames drawn, five interleaved rounds,
+MiB/s; "before" is the atlas of *CJK glyphs laid out together*; each process
+runs `sgr` first):
+
+| payload | Ghostty | stock | atlas before | atlas | no view | gap before | gap after |
+|---|---|---|---|---|---|---|---|
+| sgr | 89.1 | 17.3 | 38.3 | 53.7 | 79.5 | 2.33x | 1.66x |
+| truecolor | 108.3 | 21.0 | 97.3 | 101.2 | 117.0 | 1.11x | 1.07x |
+| ascii | 131.4 | 78.0 | 92.2 | 93.5 | 108.5 | 1.43x | 1.41x |
+| cursor | 100.2 | 68.8 | 82.5 | 82.8 | 89.2 | 1.21x | 1.21x |
+| cjk-zipf | 153.0 | 27.6 | 55.9 | 57.3 | 79.5 | 2.74x | 2.67x |
+
+Drawing now costs `sgr` 5.8 ns/B over no view, from 11. The first pass
+still builds 84 ms of frames against 16 warm: a search and the glyphs alone
+in their group, about 1-2 ms a frame.
+
+**Pixels.** `shot_diff.py` against the atlas before: every screen identical
+but `sgr` (1-2 pixels off by 1 level) and `cjkmix` at DPR 2 (39-64 pixels
+off by 1). Against stock, the atlas's usual few levels.
+
+**Accepted on.** Tests 1157: ASCII in four styles, underlined among them,
+painted with the atlas against stock, with the count of sprites cut from
+shared paragraphs (a build that takes the wrong box, or keeps the
+decorations in the shared line, fails it; one that drops the reference's
+decorations fails the Han test); a hovered link of Han and ASCII beside
+plain Hangul and ASCII of the same band. A review found the search filing
+groups under an id that a hovered link's style bit carried into the kind,
+so that link and plain glyphs of two kinds could share a line and swap
+underlines; the id is now group times four plus kind, and the hovered-link
+test fails the old one.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
