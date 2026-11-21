@@ -2765,6 +2765,105 @@ trigger found, before and after, is a lone surrogate passed to
 narrow prefix and the mixed run it carried on are lost together, where before
 the mixed run was replayed by the next write.
 
+## Wide text in the buffer — 2026-11-21
+
+After *The write path, token by token* the parser was no longer where wide
+text spent its time. Taking the decode out of `writeBytes` entirely - `full`
+against `full-bytes` - would save unicode 2.7 and cjk-real 1.3 ns/B, so a
+parser reading bytes could at best close a third of what is left; the buffer
+and terminal behind the parser took 9.1 and 6.3. A CPU profile of the example
+app in profile mode, writing 16 MiB through `Terminal.write`, put the rest
+in three places (shares of all samples, the harness's own work included):
+
+| | unicode | cjk-real |
+|---|---|---|
+| `isSingleCellPrintable` + `isWideRunUnit` | 23.6% | 21.7% |
+| `BufferLine.takeStorage` | 6.9% | 10.5% |
+| `Buffer.writeMixedWidth` + `BufferLine.setMixedWidthCells` | 12.8% | 9.6% |
+
+and on emoji, the combining-character work: string concatenation, map
+lookups and `Runes.last` on each code point a cluster takes.
+
+**A table for the run classes.** Both predicates were chains of range
+comparisons - a Han character passed thirteen before `isSingleCellPrintable`
+said no - and a code unit of a wide run was classified three or four times on
+its way in. A 64 KiB `Uint8List` of classes, built on first use from the
+range functions, which stay the definition, now answers both with one load;
+printable ASCII keeps its two comparisons in front of it. The parser's scan,
+`consumeTextRunInHead` and the mixed-width writers read it through a local.
+
+**Clearing recycled storage.** `takeStorage` cleared the used words of an
+evicted line one by one before handing the store to a new line. It now copies
+from a shared zero list, 2048 words at a time. Every payload that fills the
+scrollback gains, ASCII most, since its lines are the most numerous.
+
+**The mixed-width writers** read the cursor style and the right margin once
+per call and check for a surrogate in line. Leaning on the parser having
+classified the run - a unit below U+3000 is narrow, one above it wide - was
+worth another 0.6 ns/B on unicode, but a direct call to `writeMixedWidthText`
+with anything else in the run would have been stored differently than before,
+so they read the table.
+
+**The emoji join path** reuses the line and combining string that the join
+check has just read instead of looking both up again, appends ZWJ and the
+variation selectors as constant strings, and reads a cluster's last code
+point without iterating its runes. An identity map for the combining
+characters gave emoji another 1.1 and combining 2.2 ns/B, but cost sgr,
+cursor and truecolor 0.1-0.3 ns/B in every build that had it, for no reason
+found in the code; it is left out.
+
+Headless, `write_budget_probe`, the previous commit against this change,
+five interleaved passes, ns per byte, all ranges apart unless marked:
+
+| payload | before, bytes in | Δ | before, full | Δ | parser Δ |
+|---|---|---|---|---|---|
+| unicode | 16.17 | −4.83 | 13.39 | −4.91 | −2.31 |
+| cjk-real | 11.00 | −4.63 | 9.58 | −4.92 | −2.41 |
+| emoji | 44.19 | −5.48 | 41.45 | −5.53 | −0.71 |
+| combining | 59.48 | −6.04 | 55.58 | −5.91 | −0.47 |
+| ascii | 6.65 | −1.70 | 6.80 | −1.66 | −0.01 |
+| ascii-utf8 | 7.72 | −1.66 | 6.99 | −1.74 | −0.03 |
+| latin-ext | 7.33 | −0.94 | 4.99 | −1.02 | −0.03 |
+| cyrillic | 7.43 | −0.97 | 5.19 | −1.22 | −0.17 |
+| box | 5.98 | −1.09 | 3.99 | −1.18 | −0.57 |
+| sgr | 7.76 | −0.56 | 7.63 | −0.53 | −0.01 (not apart) |
+| cursor | 7.29 | +0.01 (not apart) | 7.06 | +0.01 (not apart) | −0.01 (not apart) |
+| truecolor | 6.08 | −0.09 (not apart) | 5.79 | −0.08 (not apart) | +0.01 (not apart) |
+
+In the app (`flutter_pty2` 3.x, atlas on, view on, real PTY, 100x37), the
+previous commit's build, this change's build and Ghostty interleaved, five
+rounds, medians, MiB/s; "without view" is this change with `XB_NOVIEW`:
+
+| payload | before | after | without view | Ghostty | gap before | gap after |
+|---|---|---|---|---|---|---|
+| unicode | 44.7 | 58.0 | 73.2 | 112.3 | 2.51x | 1.93x |
+| cjk-zipf | 64.3 | 94.0 | 129.8 | 142.5 | 2.21x | 1.51x |
+| emoji | 19.6 | 22.1 | 23.0 | 82.9 | 4.22x | 3.75x |
+| ascii | 101.1 | 124.0 | 150.8 | 134.1 | 1.33x | 1.08x |
+| sgr | 62.6 | 65.9 | 96.9 | 87.7 | 1.40x | 1.33x |
+| truecolor | 120.7 | 116.5 | 133.7 | 106.5 | 0.88x | 0.91x |
+| cursor | 106.5 | 105.8 | 120.9 | 98.7 | 0.93x | 0.93x |
+
+Before and after are apart in every round for unicode, CJK, emoji and ascii;
+sgr and truecolor overlap. `cursor` came out 0.7% slower with the rounds
+apart, a change the headless run does not show; CSI-dense payloads moved by
+that much with unrelated changes during this work.
+
+**Accepted on.** Tests 1170, among them the table against the range
+functions over every BMP code unit, every run character written through a
+mixed run against `writeChar`, recycled stores up to 3000 columns coming back
+cleared, and the ZWJ, skin-tone and VS16 joins through the new path. The state
+oracle over the 59-file corpus and the 200 generated mode-heavy files, eleven
+splits each, and the grid oracle in three configurations are identical to
+the previous commit. A review with independent verification found the
+direct-call difference above, now gone, and two crashes on lone surrogates
+that the previous commit has as well.
+
+What is left: `recycleThresholdCells` was set while clearing was word by word,
+so recycling now likely pays off below 700 000 cells; the identity map; and
+lone surrogates passed to `write(String)` still throw from grapheme
+segmentation.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
