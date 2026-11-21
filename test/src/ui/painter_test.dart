@@ -327,14 +327,66 @@ void main() {
       expect(atlas.glyphAtlasPartCount, 7);
 
       // An underline would run on through the letter spacing: underlined
-      // glyphs are laid out alone.
+      // glyphs are laid out together without it and take it from a glyph laid
+      // out alone.
       final underlined =
           (Terminal()..write('\x1b[4m江河湖\x1b[0m')).buffer.lines[0];
       expect(
           difference(
               await render(stock, underlined), await render(atlas, underlined)),
           lessThanOrEqualTo(8));
-      expect(atlas.glyphAtlasPartCount, 7);
+      expect(atlas.glyphAtlasPartCount, 10);
+      stock.dispose();
+      atlas.dispose();
+    });
+
+    test('lays out ASCII together and draws it as alone', () async {
+      // p is drawn apart from other letters in the test font, so a sprite
+      // cut from the wrong place shows; bold, italic and underlined letters
+      // share a paragraph with their own styles only.
+      const text = 'apbpc\x1b[1mpqp\x1b[3mxpz\x1b[0;4mpup\x1b[0m';
+      final line = (Terminal()..write(text)).buffer.lines[0];
+      final stock = painterWith(atlas: false);
+      final atlas = painterWith(atlas: true);
+      expect(difference(await render(stock, line), await render(atlas, line)),
+          lessThanOrEqualTo(8));
+      // apbc, pq, xpz and the underlined pu from a paragraph each.
+      expect(atlas.glyphAtlasSpriteCount, 11);
+      expect(atlas.glyphAtlasPartCount, 11);
+      stock.dispose();
+      atlas.dispose();
+    });
+
+    test('keeps a hovered link apart from plain text of the same band',
+        () async {
+      // The link's underline makes its glyphs a group of their own; batched
+      // with plain glyphs of the same band they would lose it, or lend it.
+      const text = '\x1b]8;;https://example.com\x1b\\漢字ab\x1b]8;;\x1b\\'
+          '한글cd';
+      final line = (Terminal()..write(text)).buffer.lines[0];
+      final cell = CellData.empty();
+      line.getCellData(0, cell);
+      final link = cell.hyperlinkId;
+      expect(link, isNot(0));
+      Future<Uint8List> renderHovered(TerminalPainter painter) async {
+        final recorder = ui.PictureRecorder();
+        painter.paintLine(ui.Canvas(recorder), Offset.zero, line,
+            activeHyperlinkId: link);
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(400, 40);
+        final bytes =
+            await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        picture.dispose();
+        image.dispose();
+        return bytes!.buffer.asUint8List();
+      }
+
+      final stock = painterWith(atlas: false);
+      final atlas = painterWith(atlas: true);
+      expect(difference(await renderHovered(stock), await renderHovered(atlas)),
+          lessThanOrEqualTo(8));
+      // 漢字, ab, 한글 and cd from a paragraph each.
+      expect(atlas.glyphAtlasPartCount, 8);
       stock.dispose();
       atlas.dispose();
     });

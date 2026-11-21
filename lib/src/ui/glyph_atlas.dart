@@ -56,6 +56,7 @@ class GlyphAtlas {
   final _pendingIndex = <int>[];
   final _pendingParagraph = <ui.Paragraph>[];
   final _pendingShift = <Offset?>[];
+  final _pendingDecorations = <ui.Paragraph?>[];
 
   /// Paragraphs of many glyphs, disposed of once their glyphs are drawn.
   final _sharedParagraphs = <ui.Paragraph>[];
@@ -137,17 +138,24 @@ class GlyphAtlas {
   /// Like [add], for one glyph of an [adopt]ed [paragraph]: [shift] moves
   /// the glyph to where it would be in a paragraph of its own, and [size] is
   /// its box. The paragraph's other glyphs have to be further away than a
-  /// sprite's padding: the sprite is cut out of it.
+  /// sprite's padding: the sprite is cut out of it. [decorations], an
+  /// [adopt]ed paragraph, is drawn over the glyph where a paragraph of its
+  /// own starts.
   int addPart(
     int key,
     ui.Paragraph paragraph,
     Offset shift,
     Size size,
     Size cellSize,
-    double devicePixelRatio,
-  ) {
+    double devicePixelRatio, {
+    ui.Paragraph? decorations,
+  }) {
     _partCount++;
-    return _add(key, paragraph, shift, size, cellSize, devicePixelRatio);
+    final sprite =
+        _add(key, paragraph, shift, size, cellSize, devicePixelRatio);
+    if (sprite >= 0)
+      _pendingDecorations[_pendingDecorations.length - 1] = decorations;
+    return sprite;
   }
 
   int _add(
@@ -171,6 +179,7 @@ class GlyphAtlas {
     _pendingIndex.add(index);
     _pendingParagraph.add(paragraph);
     _pendingShift.add(shift);
+    _pendingDecorations.add(null);
     return index;
   }
 
@@ -181,6 +190,7 @@ class GlyphAtlas {
     _pendingIndex.clear();
     _pendingParagraph.clear();
     _pendingShift.clear();
+    _pendingDecorations.clear();
     for (final paragraph in _sharedParagraphs) {
       paragraph.dispose();
     }
@@ -212,6 +222,14 @@ class GlyphAtlas {
   void markSolo(Iterable<int> keys) => _solo.addAll(keys);
 
   bool isSolo(int key) => _solo.contains(key);
+
+  /// Keys a search for company has already seen, until the atlas starts
+  /// over.
+  final _scanned = <int>{};
+
+  void markScanned(int key) => _scanned.add(key);
+
+  bool isScanned(int key) => _scanned.contains(key);
 
   /// Whether sprites are queued and not yet flushed.
   bool get hasQueued => _queuedSprite.isNotEmpty;
@@ -310,6 +328,8 @@ class GlyphAtlas {
               _spriteWidth / _ratio, _spriteHeight / _ratio))
           ..drawParagraph(_pendingParagraph[k], origin + shift)
           ..restore();
+        final decorations = _pendingDecorations[k];
+        if (decorations != null) canvas.drawParagraph(decorations, origin);
       }
       while (_spritePage.length <= sprite) {
         _spritePage.add(0);
@@ -381,6 +401,7 @@ class GlyphAtlas {
   void clear() {
     _spriteByKey.clear();
     _solo.clear();
+    _scanned.clear();
     _disposePending();
     for (final image in _pages) {
       image.dispose();

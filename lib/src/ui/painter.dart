@@ -356,7 +356,8 @@ class TerminalPainter {
 
   /// Sprites cut from paragraphs of many glyphs, for tests.
   @visibleForTesting
-  int get glyphAtlasPartCount => _wideGlyphAtlas.partCount;
+  int get glyphAtlasPartCount =>
+      _glyphAtlas.partCount + _wideGlyphAtlas.partCount;
 
   int get proceduralGlyphCacheLength => _proceduralGlyphCache.length;
 
@@ -829,19 +830,14 @@ class TerminalPainter {
     final cellSize = wide ? _wideCellSize : _cellSize;
     var sprite = atlas.sprite(key);
     if (sprite == null &&
-        wide &&
         _atlasBatch(charCode) != 0 &&
-        cellFlags & _atlasDecorations == 0 &&
-        !isActiveHyperlink &&
-        atlas.room > 1 &&
-        !atlas.isSolo(key)) {
+        atlas.room > 2 &&
+        !atlas.isSolo(key) &&
+        !atlas.isScanned(key)) {
       _layOutAtlasBatch(
         line,
         column,
         key,
-        cellFlags,
-        isActiveHyperlink,
-        hasCombiningCharacters: hasCombiningCharacters,
         blinkVisible: blinkVisible,
         activeHyperlinkId: activeHyperlinkId,
         cursorColumn: cursorColumn,
@@ -972,49 +968,55 @@ class TerminalPainter {
   }
 
   /// Which glyphs are laid out together, many to a paragraph: 1 for Han
-  /// ideographs (the unified block and extension A), 2 for Hangul syllables,
-  /// each only with its own kind; 0 for the rest.
+  /// ideographs (the unified block and extension A) and 2 for Hangul
+  /// syllables, which are wide, and 3 for printable ASCII, each only with its
+  /// own kind; 0 for the rest.
   ///
   /// A paragraph layout costs about 80 us for a CJK glyph on macOS, most of
   /// it finding a fallback font, and about 12-15 us a glyph sixteen or more
-  /// to a paragraph. Together is only exact where the fallback font a glyph gets
-  /// does not depend on the glyphs before it: a paragraph tries the fonts it
-  /// has already resolved first, so a full stop after kana takes the kana's
-  /// font where alone it takes another, and Han after Hangul the Hangul
-  /// font's Hanja. Laid out as [_layOutAtlasBatch] lays them out, every
-  /// glyph of the two blocks, 38756 of them in shuffled order, came out with
-  /// the advance, box and baseline it has alone, and a sample of 12644
-  /// identical in pixels; kana and CJK punctuation, in paragraphs of their
-  /// own kind, did not keep their fonts.
+  /// to a paragraph; an ASCII letter about 16-34 us alone and 1-2 us
+  /// together. Together is only exact where the font a glyph gets does not
+  /// depend on the glyphs before it: a paragraph tries the fonts it has
+  /// already resolved first, so a full stop after kana takes the kana's font
+  /// where alone it takes another, and Han after Hangul the Hangul font's
+  /// Hanja. Laid out as [_layOutAtlasBatch] lays them out, every glyph of the
+  /// two CJK blocks, 38756 of them in shuffled order, came out with the
+  /// advance, box and baseline it has alone, and a sample of 12644 identical
+  /// in pixels; kana and CJK punctuation, in paragraphs of their own kind,
+  /// did not keep their fonts. ASCII is all in the terminal's own font.
   static int _atlasBatch(int charCode) {
     if (charCode >= 0x4e00 && charCode <= 0x9fff ||
         charCode >= 0x3400 && charCode <= 0x4dbf) {
       return 1;
     }
     if (charCode >= 0xac00 && charCode <= 0xd7a3) return 2;
+    if (charCode >= 0x21 && charCode <= 0x7e) return 3;
     return 0;
   }
 
-  /// Decorations run on through letter spacing, so a decorated glyph is
-  /// laid out alone.
+  /// Decorations run on through letter spacing, so decorated glyphs are laid
+  /// out together without them, and each sprite takes its decorations from a
+  /// glyph of the same advance laid out alone in transparent ink: a
+  /// decoration spans the advance, whatever the glyph. Every printable ASCII
+  /// glyph drawn so came out identical in pixels to the glyph laid out
+  /// decorated, in single, double, through and over lines, bold and italic,
+  /// at device pixel ratios 1, 1.5, 2 and 3.
   static const _atlasDecorations =
       CellAttr.underlineMask | CellAttr.strikethrough | CellAttr.overline;
 
   /// Most glyphs laid out in one paragraph.
   static const _maxAtlasBatch = 64;
 
-  /// Lays out [key]'s glyph together with the other new glyphs of the same
-  /// shaping styles, band and [_atlasBatch] kind, in the rest of [line] from
-  /// [column] and in the following lines, in one paragraph, and adds them to
-  /// [_wideGlyphAtlas]. Lays out nothing when [key] has no such company: the
-  /// caller then lays it out alone.
+  /// Collects the new glyphs that [_atlasBatch] takes in the rest of [line]
+  /// from [column] and in the following lines, [key]'s among them, and lays
+  /// out each kind's and group's - shaping styles and band - together, many
+  /// to a paragraph. One scan serves a whole frame of new glyphs, whatever
+  /// their colours and styles; a glyph alone in its group is left to be laid
+  /// out alone.
   void _layOutAtlasBatch(
     BufferLine line,
     int column,
-    int key,
-    int cellFlags,
-    bool isActiveHyperlink, {
-    required bool hasCombiningCharacters,
+    int key, {
     required bool blinkVisible,
     required int? activeHyperlinkId,
     required int? cursorColumn,
@@ -1022,19 +1024,25 @@ class TerminalPainter {
     required Color? foregroundOverride,
     required bool ensureSelectionContrast,
   }) {
-    final atlas = _wideGlyphAtlas;
-    final group = key ~/ 0x110000;
-    final kind = _atlasBatch(key % 0x110000);
-    final most = min(_maxAtlasBatch, atlas.room);
-    final keys = [key];
+    // New keys by group and kind: group * 4 + kind.
+    final lines = <int, List<int>>{};
+    final seen = <int>{};
+    var taken = 0;
+    void consider(int k, int kind) {
+      final atlas = kind == 3 ? _glyphAtlas : _wideGlyphAtlas;
+      if (atlas.sprite(k) != null || atlas.isSolo(k) || !seen.add(k)) return;
+      lines.putIfAbsent(k ~/ 0x110000 * 4 + kind, () => []).add(k);
+      taken++;
+    }
+
+    consider(key, _atlasBatch(key % 0x110000));
     final cellData = _lookaheadCellData;
     void gather(BufferLine line, int from, bool atCursorLine) {
-      for (var i = from; i < line.length && keys.length < most; i++) {
+      for (var i = from; i < line.length && taken < _maxAtlasScan; i++) {
         line.getCellData(i, cellData);
-        if (cellData.content >> CellContent.widthShift != 2 ||
-            _atlasBatch(cellData.content & CellContent.codepointMask) != kind) {
-          continue;
-        }
+        final kind = _atlasBatch(cellData.content & CellContent.codepointMask);
+        final width = cellData.content >> CellContent.widthShift;
+        if (kind == 0 || width != (kind == 3 ? 1 : 2)) continue;
         final k = _atlasKey(
           cellData,
           line,
@@ -1047,48 +1055,87 @@ class TerminalPainter {
           foregroundOverride: foregroundOverride,
           ensureSelectionContrast: ensureSelectionContrast,
         );
-        i++;
-        if (k >= 0 &&
-            k ~/ 0x110000 == group &&
-            atlas.sprite(k) == null &&
-            !atlas.isSolo(k) &&
-            !keys.contains(k)) {
-          keys.add(k);
-        }
+        i += width - 1;
+        if (k >= 0) consider(k, kind);
       }
     }
 
-    gather(line, column + 2, true);
+    gather(line, column + 1, true);
     // The lines below are painted next. A key read there is the glyph,
     // styles and band of some cell whatever the cell, so a cursor there
     // that this line does not know of costs at most a sprite never used.
-    if (keys.length < most) {
-      for (final following in _followingLines?.call() ?? const <BufferLine>[]) {
-        gather(following, 0, false);
-        if (keys.length >= most) break;
+    for (final following in _followingLines?.call() ?? const <BufferLine>[]) {
+      if (taken >= _maxAtlasScan) break;
+      gather(following, 0, false);
+    }
+    // A key seen here starts no scan of its own: alone in its group, it is
+    // laid out alone when its cell is painted.
+    for (final k in seen) {
+      (_atlasBatch(k % 0x110000) == 3 ? _glyphAtlas : _wideGlyphAtlas)
+          .markScanned(k);
+    }
+    for (final MapEntry(key: id, value: keys) in lines.entries) {
+      for (var i = 0; i < keys.length; i += _maxAtlasBatch) {
+        final part = keys.sublist(i, min(i + _maxAtlasBatch, keys.length));
+        if (part.length > 1) _layOutAtlasLine(id % 4, part);
       }
     }
-    if (keys.length == 1) return;
+  }
+
+  /// Most new keys one scan collects.
+  static const _maxAtlasScan = 1024;
+
+  /// Lays out [keys], all of one [_atlasBatch] kind, shaping styles and band,
+  /// in one paragraph and adds them to their atlas.
+  void _layOutAtlasLine(int kind, List<int> keys) {
+    final key = keys.first;
+    final width = kind == 3 ? 1 : 2;
+    final atlas = width == 2 ? _wideGlyphAtlas : _glyphAtlas;
+    final cellSize = width == 2 ? _wideCellSize : _cellSize;
+    if (atlas.room < keys.length) return;
+    final styleBits = key ~/ 0x110000 ~/ 8;
+    final cellFlags = styleBits & _atlasGlyphFlags;
+    final isActiveHyperlink = styleBits & (1 << 13) != 0;
 
     // One line, the glyphs spaced further apart than a sprite reaches; drawn
     // shifted back to the origin, a glyph rasterised as it does alone at
-    // every device pixel ratio tried. Letter spacing adds no runs, where placeholders
-    // between the glyphs made the layout as dear as one per glyph. The line
-    // starts with a common glyph of the kind, so that the font a fallback
-    // finds for it, the font such glyphs get alone, is the one tried first
-    // for the rest - not one found for a rare glyph that happens to lead.
-    final spacing = 4 * _wideCellSize.width;
-    final style = _atlasTextStyle(key, cellFlags, isActiveHyperlink)
-        .copyWith(letterSpacing: spacing);
-    final builder = ParagraphBuilder(style.getParagraphStyle())
-      ..pushStyle(style.getTextStyle(textScaler: _textScaler))
+    // every device pixel ratio tried. Letter spacing adds no runs, where
+    // placeholders or a style run per glyph made the layout as dear as one
+    // per glyph. The line starts with a common glyph of the kind, so that the
+    // font a fallback finds for it, the font such glyphs get alone, is the
+    // one tried first for the rest - not one found for a rare glyph that
+    // happens to lead.
+    final spacing = 4 * cellSize.width;
+    final anchorCode = switch (kind) {
+      1 => 0x4e00,
+      2 => 0xac00,
+      _ => 0x4d,
+    };
+    final style = _atlasTextStyle(key, cellFlags, isActiveHyperlink);
+    final decorated = cellFlags & _atlasDecorations != 0 || isActiveHyperlink;
+    final lineStyle = style.copyWith(
+      letterSpacing: spacing,
+      decoration: decorated ? TextDecoration.none : null,
+    );
+    final builder = ParagraphBuilder(lineStyle.getParagraphStyle())
+      ..pushStyle(lineStyle.getTextStyle(textScaler: _textScaler))
       ..addText(String.fromCharCodes([
-        kind == 1 ? 0x4e00 : 0xac00,
+        anchorCode,
         for (final k in keys) k % 0x110000,
       ]));
     final paragraph = builder.build()
       ..layout(const ParagraphConstraints(width: double.infinity));
     atlas.adopt(paragraph);
+    Paragraph? decorations;
+    if (decorated) {
+      final inkless = style.copyWith(color: const Color(0x00000000));
+      decorations = (ParagraphBuilder(inkless.getParagraphStyle())
+            ..pushStyle(inkless.getTextStyle(textScaler: _textScaler))
+            ..addText(String.fromCharCode(anchorCode)))
+          .build()
+        ..layout(const ParagraphConstraints(width: double.infinity));
+      atlas.adopt(decorations);
+    }
     final anchor = paragraph.getBoxesForRange(0, 1).first;
     final boxes = [
       for (var k = 0; k < keys.length; k++)
@@ -1105,13 +1152,21 @@ class TerminalPainter {
     }
     for (var k = 0; k < keys.length; k++) {
       final box = boxes[k];
+      final advance = box.right - box.left - spacing;
+      if (decorations != null &&
+          (advance - decorations.maxIntrinsicWidth).abs() > 1e-3) {
+        // Decorations of another length: alone.
+        atlas.markSolo([keys[k]]);
+        continue;
+      }
       atlas.addPart(
         keys[k],
         paragraph,
         Offset(-box.left, 0),
-        Size(box.right - box.left - spacing, paragraph.height),
-        _wideCellSize,
+        Size(advance, paragraph.height),
+        cellSize,
         _devicePixelRatio,
+        decorations: decorations,
       );
     }
   }
