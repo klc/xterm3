@@ -192,14 +192,21 @@ class EscapeParser {
     final queue = _queue;
     final textHandler = _textHandler;
     final data = queue.currentBlock;
+    final classes = runClasses;
     var index = queue.headOffset;
     while (index < data.length) {
       final codeUnit = data.codeUnitAt(index);
       var end = index + 1;
-      if (isSingleCellPrintable(codeUnit)) {
+      // [isSingleCellPrintable], with the table in a local.
+      if (codeUnit < 0x7f
+          ? codeUnit >= 0x20
+          : classes[codeUnit] == runClassSingleCell) {
         if (textHandler == null) return false;
-        while (
-            end < data.length && isSingleCellPrintable(data.codeUnitAt(end))) {
+        while (end < data.length) {
+          final next = data.codeUnitAt(end);
+          if (next < 0x7f ? next < 0x20 : classes[next] != runClassSingleCell) {
+            break;
+          }
           end++;
         }
         tokenBegin = queue.totalConsumed;
@@ -396,7 +403,7 @@ class EscapeParser {
     final offset = _queue.headOffset;
     if (offset >= data.length) return false;
     final codeUnit = data.codeUnitAt(offset);
-    if (isSingleCellPrintable(codeUnit) || isWideRunUnit(codeUnit)) return true;
+    if (runClasses[codeUnit] != runClassOther) return true;
     if (codeUnit < 0xd800 || codeUnit > 0xdbff) return false;
     // U+1F1E6..U+1F1FF regional indicators and U+1F3FB..U+1F3FF skin tones.
     if (codeUnit == 0xd83c && offset + 1 < data.length) {

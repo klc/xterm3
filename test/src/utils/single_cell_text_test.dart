@@ -4,6 +4,30 @@ import 'package:xterm3/src/utils/single_cell_text.dart';
 import 'package:xterm3/src/utils/unicode_v11.dart';
 
 void main() {
+  test('the run class table matches the ranges for every BMP code unit', () {
+    for (var codeUnit = 0; codeUnit <= 0xffff; codeUnit++) {
+      final reason = 'U+${codeUnit.toRadixString(16)}';
+      final singleCell = singleCellPrintableByRange(codeUnit);
+      final wide = wideRunUnitByRange(codeUnit);
+      expect(isSingleCellPrintable(codeUnit), singleCell, reason: reason);
+      expect(isWideRunUnit(codeUnit), wide, reason: reason);
+      expect(
+        runClasses[codeUnit],
+        singleCell
+            ? runClassSingleCell
+            : wide
+                ? runClassWide
+                : runClassOther,
+        reason: reason,
+      );
+    }
+    // Code points past the table, which [Buffer.writeChar] asks about too.
+    for (final codePoint in [-1, 0x10000, 0x1f600, 0x20000, 0x10ffff]) {
+      expect(isSingleCellPrintable(codePoint), isFalse);
+      expect(isWideRunUnit(codePoint), isFalse);
+    }
+  });
+
   test('every single-cell printable is width 1 and starts its own grapheme',
       () {
     // The two properties a batched write relies on, checked for every code

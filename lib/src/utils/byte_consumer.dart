@@ -183,9 +183,10 @@ class ByteConsumer {
     final start = _currentOffset;
     var offset = start;
     var codePoints = 0;
+    final classes = runClasses;
     while (offset < data.length) {
       final codeUnit = data.codeUnitAt(offset);
-      if (isSingleCellPrintable(codeUnit) || isWideRunUnit(codeUnit)) {
+      if (classes[codeUnit] != runClassOther) {
         offset++;
       } else if (_isHighSurrogate(codeUnit) &&
           offset + 1 < data.length &&

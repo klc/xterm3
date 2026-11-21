@@ -64,6 +64,48 @@ void main() {
       expect(terminal.buffer.writeChar(0x0301), 0);
     });
 
+    test('joins every code point of a ZWJ sequence to one cell', () {
+      final terminal = Terminal()..resize(10, 3);
+      terminal.write('👨\u200D👩\u200D👧\u200D👦👍🏽❤\uFE0Fx');
+
+      final line = terminal.buffer.lines[0];
+      expect(line.getCodePoint(0), 0x1F468);
+      expect(line.getWidth(0), 2);
+      expect(line.getCombiningCharacters(0), '\u200D👩\u200D👧\u200D👦');
+      expect(line.getCodePoint(2), 0x1F44D);
+      expect(line.getCombiningCharacters(2), '🏽');
+      expect(line.getCodePoint(4), 0x2764);
+      expect(line.getWidth(4), 2);
+      expect(line.getCombiningCharacters(4), '\uFE0F');
+      expect(line.getCodePoint(6), 0x78);
+      expect(terminal.buffer.cursorX, 7);
+    });
+
+    test('a skin tone widening a base in the last column moves it', () {
+      final terminal = Terminal()..resize(4, 3);
+      terminal.write('abc☝🏽');
+
+      expect(terminal.buffer.lines[0].toString(), 'abc');
+      final line = terminal.buffer.lines[1];
+      expect(line.getCodePoint(0), 0x261D);
+      expect(line.getWidth(0), 2);
+      expect(line.getCombiningCharacters(0), '🏽');
+      expect(terminal.buffer.cursorX, 2);
+    });
+
+    test('reads a cluster ending in an astral code point as that code point',
+        () {
+      // U+110BD is Prepend (GB9b): stored with mode 2027 off, it makes the
+      // cell absorb the next character once the mode is back on. Seen as its
+      // low surrogate alone, it would not.
+      final terminal = Terminal()..resize(10, 3);
+      terminal.write('a\x1b[?2027l\u{110BD}\x1b[?2027h中');
+
+      final line = terminal.buffer.lines[0];
+      expect(line.getCombiningCharacters(0), '\u{110BD}中');
+      expect(line.getCodePoint(2), 0);
+    });
+
     test('shifts cells in insert mode', () {
       final terminal = Terminal()..resize(5, 3);
       terminal.write('abcde\r\x1b[2C\x1b[4hX');

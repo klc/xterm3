@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:characters/characters.dart';
 import 'package:test/test.dart';
 import 'package:xterm3/core.dart';
+import 'package:xterm3/src/utils/single_cell_text.dart';
 
 void main() {
   test('Terminal batches printable ASCII parser runs', () {
@@ -934,6 +935,38 @@ void main() {
           expectSameAsPerCharacter(setup, text, 6);
         }
       }
+    });
+
+    test('store every run character as per-character writes do', () {
+      // The run is not classified again when it is stored: a unit below
+      // U+3000 is taken as narrow and one above as wide. Every unit either
+      // predicate accepts, and every run emoji, goes through a run here,
+      // each wide one after a narrow one, so a narrow unit taken as wide or
+      // the other way round moves the cursor or the cells.
+      final narrow = [
+        for (var unit = 0; unit <= 0xffff; unit++)
+          if (isSingleCellPrintable(unit)) unit,
+      ];
+      final wide = [
+        for (var unit = 0; unit <= 0xffff; unit++)
+          if (isWideRunUnit(unit)) unit,
+        for (var codePoint = 0x10000; codePoint <= 0x10ffff; codePoint++)
+          if (isWideRunEmoji(codePoint)) codePoint,
+      ];
+      final chunk = StringBuffer();
+      for (var i = 0; i < wide.length; i++) {
+        chunk
+          ..writeCharCode(narrow[i % narrow.length])
+          ..writeCharCode(wide[i]);
+        if (i % 16 == 15 || i == wide.length - 1) {
+          for (final width in [7, 8]) {
+            expectSameAsPerCharacter('', chunk.toString(), width);
+          }
+          chunk.clear();
+        }
+      }
+      // So that every narrow unit was written too.
+      expect(wide.length, greaterThanOrEqualTo(narrow.length));
     });
 
     test('take the single-cell text before a wide character into its run', () {

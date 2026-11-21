@@ -108,7 +108,9 @@ class Buffer {
   /// dearer of the two. Measured in the example app at 100 columns, recycling
   /// lost 12-20% up to 3000 lines, broke even at 5000 and won 10-19% from
   /// 7000; the threshold is that point, as cells, on the assumption that the
-  /// crossover follows the bytes the scrollback keeps.
+  /// crossover follows the bytes the scrollback keeps. Those numbers were
+  /// taken while a store was still cleared word by word; clearing has since
+  /// become a block copy, so the crossover is likely lower and not measured.
   ///
   /// The cost is memory. A recycled store goes to the next line whatever its
   /// size, and a line grows a store that is too small for it to the full
@@ -246,8 +248,11 @@ class Buffer {
       start = _writeCharAt(text, start);
     }
 
+    final style = terminal.cursor;
+    final classes = runClasses;
     while (start < end) {
-      if (_cursorX >= _rightLimit) {
+      var rightLimit = _rightLimit;
+      if (_cursorX >= rightLimit) {
         // [writeChar] asks whether a wide character joins the cell before
         // the cursor before it wraps, and that cell can still be one the run
         // has not written: the first unit may have written nothing (a join
@@ -258,17 +263,17 @@ class Buffer {
           continue;
         }
         _wrapInput();
+        rightLimit = _rightLimit;
       }
 
       // Everything in the run that is not single-cell is two cells wide: an
       // [isWideRunUnit] code unit or an [isWideRunEmoji] surrogate pair.
-      final rightLimit = _rightLimit;
       var x = _cursorX;
       var index = start;
       var wide = false;
       while (index < end) {
         final codeUnit = text.codeUnitAt(index);
-        if (isSingleCellPrintable(codeUnit)) {
+        if (classes[codeUnit] == runClassSingleCell) {
           if (x >= rightLimit) break;
           x++;
           index++;
@@ -276,7 +281,8 @@ class Buffer {
           if (x + 2 > rightLimit) break;
           wide = true;
           x += 2;
-          index += _isHighSurrogate(codeUnit) ? 2 : 1;
+          // Written out: as a call it stayed one, once per wide unit.
+          index += codeUnit >= 0xd800 && codeUnit <= 0xdbff ? 2 : 1;
         }
       }
 
@@ -292,7 +298,7 @@ class Buffer {
           start,
           index - start,
           x - _cursorX,
-          terminal.cursor,
+          style,
         );
       } else {
         currentLine.setAsciiCells(
@@ -300,7 +306,7 @@ class Buffer {
           text,
           start,
           index - start,
-          terminal.cursor,
+          style,
         );
       }
       _cursorX = x;
@@ -346,7 +352,8 @@ class Buffer {
       if (!terminal.graphemeClusterMode) {
         _addCombiningCharacter(codePoint);
       } else if (_joinsPreviousGrapheme(codePoint, cellWidth)) {
-        currentLine.addCombiningCharacter(_joinIndex, codePoint);
+        _joinLine.addCombiningCharacterTo(
+            _joinIndex, _joinCombining, codePoint);
       }
       return cellWidth;
     }
@@ -363,7 +370,7 @@ class Buffer {
     }
     if (mayJoinPreviousGrapheme &&
         _joinsPreviousGrapheme(codePoint, cellWidth)) {
-      final line = currentLine;
+      final line = _joinLine;
       final previousWidth = _joinedPreviousGraphemeWidth(codePoint, cellWidth);
       // Only widening the cell moves it, or the cursor; a cell that is wide
       // already - an emoji the next code point of its sequence joins - takes
@@ -373,7 +380,7 @@ class Buffer {
         _addCombiningCharacter(codePoint);
         return cellWidth;
       }
-      line.addCombiningCharacter(_joinIndex, codePoint);
+      line.addCombiningCharacterTo(_joinIndex, _joinCombining, codePoint);
       return cellWidth;
     }
 
@@ -517,6 +524,11 @@ class Buffer {
   /// [_addCombiningCharacter] would look up again.
   var _joinIndex = 0;
 
+  /// The line holding [_joinIndex] and that cell's combining string, for the
+  /// same caller: what joining the code point would read again otherwise.
+  late BufferLine _joinLine;
+  String? _joinCombining;
+
   /// [cellWidth] is `wcwidth(codePoint)`, which [writeChar] has already
   /// looked up - for an astral code point that is a binary search.
   bool _joinsPreviousGrapheme(int codePoint, int cellWidth) {
@@ -530,8 +542,10 @@ class Buffer {
     final base = line.getCodePoint(index);
     if (base == 0) return false;
     final combining = line.getCombiningCharacters(index);
+    _joinLine = line;
+    _joinCombining = combining;
 
-    final last = combining?.runes.last ?? base;
+    final last = combining == null ? base : _lastRune(combining);
 
     // A wide code point never extends a cluster - the emoji modifiers are the
     // only wide Extend characters, and the check below owns them - and is
@@ -676,6 +690,19 @@ class Buffer {
     }
     if (_isEmojiSequenceMark(base)) return null;
     return isExtendedPictographic(base) ? true : null;
+  }
+
+  /// `string.runes.last` without the [Runes] object: a low surrogate pairs
+  /// with a high one before it, any other code unit stands for itself.
+  static int _lastRune(String string) {
+    final last = string.codeUnitAt(string.length - 1);
+    if (last >= 0xdc00 && last <= 0xdfff && string.length > 1) {
+      final lead = string.codeUnitAt(string.length - 2);
+      if (lead >= 0xd800 && lead <= 0xdbff) {
+        return 0x10000 + ((lead - 0xd800) << 10) + (last - 0xdc00);
+      }
+    }
+    return last;
   }
 
   static bool _isEmojiSequenceMark(int codePoint) =>

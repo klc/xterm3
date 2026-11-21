@@ -1,4 +1,33 @@
+import 'dart:typed_data';
+
 import 'package:xterm3/src/utils/unicode_v11.dart';
+
+/// What [runClasses] holds for a BMP code unit.
+const runClassOther = 0;
+const runClassSingleCell = 1;
+const runClassWide = 2;
+
+/// The [runClassSingleCell] or [runClassWide] class of every BMP code unit,
+/// [singleCellPrintableByRange] or [wideRunUnitByRange] answered once each.
+///
+/// The parser classifies every code unit of a run, in its scan or as it
+/// carries the run on, and the range chains took a dozen or more compares
+/// for the alphabets past Latin-1 and for CJK; a load costs the same for all
+/// of them. Loops read it through a local, which keeps the
+/// lazy-initialisation check of the field out of them.
+final Uint8List runClasses = _buildRunClasses();
+
+Uint8List _buildRunClasses() {
+  final classes = Uint8List(0x10000);
+  for (var codeUnit = 0; codeUnit < 0x10000; codeUnit++) {
+    if (singleCellPrintableByRange(codeUnit)) {
+      classes[codeUnit] = runClassSingleCell;
+    } else if (wideRunUnitByRange(codeUnit)) {
+      classes[codeUnit] = runClassWide;
+    }
+  }
+  return classes;
+}
 
 /// Whether [codeUnit] can be written straight into one cell, without
 /// consulting the width table or the grapheme cluster rules.
@@ -28,7 +57,17 @@ import 'package:xterm3/src/utils/unicode_v11.dart';
 ///
 /// Wide scripts are absent: they take two cells each. [isWideRunUnit] is the
 /// set of them that can be written in a run all the same.
+///
+/// Read from [runClasses], past ASCII: printable ASCII is answered by the two
+/// compares the range chain began with, cheaper than a load.
+@pragma('vm:prefer-inline')
 bool isSingleCellPrintable(int codeUnit) {
+  if (codeUnit < 0x7f) return codeUnit >= 0x20;
+  return codeUnit <= 0xffff && runClasses[codeUnit] == runClassSingleCell;
+}
+
+/// The ranges [isSingleCellPrintable] is defined by, built into [runClasses].
+bool singleCellPrintableByRange(int codeUnit) {
   if (codeUnit >= 0x20 && codeUnit <= 0x7e) return true;
   if (codeUnit < 0xa0) return false;
   if (codeUnit == 0xad) return false;
@@ -63,7 +102,15 @@ bool isSingleCellPrintable(int codeUnit) {
 /// and the fullwidth forms. Left out inside those stretches: the tone marks
 /// U+302A..U+302F and the voicing marks U+3099..U+309A (Extend), U+303F
 /// (width 1) and U+3164 HANGUL FILLER (width 0).
+@pragma('vm:prefer-inline')
 bool isWideRunUnit(int codeUnit) {
+  return codeUnit >= 0x3000 &&
+      codeUnit <= 0xffff &&
+      runClasses[codeUnit] == runClassWide;
+}
+
+/// The ranges [isWideRunUnit] is defined by, built into [runClasses].
+bool wideRunUnitByRange(int codeUnit) {
   if (codeUnit < 0x3000) return false;
   if (codeUnit < 0x4e00) {
     if (codeUnit <= 0x3029) return true;

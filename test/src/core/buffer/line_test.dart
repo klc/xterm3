@@ -303,6 +303,57 @@ void main() {
       expect(line.getCombiningCharacters(0), isNull);
     });
 
+    test('caps a cell at 16 combining code points, counted as runes', () {
+      final line = BufferLine(4);
+      line.setCell(0, 0x1F44D, 2, CursorStyle.empty);
+      line.setCell(2, 0x61, 1, CursorStyle.empty);
+
+      // Astral: the ninth already makes 18 code units.
+      for (var i = 0; i < 20; i++) {
+        line.addCombiningCharacter(0, 0x1F3FB);
+        line.addCombiningCharacter(2, 0x0301);
+      }
+
+      expect(line.getCombiningCharacters(0)!.runes.length, 16);
+      expect(line.getCombiningCharacters(0)!.length, 32);
+      expect(line.getCombiningCharacters(2)!.length, 16);
+    });
+
+    test('addCombiningCharacterTo appends what addCombiningCharacter does', () {
+      // ZWJ and the variation selectors, an astral pictograph, a mark, and a
+      // lone high and lone low surrogate that pair once appended.
+      const codePoints = [
+        0x200D,
+        0xFE0F,
+        0xFE0E,
+        0x1F469,
+        0x0301,
+        0xD83D,
+        0xDC4D,
+        0x110000,
+        -1,
+      ];
+      final viaLookup = BufferLine(2)
+        ..setCell(0, 0x1F468, 2, CursorStyle.empty);
+      final viaCaller = BufferLine(2)
+        ..setCell(0, 0x1F468, 2, CursorStyle.empty);
+
+      for (final codePoint in codePoints) {
+        viaLookup.addCombiningCharacter(0, codePoint);
+        viaCaller.addCombiningCharacterTo(
+          0,
+          viaCaller.getCombiningCharacters(0),
+          codePoint,
+        );
+      }
+
+      final expected = String.fromCharCodes(
+        [0x200D, 0xFE0F, 0xFE0E, 0x1F469, 0x0301, 0x1F44D],
+      );
+      expect(viaLookup.getCombiningCharacters(0), expected);
+      expect(viaCaller.getCombiningCharacters(0), expected);
+    });
+
     test('clears combining characters when a cell is erased', () {
       final terminal = Terminal();
       terminal.write('e\u0301');
@@ -312,6 +363,25 @@ void main() {
 
       expect(line.getCombiningCharacters(0), isNull);
     });
+  });
+
+  test('recycled storage comes back cleared however wide the line', () {
+    // Wider than the zero buffer takeStorage copies from, and not a whole
+    // number of it, so the clear takes several copies and a partial one.
+    for (final width in [3, 200, 511, 512, 513, 1500, 3000]) {
+      final line = BufferLine(width);
+      final style = CursorStyle(foreground: 7, background: 3, attrs: 1);
+      for (var x = 0; x < width; x++) {
+        line.setCell(x, 0x61, 1, style);
+      }
+
+      final storage = line.takeStorage()!;
+
+      expect(storage.length, greaterThanOrEqualTo(width * 4));
+      expect(storage.every((word) => word == 0), isTrue,
+          reason: 'width $width');
+      expect(line.getText(), isEmpty);
+    }
   });
 
   test('zero-count cell edits preserve content and metadata', () {
