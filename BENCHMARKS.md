@@ -2274,6 +2274,80 @@ What is left: skin tones still cost 80 ns a code point in the grapheme rules
 (`_isEmojiModifierBase` and `addCombiningCharacter`), and a ZWJ sequence pays
 the per-character path for every code point in it.
 
+## Recycling evicted lines, take three: large scrollbacks only — 2026-11-21
+
+Takes one and two rejected recycling on headless numbers, where a fresh
+`Uint32List` costs next to nothing and clearing a used one costs more. *Where
+the app's extra time goes* then found that keeping 10000 lines costs the
+example app about twice what it costs the command-line probe. So the
+question was asked again in the app, with an evicted line's storage cleared
+over `[0, _used)` and handed to the next new line (`BufferLine.takeStorage`,
+`adoptStorage`). In-memory feed, no view, 1 KiB chunks, against the same
+build without it:
+
+| scrollback at 100 columns | ascii | cjk-real | sgr |
+|---|---|---|---|
+| 0 lines | 0.81 | 0.95 | 0.98 |
+| 100-1000 | 0.80-0.82 | 0.95-0.96 | 0.98 |
+| 3000 | 0.88 | 0.98 | 0.97 |
+| 5000 | 1.00 | 1.04 | 1.05 |
+| 7000 | 1.13 | 1.11 | 1.10 |
+| 10000 | 1.19 | 1.07 | 1.08 |
+| 20000 | 1.13 | 1.07 | 1.07 |
+
+A line that falls off a small scrollback dies young, where allocating is close
+to free; one that falls off a large one has left the young generation, and so
+would its replacement. So `Buffer` recycles only when the scrollback holds at
+least `recycleThresholdCells` cells (lines times columns): 700000, the 7000
+lines above. That the crossover follows bytes rather than lines is an
+assumption; only 100 columns was measured.
+
+**Memory.** The storage goes to the next line whatever its size, and a line
+grows one that is too small to its full width, so once the scrollback has
+filled, every line's storage tends to the full width - the size every line
+had before 6.3.0 sized lines to their text. At 10000 lines and 100 columns:
+19.5 MiB of cells, against 10.8 (short lines with some long ones), 13.1 (CJK
+prose), 14.0 (`sgr`) and 14.3 MiB (`ascii`) without recycling; at 213 columns
+the full-width figure is about 34 MiB a terminal. A pool that handed a store
+only to a line that would have allocated one of exactly its size kept memory
+where it was, and kept little of the speed: ascii 1.06, and 0.97-0.99 on
+output written in several runs a line, whose first, text-sized store misses
+the pool and is grown anyway. Chosen: the speed.
+
+**One trap on the way.** Keeping the spare stores in a `List<Uint32List>`
+made every cell read and write in the package 7-9% slower, on output that
+never recycled a line: what comes out of a generic list could be any
+`Uint32List` - a view - as far as the compiler knows, so `BufferLine._data`
+lost its concrete type. A field assigned only from `_data` keeps it.
+
+In the app at 10000 lines (in-memory feed), against the emoji commit, five
+rounds, MiB/s: ascii 95.8 → 111.4, ascii-utf8 81.8 → 92.3, latin-ext 96.6 →
+105.1, sgr 82.9 → 89.9, cjk-real 64.8 → 70.5, unicode 46.1 → 47.5, short lines
+with some long ones 62.1 → 86.2; cursor unchanged. Below the threshold each
+new line pays a field check and the eviction a call: 1000 and 0 lines within
+-1.5% to +0.1%. Headless, where the gains were losses in takes one and two:
+sgr +6%, cjk-real +4%, unicode +2%, ascii +1%, nothing slower.
+
+End to end (`flutter_pty2` 1.0.0, view on, real PTY, the bench's 10000-line
+scrollback), the two builds and Ghostty 1.4.0 interleaved, five rounds:
+
+| payload | before | after | Ghostty | gap before | gap after |
+|---|---|---|---|---|---|
+| ascii | 78.8 | 84.5 | 142.9 | 1.81x | 1.69x |
+| ascii-utf8 | 69.4 | 73.4 | 133.5 | 1.92x | 1.82x |
+| sgr | 60.9 | 64.6 | 92.8 | 1.52x | 1.44x |
+| unicode | 41.3 | 42.8 | 108.1 | 2.62x | 2.53x |
+| cjk-real | 53.0 | 54.4 | 153.2 | 2.89x | 2.82x |
+| cursor, truecolor, emoji | | | | | unchanged |
+
+**Accepted on.** Tests 1146, among them the last 8000 lines of a recycling
+scrollback compared, text, colour and width, with a 30000-line one that never
+evicts - a build that skips the clear fails it. `terminal_state_dump.dart`,
+whose 10000-line scrollback recycles, is byte-identical on 77 files under
+eleven splits. A review of every reader of an evicted line found none that
+reads one after the eviction hook: selection and prompt anchors check that
+their line is attached.
+
 ## Adding a workload
 
 Workloads are lists of per-frame strings built by a `_*Frames` function and
