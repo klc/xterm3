@@ -1758,9 +1758,9 @@ perhaps of gradient tools — not of highlighters and TUIs.
 
 ### Four candidates, in scratch copies
 
-None of this is in the package; the code is
-`script/term_compare/paint_spike/candidates.patch`, switched by environment
-variables (`lib/src/ui/xc.dart` in the patch).
+None of this is in the package; the candidates were a patch to a scratch copy,
+switched by environment variables. C became `TerminalStyle.useGlyphAtlas` -
+see *Glyph atlas, opt-in*.
 
 - **A1** cache capacity × 2, × 4, × 16 (`XC_CACHEX`).
 - **A2** `memo`: memoise the converted `ui` styles on a miss (`XC_MEMO=1`).
@@ -1773,8 +1773,7 @@ variables (`lib/src/ui/xc.dart` in the patch).
   cell width minus advance (`XC_RUN=1 XC_RUNLS=1`).
 
 B and C key a glyph by a 3-bit luminance bucket (`XC_LUM=1 XC_LUMMODE=2`, next
-subsection). Two interleaved rounds, medians, build / raster ms
-(`paint_spike/main_table.txt`):
+subsection). Two interleaved rounds, medians, build / raster ms:
 
 | payload | stock | A3 `nofb` | B `tint` | C `atlas` | D `runls` |
 |---|---|---|---|---|---|
@@ -1790,10 +1789,10 @@ subsection). Two interleaved rounds, medians, build / raster ms
 Paragraph layouts per frame on `sgr`: stock 1662, `nofb` 1663, `tint` 417,
 `atlas` 75, `runls` 326. The scratch copy with every switch off (`base`)
 matches stock (`sgr` 45.8 / 3.2). The table also has ls, clang, vimcat_unokai,
-git_true and cmatrix, and `paint_spike/extra_table.txt` rg_true and the two
-habamax captures; they read like the real rows above.
+git_true and cmatrix, and a second run rg_true and the two habamax captures;
+they read like the real rows above.
 
-A1, build ms (`paint_spike/a1_table.txt`):
+A1, build ms:
 
 | payload | × 1 | × 2 | × 4 | × 16 |
 |---|---|---|---|---|
@@ -1931,15 +1930,13 @@ python3 script/term_compare/shot_diff.py shot CAND.app SCREENS /tmp/shot/atlas X
 python3 script/term_compare/shot_diff.py diff /tmp/shot/stock /tmp/shot/atlas
 ```
 
-The candidate builds need the patch applied to a copy of the package (`patch
--p1 < script/term_compare/paint_spike/candidates.patch` in the copy's root) and
-the example built against that copy; the switches are read from the
-environment at startup. What does not reproduce from the repo as it stands: the
-candidate tables' layout and key counts came from a scratch `e2e_bench.dart`
-that appends the patch's `XC` counters to each stats row, and from scripts that
-join the stats to per-frame medians. Both are kept as they were, scratch paths
-and all, under `script/term_compare/paint_spike/tools/`; the screens and the
-real captures are in `screens/` and `captures/` beside them.
+The candidate builds were the example built against a patched scratch copy of
+the package, with the switches read from the environment at startup. The
+patch, the scratch `e2e_bench.dart` that appended its counters to each stats
+row and the scripts that joined them to per-frame medians are not kept, so the
+candidate tables do not reproduce from the repo. The screens are in
+`script/term_compare/paint_spike/screens/`; the real captures are kept outside
+the repository.
 
 ## One pass per CSI — 2026-11-20
 
