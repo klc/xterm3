@@ -50,9 +50,15 @@ class GlyphAtlas {
   final _spriteByKey = <int, int>{};
 
   /// Glyphs waiting to be drawn into a page, with the sprite index each will
-  /// have: the new glyphs of the line being painted.
+  /// have: the new glyphs of the line being painted. A glyph that is part of
+  /// a shared paragraph has the shift that puts it at the origin; one with
+  /// a paragraph of its own, which the atlas owns, has none.
   final _pendingIndex = <int>[];
   final _pendingParagraph = <ui.Paragraph>[];
+  final _pendingShift = <Offset?>[];
+
+  /// Paragraphs of many glyphs, disposed of once their glyphs are drawn.
+  final _sharedParagraphs = <ui.Paragraph>[];
 
   final _pages = <ui.Image>[];
   final _spritePage = <int>[];
@@ -112,23 +118,73 @@ class GlyphAtlas {
     Size cellSize,
     double devicePixelRatio,
   ) {
+    final sprite = _add(
+      key,
+      paragraph,
+      null,
+      Size(paragraph.maxIntrinsicWidth, paragraph.height),
+      cellSize,
+      devicePixelRatio,
+    );
+    if (sprite < 0) paragraph.dispose();
+    return sprite;
+  }
+
+  /// Hands the atlas a paragraph of many glyphs, to dispose of once the
+  /// glyphs [addPart] adds from it are drawn.
+  void adopt(ui.Paragraph paragraph) => _sharedParagraphs.add(paragraph);
+
+  /// Like [add], for one glyph of an [adopt]ed [paragraph]: [shift] moves
+  /// the glyph to where it would be in a paragraph of its own, and [size] is
+  /// its box. The paragraph's other glyphs have to be further away than a
+  /// sprite's padding: the sprite is cut out of it.
+  int addPart(
+    int key,
+    ui.Paragraph paragraph,
+    Offset shift,
+    Size size,
+    Size cellSize,
+    double devicePixelRatio,
+  ) {
+    _partCount++;
+    return _add(key, paragraph, shift, size, cellSize, devicePixelRatio);
+  }
+
+  int _add(
+    int key,
+    ui.Paragraph paragraph,
+    Offset? shift,
+    Size size,
+    Size cellSize,
+    double devicePixelRatio,
+  ) {
     if (_spriteWidth == 0) _setGeometry(cellSize, devicePixelRatio);
     if (_capacity == 0 ||
-        paragraph.maxIntrinsicWidth > cellSize.width ||
-        paragraph.height > cellSize.height) {
-      paragraph.dispose();
+        size.width > cellSize.width ||
+        size.height > cellSize.height) {
       _spriteByKey[key] = -1;
       return -1;
     }
-    if (_spriteCount >= _capacity) {
-      paragraph.dispose();
-      return -1;
-    }
+    if (_spriteCount >= _capacity) return -1;
     final index = _spriteCount++;
     _spriteByKey[key] = index;
     _pendingIndex.add(index);
     _pendingParagraph.add(paragraph);
+    _pendingShift.add(shift);
     return index;
+  }
+
+  void _disposePending() {
+    for (var k = 0; k < _pendingParagraph.length; k++) {
+      if (_pendingShift[k] == null) _pendingParagraph[k].dispose();
+    }
+    _pendingIndex.clear();
+    _pendingParagraph.clear();
+    _pendingShift.clear();
+    for (final paragraph in _sharedParagraphs) {
+      paragraph.dispose();
+    }
+    _sharedParagraphs.clear();
   }
 
   /// Queues [sprite] to be drawn at [offset], tinted [color], when the line
@@ -143,6 +199,20 @@ class GlyphAtlas {
   @visibleForTesting
   List<ui.Image> get pages => _pages;
 
+  /// [addPart] calls since the atlas was made.
+  int get partCount => _partCount;
+  var _partCount = 0;
+
+  /// How many more sprites fit before the atlas starts over.
+  int get room => _spriteWidth == 0 ? _maxSprites : _capacity - _spriteCount;
+
+  /// Keys whose glyphs are to be laid out alone, until the atlas starts over.
+  final _solo = <int>{};
+
+  void markSolo(Iterable<int> keys) => _solo.addAll(keys);
+
+  bool isSolo(int key) => _solo.contains(key);
+
   /// Whether sprites are queued and not yet flushed.
   bool get hasQueued => _queuedSprite.isNotEmpty;
 
@@ -156,6 +226,7 @@ class GlyphAtlas {
   /// [canvas].
   void flush(Canvas canvas) {
     if (_pendingIndex.isNotEmpty) _addPage();
+    if (_sharedParagraphs.isNotEmpty) _disposePending();
     final count = _queuedSprite.length;
     if (count == 0) return;
     final scale = 1 / _ratio;
@@ -227,10 +298,19 @@ class GlyphAtlas {
     for (var k = 0; k < count; k++) {
       final sprite = _pendingIndex[k];
       final x = (k % cols) * _spriteWidth, y = (k ~/ cols) * _spriteHeight;
-      canvas.drawParagraph(
-        _pendingParagraph[k],
-        Offset(x / _ratio + _padX, y / _ratio + _padY),
-      );
+      final origin = Offset(x / _ratio + _padX, y / _ratio + _padY);
+      final shift = _pendingShift[k];
+      if (shift == null) {
+        canvas.drawParagraph(_pendingParagraph[k], origin);
+      } else {
+        // The paragraph's other glyphs lie outside the sprite.
+        canvas
+          ..save()
+          ..clipRect(Rect.fromLTWH(x / _ratio, y / _ratio,
+              _spriteWidth / _ratio, _spriteHeight / _ratio))
+          ..drawParagraph(_pendingParagraph[k], origin + shift)
+          ..restore();
+      }
       while (_spritePage.length <= sprite) {
         _spritePage.add(0);
         _spriteX.add(0);
@@ -244,11 +324,7 @@ class GlyphAtlas {
     final picture = recorder.endRecording();
     _pages.add(picture.toImageSync(cols * _spriteWidth, rows * _spriteHeight));
     picture.dispose();
-    for (final paragraph in _pendingParagraph) {
-      paragraph.dispose();
-    }
-    _pendingIndex.clear();
-    _pendingParagraph.clear();
+    _disposePending();
   }
 
   /// Copies every placed sprite into one image, so that a line takes one atlas
@@ -304,11 +380,8 @@ class GlyphAtlas {
   /// pixel ratio changed, or the atlas is full.
   void clear() {
     _spriteByKey.clear();
-    for (final paragraph in _pendingParagraph) {
-      paragraph.dispose();
-    }
-    _pendingIndex.clear();
-    _pendingParagraph.clear();
+    _solo.clear();
+    _disposePending();
     for (final image in _pages) {
       image.dispose();
     }

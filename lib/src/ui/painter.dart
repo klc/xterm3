@@ -354,6 +354,10 @@ class TerminalPainter {
   int get glyphAtlasSpriteCount =>
       _glyphAtlas.spriteCount + _wideGlyphAtlas.spriteCount;
 
+  /// Sprites cut from paragraphs of many glyphs, for tests.
+  @visibleForTesting
+  int get glyphAtlasPartCount => _wideGlyphAtlas.partCount;
+
   int get proceduralGlyphCacheLength => _proceduralGlyphCache.length;
 
   /// Exposed for tests: the number of run texts currently remembered as not
@@ -625,6 +629,10 @@ class TerminalPainter {
     }
   }
 
+  /// Paints the glyphs of [line]; returns whether any of its cells blink.
+  ///
+  /// [followingLines] gives the lines painted after this one, which the
+  /// glyph atlas looks into to lay out new glyphs many at a time.
   bool paintLineForegrounds(
     Canvas canvas,
     Offset offset,
@@ -635,7 +643,9 @@ class TerminalPainter {
     Color? cursorForeground,
     Color? foregroundOverride,
     bool ensureSelectionContrast = false,
+    Iterable<BufferLine> Function()? followingLines,
   }) {
+    _followingLines = followingLines;
     final cellData = _scratchCellData;
     final cellWidth = _cellSize.width;
     final hasCombiningCharacters = line.hasCombiningCharacters;
@@ -671,12 +681,10 @@ class TerminalPainter {
             column: i,
             blinkVisible: blinkVisible,
             activeHyperlinkId: activeHyperlinkId,
-            foregroundOverride: switch (i == cursorColumn) {
-              true => cursorForeground,
-              false => foregroundOverride,
-            },
-            ensureSelectionContrast:
-                ensureSelectionContrast && i != cursorColumn,
+            cursorColumn: cursorColumn,
+            cursorForeground: cursorForeground,
+            foregroundOverride: foregroundOverride,
+            ensureSelectionContrast: ensureSelectionContrast,
           )) {
         if (charWidth == 2) i++;
         continue;
@@ -793,6 +801,100 @@ class TerminalPainter {
     required int column,
     required bool blinkVisible,
     required int? activeHyperlinkId,
+    required int? cursorColumn,
+    required Color? cursorForeground,
+    required Color? foregroundOverride,
+    required bool ensureSelectionContrast,
+  }) {
+    final key = _atlasKey(
+      cellData,
+      line,
+      column,
+      hasCombiningCharacters: hasCombiningCharacters,
+      blinkVisible: blinkVisible,
+      activeHyperlinkId: activeHyperlinkId,
+      cursorColumn: cursorColumn,
+      cursorForeground: cursorForeground,
+      foregroundOverride: foregroundOverride,
+      ensureSelectionContrast: ensureSelectionContrast,
+    );
+    if (key == _atlasNo) return false;
+    if (key == _atlasSkip) return true;
+    final color = _atlasColor;
+    final cellFlags = cellData.flags;
+    final isActiveHyperlink = _atlasActiveHyperlink;
+    final charCode = key % 0x110000;
+    final wide = cellData.content >> CellContent.widthShift == 2;
+    final atlas = wide ? _wideGlyphAtlas : _glyphAtlas;
+    final cellSize = wide ? _wideCellSize : _cellSize;
+    var sprite = atlas.sprite(key);
+    if (sprite == null &&
+        wide &&
+        _atlasBatch(charCode) != 0 &&
+        cellFlags & _atlasDecorations == 0 &&
+        !isActiveHyperlink &&
+        atlas.room > 1 &&
+        !atlas.isSolo(key)) {
+      _layOutAtlasBatch(
+        line,
+        column,
+        key,
+        cellFlags,
+        isActiveHyperlink,
+        hasCombiningCharacters: hasCombiningCharacters,
+        blinkVisible: blinkVisible,
+        activeHyperlinkId: activeHyperlinkId,
+        cursorColumn: cursorColumn,
+        cursorForeground: cursorForeground,
+        foregroundOverride: foregroundOverride,
+        ensureSelectionContrast: ensureSelectionContrast,
+      );
+      sprite = atlas.sprite(key);
+    }
+    if (sprite == null) {
+      final style = _atlasTextStyle(key, cellFlags, isActiveHyperlink);
+      final builder = ParagraphBuilder(style.getParagraphStyle())
+        ..pushStyle(style.getTextStyle(textScaler: _textScaler))
+        ..addText(String.fromCharCode(charCode));
+      final paragraph = builder.build()
+        ..layout(const ParagraphConstraints(width: double.infinity));
+      sprite = atlas.add(key, paragraph, cellSize, _devicePixelRatio);
+    }
+    if (sprite < 0) return false;
+
+    atlas.queue(sprite, offset, color);
+    return true;
+  }
+
+  /// What [_atlasKey] returns for a cell the normal path draws, and for one
+  /// that draws nothing at all.
+  static const _atlasNo = -1;
+  static const _atlasSkip = -2;
+
+  /// The colour, and whether it is an active hyperlink, of the cell
+  /// [_atlasKey] last returned a key for.
+  var _atlasColor = const Color(0x00000000);
+  var _atlasActiveHyperlink = false;
+
+  /// A second scratch cell, for looking ahead along a line.
+  final _lookaheadCellData = CellData.empty();
+
+  /// The lines painted after the line being painted, from
+  /// [paintLineForegrounds].
+  Iterable<BufferLine> Function()? _followingLines;
+
+  /// The atlas key of the cell [cellData] at [column]: its glyph, the styles
+  /// that shape it and the luminance band of its colour, which this sets
+  /// [_atlasColor] to. Or [_atlasNo] or [_atlasSkip].
+  int _atlasKey(
+    CellData cellData,
+    BufferLine line,
+    int column, {
+    required bool hasCombiningCharacters,
+    required bool blinkVisible,
+    required int? activeHyperlinkId,
+    required int? cursorColumn,
+    required Color? cursorForeground,
     required Color? foregroundOverride,
     required bool ensureSelectionContrast,
   }) {
@@ -805,38 +907,42 @@ class TerminalPainter {
     };
     if (wide == null ||
         !(wide ? _atlasCoversWide(charCode) : _atlasCovers(charCode))) {
-      return false;
+      return _atlasNo;
     }
     if (hasCombiningCharacters && line.getCombiningCharacters(column) != null) {
-      return false;
+      return _atlasNo;
     }
     final cellFlags = cellData.flags;
-    if (cellFlags & CellFlags.invisible != 0) return true;
-    if (cellFlags & CellFlags.blink != 0 && !blinkVisible) return true;
+    if (cellFlags & CellFlags.invisible != 0) return _atlasSkip;
+    if (cellFlags & CellFlags.blink != 0 && !blinkVisible) return _atlasSkip;
     // Curly, dotted and dashed underlines come out of a tinted sprite up to
     // 32 levels off at their edges; they are rare enough to draw directly.
-    if (cellFlags & _atlasExcludedUnderlines != 0) return false;
+    if (cellFlags & _atlasExcludedUnderlines != 0) return _atlasNo;
     // A frame goes over the glyph, so it has to wait for the sprite.
-    if (cellFlags & CellAttr.frameMask != 0) return false;
+    if (cellFlags & CellAttr.frameMask != 0) return _atlasNo;
 
+    final atCursor = column == cursorColumn;
+    final override = atCursor ? cursorForeground : foregroundOverride;
     final isActiveHyperlink =
         cellData.hyperlinkId != 0 && cellData.hyperlinkId == activeHyperlinkId;
-    final color = switch (ensureSelectionContrast) {
+    final color = switch (ensureSelectionContrast && !atCursor) {
       true => resolveSelectionForegroundColor(
           cellData,
-          foregroundOverride: foregroundOverride,
+          foregroundOverride: override,
         ),
       false => resolveCellForegroundColor(
           cellData,
-          foregroundOverride: foregroundOverride,
+          foregroundOverride: override,
         ),
     };
     final decorationColor = switch (cellData.underlineColor) {
       0 => _underlineDecorationColor(cellFlags, color),
       _ => resolveForegroundColor(cellData.underlineColor),
     };
-    if (decorationColor != color) return false;
+    if (decorationColor != color) return _atlasNo;
 
+    _atlasColor = color;
+    _atlasActiveHyperlink = isActiveHyperlink;
     final bucket = GlyphAtlas.luminanceBucket(color);
     final styleBits = (cellFlags & _atlasGlyphFlags) |
         switch (isActiveHyperlink) {
@@ -845,34 +951,169 @@ class TerminalPainter {
         };
     // Arithmetic rather than shifts: the key needs more than 32 bits, which
     // shifts do not give on the web.
-    final key = (styleBits * 8 + bucket) * 0x110000 + charCode;
-    final atlas = wide ? _wideGlyphAtlas : _glyphAtlas;
-    final cellSize = wide ? _wideCellSize : _cellSize;
-    var sprite = atlas.sprite(key);
-    if (sprite == null) {
-      final grey = GlyphAtlas.bucketGrey(bucket);
-      final style = _textStyle.toTextStyle(
-        color: grey,
-        decorationColor: grey,
-        bold: cellFlags & CellFlags.bold != 0,
-        italic: cellFlags & CellFlags.italic != 0,
-        underline: _hasUnderline(cellFlags) || isActiveHyperlink,
-        doubleUnderline: _hasDoubleUnderline(cellFlags, isActiveHyperlink),
-        decorationStyle: _decorationStyle(cellFlags),
-        strikethrough: cellFlags & CellAttr.strikethrough != 0,
-        overline: cellFlags & CellAttr.overline != 0,
-      );
-      final builder = ParagraphBuilder(style.getParagraphStyle())
-        ..pushStyle(style.getTextStyle(textScaler: _textScaler))
-        ..addText(String.fromCharCode(charCode));
-      final paragraph = builder.build()
-        ..layout(const ParagraphConstraints(width: double.infinity));
-      sprite = atlas.add(key, paragraph, cellSize, _devicePixelRatio);
-    }
-    if (sprite < 0) return false;
+    return (styleBits * 8 + bucket) * 0x110000 + charCode;
+  }
 
-    atlas.queue(sprite, offset, color);
-    return true;
+  /// The style a sprite for [key] is laid out in: the grey of its luminance
+  /// band and the cell's shaping styles.
+  TextStyle _atlasTextStyle(int key, int cellFlags, bool isActiveHyperlink) {
+    final grey = GlyphAtlas.bucketGrey(key ~/ 0x110000 % 8);
+    return _textStyle.toTextStyle(
+      color: grey,
+      decorationColor: grey,
+      bold: cellFlags & CellFlags.bold != 0,
+      italic: cellFlags & CellFlags.italic != 0,
+      underline: _hasUnderline(cellFlags) || isActiveHyperlink,
+      doubleUnderline: _hasDoubleUnderline(cellFlags, isActiveHyperlink),
+      decorationStyle: _decorationStyle(cellFlags),
+      strikethrough: cellFlags & CellAttr.strikethrough != 0,
+      overline: cellFlags & CellAttr.overline != 0,
+    );
+  }
+
+  /// Which glyphs are laid out together, many to a paragraph: 1 for Han
+  /// ideographs (the unified block and extension A), 2 for Hangul syllables,
+  /// each only with its own kind; 0 for the rest.
+  ///
+  /// A paragraph layout costs about 80 us for a CJK glyph on macOS, most of
+  /// it finding a fallback font, and about 12-15 us a glyph sixteen or more
+  /// to a paragraph. Together is only exact where the fallback font a glyph gets
+  /// does not depend on the glyphs before it: a paragraph tries the fonts it
+  /// has already resolved first, so a full stop after kana takes the kana's
+  /// font where alone it takes another, and Han after Hangul the Hangul
+  /// font's Hanja. Laid out as [_layOutAtlasBatch] lays them out, every
+  /// glyph of the two blocks, 38756 of them in shuffled order, came out with
+  /// the advance, box and baseline it has alone, and a sample of 12644
+  /// identical in pixels; kana and CJK punctuation, in paragraphs of their
+  /// own kind, did not keep their fonts.
+  static int _atlasBatch(int charCode) {
+    if (charCode >= 0x4e00 && charCode <= 0x9fff ||
+        charCode >= 0x3400 && charCode <= 0x4dbf) {
+      return 1;
+    }
+    if (charCode >= 0xac00 && charCode <= 0xd7a3) return 2;
+    return 0;
+  }
+
+  /// Decorations run on through letter spacing, so a decorated glyph is
+  /// laid out alone.
+  static const _atlasDecorations =
+      CellAttr.underlineMask | CellAttr.strikethrough | CellAttr.overline;
+
+  /// Most glyphs laid out in one paragraph.
+  static const _maxAtlasBatch = 64;
+
+  /// Lays out [key]'s glyph together with the other new glyphs of the same
+  /// shaping styles, band and [_atlasBatch] kind, in the rest of [line] from
+  /// [column] and in the following lines, in one paragraph, and adds them to
+  /// [_wideGlyphAtlas]. Lays out nothing when [key] has no such company: the
+  /// caller then lays it out alone.
+  void _layOutAtlasBatch(
+    BufferLine line,
+    int column,
+    int key,
+    int cellFlags,
+    bool isActiveHyperlink, {
+    required bool hasCombiningCharacters,
+    required bool blinkVisible,
+    required int? activeHyperlinkId,
+    required int? cursorColumn,
+    required Color? cursorForeground,
+    required Color? foregroundOverride,
+    required bool ensureSelectionContrast,
+  }) {
+    final atlas = _wideGlyphAtlas;
+    final group = key ~/ 0x110000;
+    final kind = _atlasBatch(key % 0x110000);
+    final most = min(_maxAtlasBatch, atlas.room);
+    final keys = [key];
+    final cellData = _lookaheadCellData;
+    void gather(BufferLine line, int from, bool atCursorLine) {
+      for (var i = from; i < line.length && keys.length < most; i++) {
+        line.getCellData(i, cellData);
+        if (cellData.content >> CellContent.widthShift != 2 ||
+            _atlasBatch(cellData.content & CellContent.codepointMask) != kind) {
+          continue;
+        }
+        final k = _atlasKey(
+          cellData,
+          line,
+          i,
+          hasCombiningCharacters: line.hasCombiningCharacters,
+          blinkVisible: blinkVisible,
+          activeHyperlinkId: activeHyperlinkId,
+          cursorColumn: atCursorLine ? cursorColumn : null,
+          cursorForeground: cursorForeground,
+          foregroundOverride: foregroundOverride,
+          ensureSelectionContrast: ensureSelectionContrast,
+        );
+        i++;
+        if (k >= 0 &&
+            k ~/ 0x110000 == group &&
+            atlas.sprite(k) == null &&
+            !atlas.isSolo(k) &&
+            !keys.contains(k)) {
+          keys.add(k);
+        }
+      }
+    }
+
+    gather(line, column + 2, true);
+    // The lines below are painted next. A key read there is the glyph,
+    // styles and band of some cell whatever the cell, so a cursor there
+    // that this line does not know of costs at most a sprite never used.
+    if (keys.length < most) {
+      for (final following in _followingLines?.call() ?? const <BufferLine>[]) {
+        gather(following, 0, false);
+        if (keys.length >= most) break;
+      }
+    }
+    if (keys.length == 1) return;
+
+    // One line, the glyphs spaced further apart than a sprite reaches; drawn
+    // shifted back to the origin, a glyph rasterised as it does alone at
+    // every device pixel ratio tried. Letter spacing adds no runs, where placeholders
+    // between the glyphs made the layout as dear as one per glyph. The line
+    // starts with a common glyph of the kind, so that the font a fallback
+    // finds for it, the font such glyphs get alone, is the one tried first
+    // for the rest - not one found for a rare glyph that happens to lead.
+    final spacing = 4 * _wideCellSize.width;
+    final style = _atlasTextStyle(key, cellFlags, isActiveHyperlink)
+        .copyWith(letterSpacing: spacing);
+    final builder = ParagraphBuilder(style.getParagraphStyle())
+      ..pushStyle(style.getTextStyle(textScaler: _textScaler))
+      ..addText(String.fromCharCodes([
+        kind == 1 ? 0x4e00 : 0xac00,
+        for (final k in keys) k % 0x110000,
+      ]));
+    final paragraph = builder.build()
+      ..layout(const ParagraphConstraints(width: double.infinity));
+    atlas.adopt(paragraph);
+    final anchor = paragraph.getBoxesForRange(0, 1).first;
+    final boxes = [
+      for (var k = 0; k < keys.length; k++)
+        paragraph.getBoxesForRange(k + 1, k + 2).first,
+    ];
+    // A glyph from a font of other metrics would move the line's baseline,
+    // and every glyph's with it. Not seen on macOS; such glyphs are laid out
+    // alone from then on.
+    for (final box in boxes) {
+      if (box.top != anchor.top || box.bottom != anchor.bottom) {
+        atlas.markSolo(keys);
+        return;
+      }
+    }
+    for (var k = 0; k < keys.length; k++) {
+      final box = boxes[k];
+      atlas.addPart(
+        keys[k],
+        paragraph,
+        Offset(-box.left, 0),
+        Size(box.right - box.left - spacing, paragraph.height),
+        _wideCellSize,
+        _devicePixelRatio,
+      );
+    }
   }
 
   /// Number of consecutive cells starting at [column] that may be shaped as a

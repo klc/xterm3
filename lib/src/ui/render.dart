@@ -1129,6 +1129,9 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
               false => null,
             },
             cursorForeground: cursor.foreground,
+            followingLines: () => [
+              for (var j = i + 1; j <= lastLine; j++) lines[j],
+            ],
           ) ||
           hasBlinkingText;
     }

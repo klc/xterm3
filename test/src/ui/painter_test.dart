@@ -239,6 +239,106 @@ void main() {
       painter.dispose();
     });
 
+    test('draws glyphs from a shared paragraph as from their own', () async {
+      ui.Paragraph layOut(String text, {double spacing = 0}) {
+        final builder = ui.ParagraphBuilder(ui.ParagraphStyle(fontSize: 20))
+          ..pushStyle(ui.TextStyle(letterSpacing: spacing))
+          ..addText(text);
+        return builder.build()
+          ..layout(const ui.ParagraphConstraints(width: double.infinity));
+      }
+
+      // The test font draws p and É apart from each other and from other
+      // letters, so a glyph cut from the wrong place shows.
+      const cell = ui.Size(30, 20);
+      const glyphs = ['p', 'É', 'a', 'É', 'p'];
+      Future<Uint8List> render(GlyphAtlas atlas) async {
+        final recorder = ui.PictureRecorder();
+        final canvas = ui.Canvas(recorder);
+        atlas.beginLine();
+        for (var k = 0; k < glyphs.length; k++) {
+          atlas.queue(k, Offset(k * 30.0 + 15, 5), const ui.Color(0xFFFFFFFF));
+        }
+        atlas.flush(canvas);
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(180, 30);
+        final bytes =
+            await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        picture.dispose();
+        image.dispose();
+        return bytes!.buffer.asUint8List();
+      }
+
+      final alone = GlyphAtlas();
+      for (var k = 0; k < glyphs.length; k++) {
+        expect(alone.add(k, layOut(glyphs[k]), cell, 1), k);
+      }
+      final shared = GlyphAtlas();
+      const spacing = 120.0;
+      final paragraph = layOut(glyphs.join(), spacing: spacing);
+      shared.adopt(paragraph);
+      for (var k = 0; k < glyphs.length; k++) {
+        final box = paragraph.getBoxesForRange(k, k + 1).first;
+        expect(
+          shared.addPart(
+            k,
+            paragraph,
+            Offset(-box.left, 0),
+            ui.Size(box.right - box.left - spacing, paragraph.height),
+            cell,
+            1,
+          ),
+          k,
+        );
+      }
+      expect(shared.partCount, glyphs.length);
+      expect(await render(shared), await render(alone));
+      alone.dispose();
+      shared.dispose();
+    });
+
+    test('lays out Han and Hangul together and draws them as alone', () async {
+      // Two colours of one band share a paragraph; the third colour is in
+      // another band and gets one of its own.
+      const text = '\x1b[38;2;200;0;0m漢字\x1b[38;2;201;0;0m한글漢'
+          '\x1b[38;2;20;200;20m字한\x1b[0m';
+      final line = (Terminal()..write(text)).buffer.lines[0];
+      final stock = painterWith(atlas: false);
+      final atlas = painterWith(atlas: true);
+      expect(difference(await render(stock, line), await render(atlas, line)),
+          lessThanOrEqualTo(8));
+      expect(atlas.glyphAtlasSpriteCount, 6);
+      // 漢字 and 한글 from a paragraph each; 字 and 한, in another band, each
+      // alone.
+      expect(atlas.glyphAtlasPartCount, 4);
+      expect(atlas.paragraphCacheLength, 0);
+
+      // New glyphs on the lines painted next go into the same paragraph.
+      final terminal = Terminal()..write('\x1b[38;2;200;0;0m江\r\n河湖\x1b[0m');
+      final recorder = ui.PictureRecorder();
+      atlas.paintLineForegrounds(
+        ui.Canvas(recorder),
+        Offset.zero,
+        terminal.buffer.lines[0],
+        followingLines: () => [terminal.buffer.lines[1]],
+      );
+      recorder.endRecording().dispose();
+      expect(atlas.glyphAtlasSpriteCount, 9);
+      expect(atlas.glyphAtlasPartCount, 7);
+
+      // An underline would run on through the letter spacing: underlined
+      // glyphs are laid out alone.
+      final underlined =
+          (Terminal()..write('\x1b[4m江河湖\x1b[0m')).buffer.lines[0];
+      expect(
+          difference(
+              await render(stock, underlined), await render(atlas, underlined)),
+          lessThanOrEqualTo(8));
+      expect(atlas.glyphAtlasPartCount, 7);
+      stock.dispose();
+      atlas.dispose();
+    });
+
     test('keeps merged pages within the size limit and starts over when full',
         () {
       ui.Paragraph glyph(String text) {
@@ -271,9 +371,13 @@ void main() {
         }
       }
       expect(atlas.spriteCount, 128);
+      expect(atlas.room, 0);
+      atlas.markSolo([7]);
+      expect(atlas.isSolo(7), isTrue);
       atlas.beginLine();
       expect(atlas.spriteCount, 0);
       expect(atlas.sprite(0), isNull);
+      expect(atlas.isSolo(7), isFalse);
       atlas.dispose();
 
       // A cell too large for a page takes no sprite at all.
