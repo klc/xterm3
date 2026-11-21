@@ -1,3 +1,74 @@
+## [6.6.0-beta.1] - 2026-11-21
+
+A pre-release. Most of the write path and part of the painter were rewritten
+for speed, and the changes are wide enough to want review and use in real
+programs before a stable release. Every change was checked against the build
+before it: a dump of cells, modes, replies and callbacks over 259 files fed
+whole and in eleven kinds of splits, a grid dump over 356 grapheme-heavy
+files, and a pixel comparison of the painter, all identical where behaviour
+was meant to stay the same. `BENCHMARKS.md` has each step.
+
+Headless `Terminal.write`, 170x50 with 10000 lines of scrollback, 6.5.0
+against this release on an Apple M1 Pro, MiB/s: ASCII 140 -> 213, long lines
+154 -> 233, SGR-dense 71 -> 193, Turkish 133 -> 201, Cyrillic 110 -> 202, an
+alternate-screen app 179 -> 289.
+
+### Faster
+
+* The parser takes the tokens most output is made of - runs of text, C0
+  controls and CSI sequences made of digits and separators - in one scan of
+  the input with local state, and parses such a CSI in one pass. SGR-dense
+  and cursor-addressed output parse 2-3 times as fast.
+
+* CJK, kana, Hangul and width-2 emoji are written in text runs, like
+  single-cell text, instead of one character at a time; the narrow text
+  before them goes into the same run. Grapheme joins for wide characters,
+  Hangul, combining marks, Indic vowel signs, flags, ZWJ sequences and VS16
+  are decided without calling the segmenter. Whether a character can go into
+  a run is one table lookup.
+
+* Lines that fall off a scrollback of at least 700000 cells (lines times
+  columns) hand their cleared storage to the next new line instead of leaving
+  it to the garbage collector; see *Changed behaviour* for the memory this
+  costs.
+
+* `TerminalStyle(useGlyphAtlas: true)` draws from a glyph atlas (see *API*):
+  frame build on random 24-bit colour 41 -> 0.6 ms, on random SGR 48 -> 5 ms,
+  on a screen of new CJK 38 -> 11 ms.
+
+In the example app, end to end through a PTY on `flutter_pty2` 3.x with the
+atlas on, against Ghostty 1.4.0 on the same machine: 24-bit colour and
+cursor-addressed output now run level with it or ahead, ASCII within 1.1x,
+SGR-dense 1.3x, mixed unicode 1.9x, CJK 1.5x, emoji 3.8x.
+
+### Changed behaviour
+
+* With a scrollback of at least 700000 cells, line storage tends to the full
+  width once the scrollback has filled: 10000 lines at 100 columns hold
+  19.5 MiB of cells, against 10.8-14.3 MiB for the same output in 6.5.0.
+
+* `PacedTerminalWriter` paces output that arrives one chunk per event-loop
+  turn, as a PTY delivers it. Its budget is per frame across `write` calls;
+  before, it was per call and through a PTY the writer changed nothing.
+  Longest gap between frames on 64 MiB of output: ASCII 318 -> 19 ms, CJK
+  2847 -> 23 ms, at 8-21% lower throughput.
+
+### API
+
+* `Terminal.writeBytes(Uint8List)`: takes output as bytes and decodes it the
+  way a chunked `Utf8Decoder(allowMalformed: true)` does, a character split
+  across chunks included, 1-7% faster than decoding first.
+* `TerminalStyle.useGlyphAtlas`, off by default: letters and CJK characters
+  are drawn from an atlas of sprites tinted per cell, so output with many
+  colours stops laying out a glyph on most cells of every frame. Emoji,
+  symbols, box drawing, combining characters, curly, dotted and dashed
+  underlines and framed cells keep the paragraph path; ignored with
+  ligatures. Pixels match the paragraph path on plain text, vim, wide and
+  CJK screens; random colour differs by 2-5 levels a channel, up to 28 on
+  saturated colours. Verified on macOS with Impeller only.
+* `TerminalPainter.paintLineForegrounds(followingLines:)`: the lines painted
+  after this one, so the atlas can lay out a screen's new glyphs together.
+
 ## [6.5.0] - 2026-11-16
 
 This release comes out of a review of the package for speed and resource use.
