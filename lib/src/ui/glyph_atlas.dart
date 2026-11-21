@@ -153,8 +153,9 @@ class GlyphAtlas {
     _partCount++;
     final sprite =
         _add(key, paragraph, shift, size, cellSize, devicePixelRatio);
-    if (sprite >= 0)
+    if (sprite >= 0) {
       _pendingDecorations[_pendingDecorations.length - 1] = decorations;
+    }
     return sprite;
   }
 

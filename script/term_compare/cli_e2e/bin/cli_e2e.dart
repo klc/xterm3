@@ -30,8 +30,7 @@ Future<void> main(List<String> args) async {
     arguments: args,
     size: const PtySize(columns: 100, rows: 37),
   ));
-  final dec =
-      const Utf8Decoder().startChunkedConversion(_Sink(terminal.write));
+  final dec = const Utf8Decoder().startChunkedConversion(_Sink(terminal.write));
   session.output.listen(dec.add);
   terminal.onOutput = (d) => unawaited(session.input.writeUtf8(d));
   await session.done;
