@@ -37,9 +37,15 @@ class EscapeParser {
   final EscapeHandler handler;
 
   EscapeParser(this.handler)
-      : _mixedWidthHandler = handler is MixedWidthTextHandler
+      : _textHandler =
+            handler is EscapeTextHandler ? handler as EscapeTextHandler : null,
+        _mixedWidthHandler = handler is MixedWidthTextHandler
             ? handler as MixedWidthTextHandler
             : null;
+
+  /// [handler], when it takes runs of text. Tested once here rather than by
+  /// an interface type test for every token.
+  final EscapeTextHandler? _textHandler;
 
   /// [handler], when it also takes text runs that hold wide characters.
   final MixedWidthTextHandler? _mixedWidthHandler;
@@ -141,23 +147,12 @@ class EscapeParser {
         continue;
       }
 
-      if (handler case final EscapeTextHandler textHandler) {
-        final runLength = _queue.printableTextRunLength;
-        if (runLength > 0) {
-          tokenBegin = _queue.totalConsumed;
-          final data = _queue.currentBlock;
-          final start = _queue.currentCodeUnitOffset;
-          _queue.consumeAsciiCodeUnits(runLength);
-          textHandler.writeText(data, start, start + runLength);
-          continue;
-        }
-      }
+      if (_scanHeadBlock()) continue;
 
       tokenBegin = _queue.totalConsumed;
       final char = _queue.consume();
 
       if (char == Ascii.ESC) {
-        if (_tryFastCsi()) continue;
         final processed = _processEscape();
         if (!processed) {
           _queue.rollback(tokenEnd - tokenBegin);
@@ -175,12 +170,96 @@ class EscapeParser {
     }
   }
 
+  /// Takes the tokens most output is made of - runs of [isSingleCellPrintable]
+  /// text, C0 controls, the common CSI (see [_scanCsi]) and characters taken
+  /// one at a time - one after another from the head block, reading it
+  /// through a local index and committing each token to [_queue] right before
+  /// it is dispatched, since [tokenBegin], [tokenEnd] and [capturedToken] may
+  /// be read then.
+  ///
+  /// Returns true when it ran to the end of the head block, or when a handler
+  /// wrote to this parser again and moved the head on. Returns false when it
+  /// stopped, with nothing more consumed, at a code unit that [_process] has
+  /// to take token by token: an ESC that ends the block or starts anything but
+  /// the common CSI, C1 controls, and text when [handler] takes no runs.
+  ///
+  /// Taken token by token, each token paid for [_process]'s state flags and an
+  /// interface type test, three or four calls into [_queue] that each stepped
+  /// past a consumed head block, and a CSI one consume() for its ESC on top of
+  /// its one-pass scan. On SGR-dense and cursor-addressed output a token comes
+  /// every 5-10 bytes.
+  bool _scanHeadBlock() {
+    final queue = _queue;
+    final textHandler = _textHandler;
+    final data = queue.currentBlock;
+    var index = queue.headOffset;
+    while (index < data.length) {
+      final codeUnit = data.codeUnitAt(index);
+      var end = index + 1;
+      if (isSingleCellPrintable(codeUnit)) {
+        if (textHandler == null) return false;
+        while (
+            end < data.length && isSingleCellPrintable(data.codeUnitAt(end))) {
+          end++;
+        }
+        tokenBegin = queue.totalConsumed;
+        queue.consumeHeadTo(end);
+        // Below U+3000 nothing carries a run on: ASCII, SGR-dense and
+        // cursor-addressed output stop here at a control, and pay for this
+        // one test a run.
+        if (end < data.length && data.codeUnitAt(end) >= 0x3000) {
+          _writeRunCarriedOn(textHandler, data, index, end);
+        } else {
+          textHandler.writeText(data, index, end);
+        }
+      } else if (codeUnit == Ascii.ESC) {
+        end = _scanCsi(data, end);
+        if (end < 0) return false;
+        tokenBegin = queue.totalConsumed;
+        queue.consumeHeadTo(end);
+        final finalByte = _csi.finalByte;
+        switch (finalByte) {
+          case 0x6d: // m
+            _csiHandleSgr();
+          case 0x48: // H
+            _csiHandleCursorPosition();
+          default:
+            final csiHandler = _csiHandlers[finalByte];
+            if (csiHandler == null) {
+              handler.unknownCSI(finalByte);
+            } else {
+              csiHandler();
+            }
+        }
+      } else if (codeUnit < Ascii.space) {
+        tokenBegin = queue.totalConsumed;
+        queue.consumeHeadTo(end);
+        _processChar(codeUnit);
+      } else if (codeUnit < 0x80 || codeUnit > 0x9f) {
+        // Wide and astral characters, marks and DEL, one code point each.
+        // Sent back to [_process] they cost a call in and out of here and
+        // [_process]'s state flags on every one, and emoji sequences are
+        // made of little else.
+        tokenBegin = queue.totalConsumed;
+        _processChar(queue.consume());
+      } else {
+        return false;
+      }
+      // A handler that wrote to this parser again has stepped [_queue] past
+      // [data] or replaced it; [_process] takes it from there. Otherwise only
+      // a run a wide character carried on has gone past [end].
+      if (!identical(queue.headBlock, data)) return true;
+      index = queue.headOffset;
+    }
+    return true;
+  }
+
   /// Parses the common CSI - `[`, then only digits, `;` and `:`, then a final
-  /// byte - in one pass over the head block, right after its ESC was consumed,
-  /// and dispatches it. Returns false, having consumed nothing, for anything
-  /// else: a private prefix, an intermediate or control byte, a sequence that
-  /// runs past the head block or past [_maxCsiRawLength]; [_processEscape]
-  /// then parses it as before, byte by byte.
+  /// byte - into [_csi] in one pass over [data] from [start], just past its
+  /// ESC, and returns the index just past its final byte. Returns -1 for
+  /// anything else: a private prefix, an intermediate or control byte, a
+  /// sequence that runs past [data] or past [_maxCsiRawLength]; the ESC is
+  /// then left to [_processEscape], which parses it byte by byte.
   ///
   /// The byte-by-byte path pays for its generality on every sequence: a
   /// `_pendingEscape` round trip, a peek for the prefix, a queue call and five
@@ -191,11 +270,10 @@ class EscapeParser {
   /// It leaves [_csi] as [_consumeCsi] does for the same sequence: no prefix,
   /// no intermediates, the same clamped parameters and separators, and
   /// [_csiOverflowed] false.
-  bool _tryFastCsi() {
-    if (_queue.isEmpty) return false;
-    final data = _queue.currentBlock;
-    final start = _queue.currentCodeUnitOffset;
-    if (data.codeUnitAt(start) != Ascii.openBracket) return false;
+  int _scanCsi(String data, int start) {
+    if (start >= data.length || data.codeUnitAt(start) != Ascii.openBracket) {
+      return -1;
+    }
     final csi = _csi;
     final params = csi.params;
     final separators = csi.paramSeparators;
@@ -210,7 +288,7 @@ class EscapeParser {
     var hasParamSeparator = false;
     var char = 0;
     while (true) {
-      if (index >= end) return false;
+      if (index >= end) return -1;
       char = data.codeUnitAt(index);
       if (char >= Ascii.num0 && char <= Ascii.num9) {
         param = param * 10 + char - Ascii.num0;
@@ -229,7 +307,7 @@ class EscapeParser {
       }
       index++;
     }
-    if (char < Ascii.atSign || char > Ascii.tilde) return false;
+    if (char < Ascii.atSign || char > Ascii.tilde) return -1;
     if ((hasParam || hasParamSeparator) && params.length < _maxCsiParams) {
       params.add(param);
     }
@@ -237,21 +315,7 @@ class EscapeParser {
     if (csi.intermediates.isNotEmpty) csi.intermediates.clear();
     csi.finalByte = char;
     _csiOverflowed = false;
-    _queue.consumeAsciiCodeUnits(index + 1 - start);
-    switch (char) {
-      case 0x6d: // m
-        _csiHandleSgr();
-      case 0x48: // H
-        _csiHandleCursorPosition();
-      default:
-        final csiHandler = _csiHandlers[char];
-        if (csiHandler == null) {
-          handler.unknownCSI(char);
-        } else {
-          csiHandler();
-        }
-    }
-    return true;
+    return index + 1;
   }
 
   bool _processC1(int char) {
@@ -350,8 +414,9 @@ class EscapeParser {
   /// the head block.
   ///
   /// This sits where a character that no single-cell run took ends up, not
-  /// in the run scan [_process] makes for every token: that scan, which ASCII,
-  /// SGR-dense and cursor-addressed output go through, is left as it was.
+  /// in [_scanHeadBlock], which ASCII, SGR-dense and cursor-addressed output
+  /// go through. A single-cell run that a wide character carries on is
+  /// [_writeRunCarriedOn]'s.
   void _writeWideRun(MixedWidthTextHandler mixedWidthHandler, int char) {
     final data = _queue.headBlock;
     final start = _queue.headOffset - (char > 0xffff ? 2 : 1);
@@ -363,6 +428,35 @@ class EscapeParser {
       return;
     }
     mixedWidthHandler.writeMixedWidthText(data, start, end);
+  }
+
+  /// Writes the single-cell run [start]..[end] of [data], just consumed,
+  /// together with the wide run characters and the narrow ones after them
+  /// that carry it on, when [handler] takes mixed-width runs.
+  ///
+  /// Written apart, the narrow prefix cost a text run of its own, and the
+  /// wide unit after it a token through the per-character path and a join
+  /// check that cannot succeed after a narrow character - about once per
+  /// line of mixed text.
+  ///
+  /// Kept out of [_scanHeadBlock], which only tests the code unit the run
+  /// stopped at: inlined there, the extra code would sit in the loop every
+  /// ASCII, SGR-dense and cursor-addressed run goes through.
+  @pragma('vm:never-inline')
+  void _writeRunCarriedOn(
+    EscapeTextHandler textHandler,
+    String data,
+    int start,
+    int end,
+  ) {
+    if (_mixedWidthHandler case final mixedWidthHandler?) {
+      final runEnd = _queue.consumeTextRunInHead();
+      if (runEnd > end) {
+        mixedWidthHandler.writeMixedWidthText(data, start, runEnd);
+        return;
+      }
+    }
+    textHandler.writeText(data, start, end);
   }
 
   /// Processes a sequence of characters that starts with an escape character.

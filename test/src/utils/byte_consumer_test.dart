@@ -68,11 +68,11 @@ void main() {
   test('releases consumed prefixes while preserving pending input', () {
     final consumer = ByteConsumer()..add('${'x' * 1024}pending');
 
-    consumer.consumeAsciiCodeUnits(1024);
+    consumer.consumeHeadTo(1024);
     consumer.unrefConsumedBlocks();
 
     expect(consumer.currentBlock, 'pending');
-    expect(consumer.currentCodeUnitOffset, 0);
+    expect(consumer.headOffset, 0);
     expect(_consumeAll(consumer), 'pending'.runes);
   });
 
@@ -109,41 +109,10 @@ void main() {
     expect(_consumeAll(consumer), 'a😀b😁c'.runes);
   });
 
-  test('single-cell runs span Latin-1, Greek and Cyrillic', () {
-    final consumer = ByteConsumer()..add('göz строка\u{0301}');
-
-    // Stops at the combining acute, which is not a single-cell character.
-    expect(consumer.printableTextRunLength, 'göz строка'.length);
-    // The ASCII-only scan stops at the first accented letter instead.
-    expect(consumer.printableAsciiRunLength, 1);
-  });
-
-  test('single-cell runs span dashes, box drawing and braille', () {
-    final consumer = ByteConsumer()..add('a \u{2014} ┌──┐ ▁▂▃ ⣿⣀\u{4E00}');
-
-    expect(consumer.printableTextRunLength, 'a \u{2014} ┌──┐ ▁▂▃ ⣿⣀'.length);
-  });
-
-  test('single-cell runs stop at characters that need the slow path', () {
-    // Soft hyphen and the zero width joiner are zero width; CJK is outside
-    // the ranges; an emoji is a surrogate pair.
-    for (final text in [
-      'a\u{00AD}b',
-      'a\u{200D}b',
-      'a\u{4E00}b',
-      'a\u{1F600}b'
-    ]) {
-      final consumer = ByteConsumer()..add(text);
-      expect(consumer.printableTextRunLength, 1, reason: text);
-    }
-  });
-
   test('a run carried on from a wide character takes single-cell text too', () {
     final consumer = ByteConsumer()..add('ab中文、ＡＢcd😀ef\u{0301}');
 
-    // The single-cell scan stops at the first wide character.
-    expect(consumer.printableTextRunLength, 2);
-    consumer.consumeAsciiCodeUnits(2);
+    consumer.consumeHeadTo(2);
     expect(consumer.consume(), '中'.codeUnitAt(0));
     expect(consumer.headBlock, 'ab中文、ＡＢcd😀ef\u{0301}');
     expect(consumer.headOffset, 3);
@@ -174,21 +143,22 @@ void main() {
     }
   });
 
-  test('consumes printable ASCII runs without crossing controls or blocks', () {
+  test('consumes scanned runs without crossing controls or blocks', () {
     final consumer = ByteConsumer()
       ..add('abc\x1b')
       ..add('def');
 
     expect(consumer.printableAsciiRunLength, 3);
     expect(consumer.currentBlock, 'abc\x1b');
-    expect(consumer.currentCodeUnitOffset, 0);
+    expect(consumer.headOffset, 0);
 
-    consumer.consumeAsciiCodeUnits(3);
+    consumer.consumeHeadTo(3);
     expect(consumer.totalConsumed, 3);
     expect(consumer.consume(), 0x1b);
     expect(consumer.printableAsciiRunLength, 3);
+    expect(consumer.headBlock, 'def');
 
-    consumer.consumeAsciiCodeUnits(3);
+    consumer.consumeHeadTo(3);
     expect(consumer.totalConsumed, 7);
     expect(consumer, isEmpty);
 
@@ -204,11 +174,11 @@ void main() {
       consumer.add('cd');
 
       expect(consumer.currentBlock, 'ab');
-      expect(consumer.currentCodeUnitOffset, 1);
-      expect(consumer.printableTextRunLength, 1);
+      expect(consumer.headOffset, 1);
+      expect(consumer.printableAsciiRunLength, 1);
       expect(consumer.consume(), 0x62);
       expect(consumer.currentBlock, 'cd');
-      expect(consumer.printableTextRunLength, 2);
+      expect(consumer.printableAsciiRunLength, 2);
       expect(_consumeAll(consumer), 'cd'.runes);
     });
 
@@ -219,9 +189,9 @@ void main() {
       consumer.add('xyz');
 
       expect(consumer.currentBlock, 'xyz');
-      expect(consumer.currentCodeUnitOffset, 0);
-      expect(consumer.printableTextRunLength, 3);
-      consumer.consumeAsciiCodeUnits(2);
+      expect(consumer.headOffset, 0);
+      expect(consumer.printableAsciiRunLength, 3);
+      consumer.consumeHeadTo(2);
       expect(consumer.consume(), 0x7a);
       expect(consumer, isEmpty);
     });
@@ -230,14 +200,14 @@ void main() {
       final consumer = ByteConsumer()
         ..add('ab')
         ..add('cd');
-      consumer.consumeAsciiCodeUnits(2);
+      consumer.consumeHeadTo(2);
       expect(consumer.consume(), 0x63);
       expect(consumer.currentBlock, 'cd');
 
       consumer.rollback(2);
       expect(consumer.currentBlock, 'ab');
-      expect(consumer.currentCodeUnitOffset, 1);
-      expect(consumer.printableTextRunLength, 1);
+      expect(consumer.headOffset, 1);
+      expect(consumer.printableAsciiRunLength, 1);
       expect(_consumeAll(consumer), 'bcd'.runes);
     });
 
@@ -250,7 +220,7 @@ void main() {
       consumer.consume();
       consumer.rollback(2);
       expect(consumer.currentBlock, 'a😀');
-      expect(consumer.currentCodeUnitOffset, 1);
+      expect(consumer.headOffset, 1);
       expect(_consumeAll(consumer), '😀😁'.runes);
     });
 
@@ -261,11 +231,11 @@ void main() {
       consumer.consume();
       expect(consumer.peek(), 0x61);
       expect(consumer.currentBlock, 'xa');
-      expect(consumer.currentCodeUnitOffset, 1);
+      expect(consumer.headOffset, 1);
       expect(consumer.consume(), 0x61);
       expect(consumer.peek(), 0x62);
       expect(consumer.currentBlock, 'b');
-      expect(consumer.currentCodeUnitOffset, 0);
+      expect(consumer.headOffset, 0);
       expect(_consumeAll(consumer), 'b'.runes);
     });
 
@@ -275,10 +245,10 @@ void main() {
       consumer.consume();
       consumer.unrefConsumedBlocks();
       expect(consumer.currentBlock, 'c');
-      expect(consumer.currentCodeUnitOffset, 0);
+      expect(consumer.headOffset, 0);
 
       consumer.add('de');
-      expect(consumer.printableTextRunLength, 1);
+      expect(consumer.printableAsciiRunLength, 1);
       expect(_consumeAll(consumer), 'cde'.runes);
     });
 

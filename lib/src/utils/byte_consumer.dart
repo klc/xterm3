@@ -131,11 +131,6 @@ class ByteConsumer {
     return _head;
   }
 
-  int get currentCodeUnitOffset {
-    _advancePastConsumedBlocks();
-    return _currentOffset;
-  }
-
   int get printableAsciiRunLength {
     _advancePastConsumedBlocks();
     final data = _head;
@@ -143,24 +138,6 @@ class ByteConsumer {
     while (offset < data.length) {
       final codeUnit = data.codeUnitAt(offset);
       if (codeUnit < 0x20 || codeUnit > 0x7e) break;
-      offset++;
-    }
-    return offset - _currentOffset;
-  }
-
-  /// Length of the run of code units that can be written straight into cells,
-  /// one unit per cell - see [isSingleCellPrintable].
-  ///
-  /// Wider than [printableAsciiRunLength], which stops at the first byte above
-  /// ASCII. That mattered: one accented letter used to drop the rest of the
-  /// line onto the per-code-point path, because the run ended at the letter
-  /// and every letter after it started a run of its own.
-  int get printableTextRunLength {
-    _advancePastConsumedBlocks();
-    final data = _head;
-    var offset = _currentOffset;
-    while (offset < data.length &&
-        isSingleCellPrintable(data.codeUnitAt(offset))) {
       offset++;
     }
     return offset - _currentOffset;
@@ -178,11 +155,28 @@ class ByteConsumer {
   /// has returned a single code unit, one past where that unit sits.
   int get headOffset => _currentOffset;
 
+  /// Consumes the code units of [headBlock] up to [offset], for a caller that
+  /// has scanned them itself; each must be a code point of its own.
+  ///
+  /// It neither steps past a consumed head block nor range-checks the count:
+  /// the parser commits every token it scans in the head block through this,
+  /// and those two would cost it on each.
+  void consumeHeadTo(int offset) {
+    assert(_headIsCurrent);
+    assert(offset >= _currentOffset && offset <= _head.length);
+    final count = offset - _currentOffset;
+    _currentOffset = offset;
+    _remainingCodeUnits -= count;
+    _totalConsumed += count;
+    _rollbackAvailable += count;
+  }
+
   /// Consumes the run of [isSingleCellPrintable] and [isWideRunUnit] code
   /// units and [isWideRunEmoji] surrogate pairs starting at [headOffset], and
   /// returns where in [headBlock] it ends. Used to carry on a run that a wide
-  /// character, just consumed, has started; like [consume], it counts a pair
-  /// as one.
+  /// character, just consumed, has started, or a single-cell run, just
+  /// consumed, that a wide character goes on with; like [consume], it counts
+  /// a pair as one.
   int consumeTextRunInHead() {
     assert(_headIsCurrent);
     final data = _head;
@@ -244,18 +238,6 @@ class ByteConsumer {
     }
 
     return parts.reversed.join();
-  }
-
-  void consumeAsciiCodeUnits(int count) {
-    _advancePastConsumedBlocks();
-    final available = _head.length - _currentOffset;
-    if (count < 0 || count > available) {
-      throw RangeError.range(count, 0, available, 'count');
-    }
-    _currentOffset += count;
-    _remainingCodeUnits -= count;
-    _totalConsumed += count;
-    _rollbackAvailable += count;
   }
 
   /// Unreferences blocks consumed before the current parsing transaction.

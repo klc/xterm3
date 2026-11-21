@@ -144,6 +144,33 @@ void main() {
     });
   });
 
+  group('Buffer.writeAscii()', () {
+    test('a run that wraps from beyond the right margin keeps inside it', () {
+      // Right of the right margin, the run may go to the edge of the screen;
+      // once it wraps to the left margin, only to the right margin.
+      const setup = '\x1b[?69h\x1b[3;5s\x1b[1;8H';
+      const text = 'abcdefgh';
+      final terminal = Terminal()..resize(10, 3);
+      terminal.write('$setup$text');
+
+      final perCharacter = Terminal()..resize(10, 3);
+      perCharacter.write(setup);
+      for (final codeUnit in text.codeUnits) {
+        perCharacter.buffer.writeChar(codeUnit);
+      }
+
+      // Outside the horizontal margins a wrap does not move down a line.
+      expect(terminal.buffer.lines[0].toString(), '  def  abc');
+      expect(terminal.buffer.lines[1].toString(), '  gh');
+      for (var row = 0; row < 3; row++) {
+        expect(
+          terminal.buffer.lines[row].toString(),
+          perCharacter.buffer.lines[row].toString(),
+        );
+      }
+    });
+  });
+
   group('Buffer.getText()', () {
     test('should return the text', () {
       final terminal = Terminal();

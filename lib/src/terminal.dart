@@ -914,7 +914,10 @@ class Terminal
   @override
   void writeText(String text, int start, int end) {
     if (start >= end) return;
-    _captureITerm2ClipboardTextRange(text, start, end);
+    // Nearly always idle; asked here, the run does not pay for the call.
+    if (_clipboardCapture.isActive) {
+      _captureITerm2ClipboardTextRange(text, start, end);
+    }
     _buffer.writeAscii(text, start, end);
     _precedingCodepoint = text.codeUnitAt(end - 1);
   }

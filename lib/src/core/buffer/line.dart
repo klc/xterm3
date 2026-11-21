@@ -84,6 +84,10 @@ class BufferLine with IndexedItem {
     }
     _data = _noCells;
     _used = 0;
+    // The maps are keyed by cell; with no cells left their entries would
+    // outlive [_used], which the writers rely on never happening.
+    _combiningCharacters = null;
+    _underlineColors = null;
     return data;
   }
 
@@ -116,18 +120,26 @@ class BufferLine with IndexedItem {
   /// instead of walking the blank tail of a short line.
   int get writtenLength => _used < _length ? _used : _length;
 
-  final _anchors = <CellAnchor>[];
+  /// Null until the line has an anchor, which few ever do: a list per line
+  /// was an object more for every line scrolled through.
+  List<CellAnchor>? _anchors;
 
+  /// Only a cell holding a code point gets a combining string, so every key
+  /// is below [_used]: a write at or past it has nothing here to drop. Text
+  /// written left to right lands there, and on a line of emoji sequences -
+  /// a combining string every few cells - the drops cost more than the cells.
   Map<int, String>? _combiningCharacters;
 
   Map<int, int>? _underlineColors;
 
-  List<CellAnchor> get anchors => UnmodifiableListView(_anchors);
+  // The view stays live, seeing anchors created after it was taken, so it has
+  // to wrap the list those anchors will go into.
+  List<CellAnchor> get anchors => UnmodifiableListView(_anchors ??= []);
 
   /// Whether this line carries any anchors, without building the view
   /// [anchors] returns. Reflow asks this per line and, for a line that has
   /// none, that view was the only thing allocated.
-  bool get hasAnchors => _anchors.isNotEmpty;
+  bool get hasAnchors => _anchors?.isNotEmpty ?? false;
 
   bool get hasCombiningCharacters => _combiningCharacters?.isNotEmpty ?? false;
 
@@ -269,6 +281,7 @@ class BufferLine with IndexedItem {
   void setCell(int index, int char, int width, CursorStyle style) {
     _repairWideCellPairing(index, width, style);
 
+    final used = _used;
     _ensureCapacity(index);
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
@@ -278,8 +291,16 @@ class BufferLine with IndexedItem {
         style.semanticAttrs;
     _data[offset + _cellContent] = char | (width << CellContent.widthShift);
     _setUnderlineColor(index, style.underlineColor);
-    _combiningCharacters?.remove(index);
+    assert(
+      index < used || !(_combiningCharacters?.containsKey(index) ?? false),
+    );
+    if (index < used) _combiningCharacters?.remove(index);
   }
+
+  bool _hasCombiningCharactersIn(int start, int end) =>
+      _combiningCharacters?.keys
+          .any((index) => index >= start && index < end) ??
+      false;
 
   /// Keeps the width-2 lead / width-0 placeholder pairing invariant intact
   /// across a raw [setCell] write, regardless of what the caller remembers
@@ -323,6 +344,7 @@ class BufferLine with IndexedItem {
     assert(textStart >= 0 && textStart + count <= text.length);
     if (count <= 0) return;
 
+    final used = _used;
     _ensureCapacity(start + count - 1);
     clearWideCellAt(start, style);
     clearWideCellAt(start + count - 1, style);
@@ -336,8 +358,8 @@ class BufferLine with IndexedItem {
       final cellOffset = (start + offset) * _cellSize;
       final codeUnit = text.codeUnitAt(textStart + offset);
       // Callers must have established that every unit occupies exactly one
-      // cell - see `ByteConsumer.printableTextRunLength`, which is where the
-      // run this writes comes from.
+      // cell - see `EscapeParser._scanHeadBlock`, which is where the run this
+      // writes comes from.
       assert(isSingleCellPrintable(codeUnit));
       _data[cellOffset + _cellForeground] = foreground;
       _data[cellOffset + _cellBackground] = background;
@@ -347,8 +369,12 @@ class BufferLine with IndexedItem {
     }
 
     final end = start + count;
+    // [removeWhere] visits every combining string on the line, and a run
+    // starting at [_used] or past it - see [_combiningCharacters] - would
+    // find none of them in its span.
+    assert(start < used || !_hasCombiningCharactersIn(start, end));
     if (_combiningCharacters case final combiningCharacters?
-        when combiningCharacters.isNotEmpty) {
+        when start < used && combiningCharacters.isNotEmpty) {
       combiningCharacters.removeWhere(
         (index, _) => index >= start && index < end,
       );
@@ -386,6 +412,7 @@ class BufferLine with IndexedItem {
     assert(textStart >= 0 && textStart + count <= text.length);
     if (count <= 0) return;
 
+    final used = _used;
     _ensureCapacity(start + cells - 1);
     clearWideCellAt(start, style);
     clearWideCellAt(start + cells - 1, style);
@@ -427,8 +454,9 @@ class BufferLine with IndexedItem {
     assert(cellOffset == (start + cells) * _cellSize);
 
     final end = start + cells;
+    assert(start < used || !_hasCombiningCharactersIn(start, end));
     if (_combiningCharacters case final combiningCharacters?
-        when combiningCharacters.isNotEmpty) {
+        when start < used && combiningCharacters.isNotEmpty) {
       combiningCharacters.removeWhere(
         (index, _) => index >= start && index < end,
       );
@@ -665,8 +693,8 @@ class BufferLine with IndexedItem {
     }
 
     // Update anchors, remove anchors that are inside the removed range.
-    if (_anchors.isNotEmpty) {
-      for (final anchor in _anchors.toList()) {
+    if (_anchors case final anchors? when anchors.isNotEmpty) {
+      for (final anchor in anchors.toList()) {
         if (anchor.x >= start) {
           if (anchor.x < start + count) {
             anchor.dispose();
@@ -769,8 +797,8 @@ class BufferLine with IndexedItem {
     }
 
     // Update anchors, move anchors that are after the inserted range.
-    if (_anchors.isNotEmpty) {
-      for (final anchor in _anchors.toList()) {
+    if (_anchors case final anchors? when anchors.isNotEmpty) {
+      for (final anchor in anchors.toList()) {
         if (anchor.x >= end - count && anchor.x < end) {
           anchor.dispose();
           continue;
@@ -814,10 +842,12 @@ class BufferLine with IndexedItem {
       }
     }
 
-    for (var i = 0; i < _anchors.length; i++) {
-      final anchor = _anchors[i];
-      if (anchor.x > _length) {
-        anchor.reposition(_length);
+    if (_anchors case final anchors?) {
+      for (var i = 0; i < anchors.length; i++) {
+        final anchor = anchors[i];
+        if (anchor.x > _length) {
+          anchor.reposition(_length);
+        }
       }
     }
   }
@@ -992,12 +1022,14 @@ class BufferLine with IndexedItem {
 
   CellAnchor createAnchor(int offset) {
     final anchor = CellAnchor(offset, owner: this);
-    _anchors.add(anchor);
+    (_anchors ??= []).add(anchor);
     return anchor;
   }
 
   void dispose() {
-    for (final anchor in _anchors.toList()) {
+    final anchors = _anchors;
+    if (anchors == null) return;
+    for (final anchor in anchors.toList()) {
       anchor.dispose();
     }
   }
@@ -1039,9 +1071,9 @@ class CellAnchor {
   bool get attached => _owner?.attached ?? false;
 
   void reparent(BufferLine owner, int offset) {
-    _owner?._anchors.remove(this);
+    _owner?._anchors?.remove(this);
     _owner = owner;
-    _owner?._anchors.add(this);
+    (owner._anchors ??= []).add(this);
     _offset = offset;
   }
 
@@ -1050,7 +1082,7 @@ class CellAnchor {
   }
 
   void dispose() {
-    _owner?._anchors.remove(this);
+    _owner?._anchors?.remove(this);
     _owner = null;
   }
 

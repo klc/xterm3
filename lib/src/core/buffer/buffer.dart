@@ -50,13 +50,15 @@ class Buffer {
 
   int _cursorY = 0;
 
-  late int _marginTop;
+  // The constructor sets the margins. Not late: a late field checks that it
+  // was set on every read, and the margins are read for every line.
+  int _marginTop = 0;
 
-  late int _marginBottom;
+  int _marginBottom = 0;
 
-  late int _marginLeft;
+  int _marginLeft = 0;
 
-  late int _marginRight;
+  int _marginRight = 0;
 
   var _savedCursorX = 0;
 
@@ -189,20 +191,19 @@ class Buffer {
       return;
     }
 
+    // Most runs are a few cells and fit in one pass, so what each pass reads
+    // is paid per run: the style once, the right limit once unless a wrap
+    // moved the cursor under a different one.
+    final style = terminal.cursor;
     while (start < end) {
-      final rightLimit = _rightLimit;
+      var rightLimit = _rightLimit;
       if (_cursorX >= rightLimit) {
         _wrapInput();
+        rightLimit = _rightLimit;
       }
 
-      final count = min(end - start, _rightLimit - _cursorX);
-      currentLine.setAsciiCells(
-        _cursorX,
-        text,
-        start,
-        count,
-        terminal.cursor,
-      );
+      final count = min(end - start, rightLimit - _cursorX);
+      currentLine.setAsciiCells(_cursorX, text, start, count, style);
       _cursorX += count;
       start += count;
     }
@@ -214,11 +215,11 @@ class Buffer {
   ///
   /// Each stretch of the run that fits on the line is written in one call.
   /// What has to decide something goes through [writeChar] one unit at a
-  /// time, exactly as before: a wide first unit, which may continue the
-  /// cluster in the cell before the run (see [isWideRunUnit]), and a wide
-  /// unit that meets the right margin - with one column left, where it pads
-  /// and wraps or is dropped, or with none, where it wraps. None of them
-  /// comes up more than once a line.
+  /// time, exactly as before: a wide first unit that continues the cluster in
+  /// the cell before the run (see [isWideRunUnit]), and a wide unit that
+  /// meets the right margin - with one column left, where it pads and wraps
+  /// or is dropped, or with none, where it wraps. None of them comes up more
+  /// than once a line.
   void writeMixedWidth(String text, int start, int end) {
     if (terminal.insertMode || !terminal.autoWrapMode || !charset.isAscii) {
       while (start < end) {
@@ -227,7 +228,21 @@ class Buffer {
       return;
     }
 
-    if (!isSingleCellPrintable(text.codeUnitAt(start))) {
+    // Of what [writeChar] does with a wide first unit, only the join check
+    // can come out differently from writing the unit in the run - the loop
+    // below hands it the margin cases - so that is all that is asked here.
+    // The rest, a width lookup, the margin checks and two cell writes of its
+    // own, was paid on every line of CJK text.
+    final first = text.codeUnitAt(start);
+    if (!isSingleCellPrintable(first) &&
+        terminal.graphemeClusterMode &&
+        _joinsPreviousGrapheme(
+            _isHighSurrogate(first)
+                ? 0x10000 +
+                    ((first - 0xd800) << 10) +
+                    (text.codeUnitAt(start + 1) - 0xdc00)
+                : first,
+            2)) {
       start = _writeCharAt(text, start);
     }
 
@@ -328,9 +343,10 @@ class Buffer {
       return cellWidth;
     }
     if (cellWidth == 0) {
-      if (!terminal.graphemeClusterMode ||
-          _joinsPreviousGrapheme(codePoint, cellWidth)) {
+      if (!terminal.graphemeClusterMode) {
         _addCombiningCharacter(codePoint);
+      } else if (_joinsPreviousGrapheme(codePoint, cellWidth)) {
+        currentLine.addCombiningCharacter(_joinIndex, codePoint);
       }
       return cellWidth;
     }
@@ -347,11 +363,17 @@ class Buffer {
     }
     if (mayJoinPreviousGrapheme &&
         _joinsPreviousGrapheme(codePoint, cellWidth)) {
+      final line = currentLine;
       final previousWidth = _joinedPreviousGraphemeWidth(codePoint, cellWidth);
-      if (previousWidth == 2 && !_setPreviousGraphemeWidth(2)) {
+      // Only widening the cell moves it, or the cursor; a cell that is wide
+      // already - an emoji the next code point of its sequence joins - takes
+      // the code point where [_joinsPreviousGrapheme] found it.
+      if (previousWidth == 2 && line.getWidth(_joinIndex) != 2) {
+        if (!_setPreviousGraphemeWidth(2)) return cellWidth;
+        _addCombiningCharacter(codePoint);
         return cellWidth;
       }
-      _addCombiningCharacter(codePoint);
+      line.addCombiningCharacter(_joinIndex, codePoint);
       return cellWidth;
     }
 
@@ -404,12 +426,13 @@ class Buffer {
   void _addCombiningCharacter(int codePoint) {
     if (_cursorX == 0) return;
 
+    final line = currentLine;
     var index = min(_cursorX - 1, viewWidth - 1);
-    if (index > 0 && currentLine.getWidth(index) == 0) {
+    if (index > 0 && line.getWidth(index) == 0) {
       index--;
     }
-    if (currentLine.getCodePoint(index) == 0) return;
-    currentLine.addCombiningCharacter(index, codePoint);
+    if (line.getCodePoint(index) == 0) return;
+    line.addCombiningCharacter(index, codePoint);
   }
 
   bool _resizePreviousGrapheme(int variationSelector) {
@@ -433,9 +456,11 @@ class Buffer {
 
   bool _setPreviousGraphemeWidth(int desiredWidth) {
     final index = _previousCellIndex();
-    if (index == null || currentLine.getCodePoint(index) == 0) return false;
+    // The line the cell is on, until a wrap below moves to the next one.
+    final line = currentLine;
+    if (index == null || line.getCodePoint(index) == 0) return false;
 
-    final width = currentLine.getWidth(index);
+    final width = line.getWidth(index);
     if (desiredWidth == width) return true;
     if (desiredWidth > viewWidth) return false;
 
@@ -444,7 +469,7 @@ class Buffer {
       if (index + 1 >= rightLimit) {
         if (!terminal.autoWrapMode) return false;
 
-        final sourceLine = currentLine;
+        final sourceLine = line;
         final cellData = CellData.empty();
         sourceLine.getCellData(index, cellData);
         final combining = sourceLine.getCombiningCharacters(index);
@@ -463,16 +488,16 @@ class Buffer {
         _cursorX = destinationIndex + 2;
         return true;
       }
-      currentLine.clearWideCellAt(index + 1, terminal.cursor);
-      currentLine.setWidth(index, 2);
-      currentLine.setCell(index + 1, 0, 0, terminal.cursor);
+      line.clearWideCellAt(index + 1, terminal.cursor);
+      line.setWidth(index, 2);
+      line.setCell(index + 1, 0, 0, terminal.cursor);
       if (_cursorX == index + 1) _cursorX++;
       return true;
     }
 
     if (desiredWidth == 1 && width == 2) {
-      currentLine.setWidth(index, 1);
-      currentLine.eraseCell(index + 1, terminal.cursor);
+      line.setWidth(index, 1);
+      line.eraseCell(index + 1, terminal.cursor);
       if (_cursorX == index + 2) _cursorX--;
       return true;
     }
@@ -487,6 +512,11 @@ class Buffer {
     return index;
   }
 
+  /// The cell whose cluster the code point joins, once
+  /// [_joinsPreviousGrapheme] has said it does: the cell
+  /// [_addCombiningCharacter] would look up again.
+  var _joinIndex = 0;
+
   /// [cellWidth] is `wcwidth(codePoint)`, which [writeChar] has already
   /// looked up - for an astral code point that is a binary search.
   bool _joinsPreviousGrapheme(int codePoint, int cellWidth) {
@@ -496,6 +526,7 @@ class Buffer {
     final line = currentLine;
     var index = min(_cursorX - 1, viewWidth - 1);
     if (index > 0 && line.getWidth(index) == 0) index--;
+    _joinIndex = index;
     final base = line.getCodePoint(index);
     if (base == 0) return false;
     final combining = line.getCombiningCharacters(index);
@@ -626,18 +657,31 @@ class Buffer {
     if (combining == null) return null;
     // GB11: ExtPict Extend* ZWJ, with Extend narrowed to the marks emoji
     // sequences hold - variation selectors, skin tone modifiers, tags.
-    final runes = combining.runes.toList();
-    for (var i = runes.length - 2; i >= -1; i--) {
-      final rune = i < 0 ? base : runes[i];
-      if (rune >= 0xfe00 && rune <= 0xfe0f ||
-          _isEmojiModifier(rune) ||
-          rune >= 0xe0020 && rune <= 0xe007f) {
-        continue;
+    // Walked back from the ZWJ a code unit at a time, pairing a low surrogate
+    // with the high one before it as [String.runes] does: a list of the runes
+    // cost an allocation for every pictograph of every ZWJ sequence.
+    var end = combining.length - 1;
+    while (end > 0) {
+      var rune = combining.codeUnitAt(--end);
+      if (rune >= 0xdc00 && rune <= 0xdfff && end > 0) {
+        final lead = combining.codeUnitAt(end - 1);
+        if (lead >= 0xd800 && lead <= 0xdbff) {
+          end--;
+          rune = 0x10000 + ((lead - 0xd800) << 10) + (rune - 0xdc00);
+        }
       }
-      return isExtendedPictographic(rune) ? true : null;
+      if (!_isEmojiSequenceMark(rune)) {
+        return isExtendedPictographic(rune) ? true : null;
+      }
     }
-    return null;
+    if (_isEmojiSequenceMark(base)) return null;
+    return isExtendedPictographic(base) ? true : null;
   }
+
+  static bool _isEmojiSequenceMark(int codePoint) =>
+      codePoint >= 0xfe00 && codePoint <= 0xfe0f ||
+      _isEmojiModifier(codePoint) ||
+      codePoint >= 0xe0020 && codePoint <= 0xe007f;
 
   /// A lone surrogate as a cell's base - only malformed UTF-16 puts one there
   /// - can pair with a lone low surrogate at the start of its combining
@@ -749,9 +793,10 @@ class Buffer {
     if (!_isRegionalIndicator(codePoint)) return false;
     final index = _previousCellIndex();
     if (index == null) return false;
-    if (!_isRegionalIndicator(currentLine.getCodePoint(index)) ||
-        currentLine.getCombiningCharacters(index) != null ||
-        currentLine.getWidth(index) != 1) {
+    final line = currentLine;
+    if (!_isRegionalIndicator(line.getCodePoint(index)) ||
+        line.getCombiningCharacters(index) != null ||
+        line.getWidth(index) != 1) {
       return false;
     }
 
@@ -802,7 +847,9 @@ class Buffer {
 
   void _wrapInput() {
     index();
-    setCursorX(_marginLeft);
+    // What setCursorX(_marginLeft) comes to, the left margin being at or left
+    // of the right one.
+    _cursorX = _marginLeft;
     currentLine.isWrapped = true;
   }
 
@@ -1255,7 +1302,9 @@ class Buffer {
         // every row below the bottom margin down.
         scrollUp(1);
       } else {
-        moveCursorY(1);
+        // What moveCursorY(1) comes to here: inside the margins and above the
+        // bottom one, there is no limit to meet.
+        _cursorY++;
       }
       return;
     }
@@ -1332,8 +1381,13 @@ class Buffer {
   }
 
   void setCursorX(int cursorX) {
-    _cursorX =
-        cursorX.clamp(_minimumCursorX(cursorX), _maximumCursorX(cursorX));
+    final minimum = _minimumCursorX(cursorX);
+    final maximum = _maximumCursorX(cursorX);
+    _cursorX = cursorX < minimum
+        ? minimum
+        : cursorX > maximum
+            ? maximum
+            : cursorX;
   }
 
   void setCursorY(int cursorY) {
@@ -1439,27 +1493,30 @@ class Buffer {
   }
 
   void setCursor(int cursorX, int cursorY) {
+    var minimumCursorX = 0;
+    var maximumCursorX = viewWidth - 1;
     var maxCursorY = viewHeight - 1;
 
     if (terminal.originMode) {
+      cursorX += _marginLeft;
       cursorY += _marginTop;
+      minimumCursorX = _marginLeft;
+      maximumCursorX = _marginRight;
       maxCursorY = _marginBottom;
     }
 
-    final minimumCursorX = switch (terminal.originMode) {
-      true => _marginLeft,
-      false => 0,
-    };
-    final maximumCursorX = switch (terminal.originMode) {
-      true => _marginRight,
-      false => viewWidth - 1,
-    };
-    if (terminal.originMode) {
-      cursorX += _marginLeft;
-    }
-
-    _cursorX = cursorX.clamp(minimumCursorX, maximumCursorX);
-    _cursorY = cursorY.clamp(0, maxCursorY);
+    // Compared rather than clamped: every cursor move in full-screen output
+    // comes through here, and int.clamp is a call that checks its bounds.
+    _cursorX = cursorX < minimumCursorX
+        ? minimumCursorX
+        : cursorX > maximumCursorX
+            ? maximumCursorX
+            : cursorX;
+    _cursorY = cursorY < 0
+        ? 0
+        : cursorY > maxCursorY
+            ? maxCursorY
+            : cursorY;
   }
 
   void moveCursor(int offsetX, int offsetY) {
@@ -1541,11 +1598,9 @@ class Buffer {
   }
 
   void carriageReturn() {
-    final left = switch (terminal.originMode || _cursorX >= _marginLeft) {
-      true => _marginLeft,
-      false => 0,
-    };
-    setCursorX(left);
+    // What setCursorX comes to for either target, the left margin being at or
+    // left of the right one.
+    _cursorX = terminal.originMode || _cursorX >= _marginLeft ? _marginLeft : 0;
   }
 
   int _minimumCursorX(int targetX) {

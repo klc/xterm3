@@ -19,7 +19,8 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// [maxLength].
   var _length = 0;
 
-  /// The index of the first element in [_array].
+  /// The index of the first element in [_array]. Always below its length:
+  /// [_getCyclicIndexInRange] relies on that to wrap without `%`.
   var _startIndex = 0;
 
   /// The start index of this list, including items that has been dropped in
@@ -38,6 +39,16 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     return (_startIndex + index) % _array.length;
   }
 
+  /// [_getCyclicIndex] for an [index] known to be in 0..[maxLength], which
+  /// with [_startIndex] below [maxLength] needs one subtraction at most
+  /// instead of a division. Every cell access looks a line up through here.
+  @pragma('vm:prefer-inline')
+  int _getCyclicIndexInRange(int index) {
+    final cyclicIndex = _startIndex + index;
+    final length = _array.length;
+    return cyclicIndex < length ? cyclicIndex : cyclicIndex - length;
+  }
+
   /// Removes the element at [index] from the list.
   @pragma('vm:prefer-inline')
   void _dropChild(int index) {
@@ -46,10 +57,11 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     _array[cyclicIndex] = null;
   }
 
-  /// Adds the specified [child] to the list at the specified [index].
+  /// Adds the specified [child] to the list at the specified [index], which
+  /// must be in 0..[maxLength].
   @pragma('vm:prefer-inline')
   void _adoptChild(int index, T child) {
-    final cyclicIndex = _getCyclicIndex(index);
+    final cyclicIndex = _getCyclicIndexInRange(index);
     _array[cyclicIndex]?._detach();
     _array[cyclicIndex] = child.._attach(this, index);
   }
@@ -65,10 +77,11 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     _array[fromCyclicIndex] = null;
   }
 
-  /// Gets the element at the specified [index] in the list.
+  /// Gets the element at the specified [index] in the list, which must be in
+  /// 0..[maxLength].
   @pragma('vm:prefer-inline')
   T? _getChild(int index) {
-    return _array[_getCyclicIndex(index)];
+    return _array[_getCyclicIndexInRange(index)];
   }
 
   /// The number of elements that can be stored in the list.
@@ -230,6 +243,9 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     if (_length >= _array.length) {
       _startIndex += 1;
       _absoluteStartIndex += 1;
+      if (_startIndex == _array.length) {
+        _startIndex = 0;
+      }
     } else {
       _length++;
     }

@@ -531,6 +531,17 @@ void main() {
     });
   });
 
+  test('each character taken one at a time is a token of its own', () {
+    // Wide and astral characters are taken in the same head-block scan as
+    // runs and sequences; each must still start its own token.
+    final debugger = TerminalDebugger()..write('漢😀\x1b[1m字');
+
+    expect(
+      [for (final c in debugger.commands) (c.start, c.end, c.chars)],
+      [(0, 1, '漢'), (1, 2, '😀'), (2, 6, '\x1b[1m'), (6, 7, '字')],
+    );
+  });
+
   // Pins what CSI handlers receive for parameter lists of every shape. These
   // were recorded from the parser as it stood before its parameter storage
   // changed, and must keep passing unchanged: the storage is an internal

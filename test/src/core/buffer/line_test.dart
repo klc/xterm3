@@ -290,6 +290,19 @@ void main() {
       expect(line.getText(), 'e\u0301b');
     });
 
+    test('a line whose storage was recycled keeps no combining characters', () {
+      // Big enough that lines falling off the scrollback hand their storage
+      // to new lines.
+      final terminal = Terminal(maxLines: 1000)..resize(1000, 3);
+      terminal.write('é');
+      final line = terminal.buffer.lines[0];
+      terminal.write('\r\n' * 1100);
+
+      line.setCell(0, 0x61, 1, CursorStyle.empty);
+
+      expect(line.getCombiningCharacters(0), isNull);
+    });
+
     test('clears combining characters when a cell is erased', () {
       final terminal = Terminal();
       terminal.write('e\u0301');

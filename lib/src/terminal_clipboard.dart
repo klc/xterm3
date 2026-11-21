@@ -15,6 +15,8 @@ class _ClipboardCapture {
   StringBuffer? _buffer;
   bool _overflowed = false;
 
+  bool get isActive => _buffer != null;
+
   void start(String selector) {
     _selector = _resolveITerm2ClipboardSelector(selector);
     _buffer = StringBuffer();

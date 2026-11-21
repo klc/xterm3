@@ -11,7 +11,8 @@ void main() {
 
     terminal.write('plain\x1b[31mred😀tail');
 
-    expect(terminal.bulkWrites, 3);
+    // `red😀tail` is one run: the emoji carries the single-cell run on.
+    expect(terminal.bulkWrites, 2);
     expect(terminal.buffer.lines[0].getText(), 'plainred😀tail');
     expect(
       terminal.buffer.lines[0].getForeground(5),
@@ -754,6 +755,65 @@ void main() {
     expect(terminal.buffer.cursorX, 2);
   });
 
+  test(
+      'Terminal joins a pictograph after a ZWJ to a cell holding lone '
+      'surrogates as segmentation does', () {
+    // Nothing written puts a lone surrogate into the combining string of a
+    // pictograph, so they go in by hand. GB11 looks back past the ZWJ for the
+    // pictograph the sequence started with, reading the string's code points
+    // as [String.runes] does: two halves that pair are one skin tone, which
+    // GB11 looks past; a half on its own ends the look and breaks.
+    const cases = {
+      '\uD83C\uDFFD': true,
+      '\uFE0F\uDFFD': false,
+      '\uDFFD\uD83C': false,
+      '\uD83C': false,
+      '\uDFFD': false,
+    };
+    for (final MapEntry(key: units, value: joins) in cases.entries) {
+      final terminal = Terminal()..resize(20, 2);
+      terminal.write('\u{1F468}');
+      final line = terminal.buffer.lines[0];
+      for (final unit in units.codeUnits) {
+        line.addCombiningCharacter(0, unit);
+      }
+
+      terminal.write('\u200d\u{1F469}');
+
+      final reason = units.codeUnits.map((u) => u.toRadixString(16));
+      if (joins) {
+        expect(line.getCombiningCharacters(0), '$units\u200d\u{1F469}',
+            reason: '$reason');
+        expect(terminal.buffer.cursorX, 2, reason: '$reason');
+      } else {
+        expect(line.getCombiningCharacters(0), '$units\u200d',
+            reason: '$reason');
+        expect(line.getCodePoint(2), 0x1F469, reason: '$reason');
+        expect(terminal.buffer.cursorX, 4, reason: '$reason');
+      }
+    }
+  });
+
+  test('Terminal drops the combining string of a cell it writes over', () {
+    // The cell holding the combining string is the last one written, the
+    // edge where a write stops having to look for one. Over it go a
+    // character written on its own, a single-cell run and a mixed-width run
+    // starting on that cell.
+    for (final (text, x) in [
+      ('é\r❤', 0),
+      ('é\rx', 0),
+      ('abé\x1b[3Gあいう', 2),
+    ]) {
+      final terminal = Terminal()..resize(20, 2);
+
+      terminal.write(text);
+
+      final line = terminal.buffer.lines[0];
+      expect(line.getCodePoint(x), isNot(0x65), reason: text);
+      expect(line.getCombiningCharacters(x), isNull, reason: text);
+    }
+  });
+
   test('Terminal repeats an emoji that ends a text run (REP)', () {
     final terminal = Terminal()..resize(20, 2);
 
@@ -874,6 +934,16 @@ void main() {
           expectSameAsPerCharacter(setup, text, 6);
         }
       }
+    });
+
+    test('take the single-cell text before a wide character into its run', () {
+      final terminal = _TrackingTerminal()..resize(20, 2);
+
+      terminal.write('ab漢字cd\x1b[31mxy\u{302A}z');
+
+      // `xy` stops at a tone mark, which carries no run on.
+      expect(terminal.bulkWrites, 3);
+      expect(terminal.buffer.lines[0].getText(), 'ab漢字cdxy\u{302A}z');
     });
 
     test('a Hangul syllable after a leading jamo still joins its cluster', () {
@@ -1949,6 +2019,17 @@ void main() {
       terminal.write('\x1b[i');
 
       expect(reported, ['ESC[i']);
+    });
+
+    test('reports only the unknown CSI after text and sequences before it', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      // The parser takes these tokens from one block without going back to
+      // the queue between them; each must still be the whole token reported.
+      terminal.write('ab\x1b[1mcd\r\n\x1b[3i');
+
+      expect(reported, ['ESC[3i']);
     });
 
     test('fires for an unrecognised OSC Ps', () {
