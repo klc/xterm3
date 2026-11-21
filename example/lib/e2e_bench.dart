@@ -88,6 +88,8 @@ final _stats = <List<int>>[];
 // XB_BYTES=1: PTY output goes to Terminal.writeBytes instead of through a
 // Utf8Decoder transform into Terminal.write (the default path only).
 final _bytes = _env['XB_BYTES'] == '1';
+// XB_ATLAS=1: the view draws with TerminalStyle.useGlyphAtlas.
+final _style = TerminalStyle(useGlyphAtlas: _env['XB_ATLAS'] == '1');
 final _mem = _env['XB_MEM'];
 final _memChunk = int.parse(_env['XB_CHUNK'] ?? '1024');
 // XB_MAXLINES=<n>: scrollback of the default terminal (10000).
@@ -502,9 +504,9 @@ class _BenchState extends State<_Bench> {
                               .copyWith(devicePixelRatio: _shotDpr),
                           child: RepaintBoundary(
                               key: _shotKey,
-                              child:
-                                  TerminalView(terminal, controller: _shotCtl)))
-                      : TerminalView(terminal)),
+                              child: TerminalView(terminal,
+                                  controller: _shotCtl, textStyle: _style)))
+                      : TerminalView(terminal, textStyle: _style)),
         ),
       );
 }

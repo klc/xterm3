@@ -4,9 +4,11 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter/painting.dart';
 
 import 'package:xterm3/src/ui/palette_builder.dart';
+import 'package:xterm3/src/ui/glyph_atlas.dart';
 import 'package:xterm3/src/ui/paragraph_cache.dart';
 import 'package:xterm3/src/ui/procedural_glyph_cache.dart';
 import 'package:xterm3/src/ui/procedural_glyphs.dart';
+import 'package:xterm3/src/utils/single_cell_text.dart';
 import 'package:xterm3/xterm.dart';
 
 const _dimColorFactor = 0.66;
@@ -144,6 +146,11 @@ class TerminalPainter {
   /// [_textStyle] is changed, or when the system font changes.
   final ParagraphCache _paragraphCache;
 
+  /// Glyph sprites for [TerminalStyle.useGlyphAtlas]: single-cell glyphs,
+  /// and the two-cell CJK ones in an atlas of their own.
+  final _glyphAtlas = GlyphAtlas();
+  final _wideGlyphAtlas = GlyphAtlas();
+
   final int _minParagraphCacheSize;
 
   /// Sizes the paragraph cache so that one screen of [columns] x [rows] fits.
@@ -254,6 +261,8 @@ class TerminalPainter {
     _devicePixelRatio = value;
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    _glyphAtlas.clear();
+    _wideGlyphAtlas.clear();
     _proceduralGlyphCache.clear();
   }
 
@@ -287,6 +296,8 @@ class TerminalPainter {
   /// under one font may well ligate under the next.
   void _clearParagraphCache() {
     _paragraphCache.clear();
+    _glyphAtlas.clear();
+    _wideGlyphAtlas.clear();
     _proceduralGlyphCache.clear();
     _rejectedLigatureRuns.clear();
   }
@@ -337,6 +348,11 @@ class TerminalPainter {
   Size get cellSize => _cellSize;
 
   int get paragraphCacheLength => _paragraphCache.length;
+
+  /// Sprites in the glyph atlases, for tests.
+  @visibleForTesting
+  int get glyphAtlasSpriteCount =>
+      _glyphAtlas.spriteCount + _wideGlyphAtlas.spriteCount;
 
   int get proceduralGlyphCacheLength => _proceduralGlyphCache.length;
 
@@ -441,6 +457,8 @@ class TerminalPainter {
   void dispose() {
     _clearParagraphCache();
     _paragraphCache.dispose();
+    _glyphAtlas.dispose();
+    _wideGlyphAtlas.dispose();
     _proceduralGlyphCache.dispose();
   }
 
@@ -622,6 +640,11 @@ class TerminalPainter {
     final cellWidth = _cellSize.width;
     final hasCombiningCharacters = line.hasCombiningCharacters;
     var hasBlinkingText = false;
+    final useAtlas = _textStyle.useGlyphAtlas && !_textStyle.enableLigatures;
+    if (useAtlas) {
+      _glyphAtlas.beginLine();
+      _wideGlyphAtlas.beginLine();
+    }
     for (var i = 0; i < line.length; i++) {
       line.getCellData(i, cellData);
 
@@ -636,6 +659,39 @@ class TerminalPainter {
       final cellOffset = offset.translate(i * cellWidth, 0);
       if (cellData.flags & CellFlags.blink != 0) {
         hasBlinkingText = true;
+      }
+
+      if (useAtlas &&
+          _paintAtlasGlyph(
+            canvas,
+            cellOffset,
+            cellData,
+            hasCombiningCharacters: hasCombiningCharacters,
+            line: line,
+            column: i,
+            blinkVisible: blinkVisible,
+            activeHyperlinkId: activeHyperlinkId,
+            foregroundOverride: switch (i == cursorColumn) {
+              true => cursorForeground,
+              false => foregroundOverride,
+            },
+            ensureSelectionContrast:
+                ensureSelectionContrast && i != cursorColumn,
+          )) {
+        if (charWidth == 2) i++;
+        continue;
+      }
+      // Sprites queued so far go down first, so that a glyph the normal way
+      // still overlaps its neighbours in left-to-right order.
+      // ponytail: a space's underline is not flushed for - underlined
+      // output would flush at every space - nor are narrow against wide
+      // sprites, or sprites on different pages; only ink that overhangs onto
+      // a differently coloured neighbour's can tell.
+      if (useAtlas &&
+          cellData.content & CellContent.codepointMask != 0x20 &&
+          (_glyphAtlas.hasQueued || _wideGlyphAtlas.hasQueued)) {
+        _glyphAtlas.flush(canvas);
+        _wideGlyphAtlas.flush(canvas);
       }
 
       if (_textStyle.enableLigatures) {
@@ -685,7 +741,138 @@ class TerminalPainter {
         i++;
       }
     }
+    if (useAtlas) {
+      _glyphAtlas.flush(canvas);
+      _wideGlyphAtlas.flush(canvas);
+    }
     return hasBlinkingText;
+  }
+
+  /// The cell styles that change a glyph's shape rather than its colour: what
+  /// a [GlyphAtlas] sprite is drawn with.
+  static const _atlasGlyphFlags = CellFlags.bold |
+      CellFlags.italic |
+      CellAttr.underlineMask |
+      CellAttr.strikethrough |
+      CellAttr.overline;
+
+  static const _atlasExcludedUnderlines =
+      CellAttr.undercurl | CellAttr.dottedUnderline | CellAttr.dashedUnderline;
+
+  /// Glyphs the atlas takes in one cell: letters, digits and punctuation of
+  /// ASCII, Latin-1 and Latin Extended-A and B, Greek and Cyrillic.
+  static bool _atlasCovers(int charCode) =>
+      charCode >= 0x21 && charCode <= 0x7e ||
+      charCode >= 0xa1 && charCode <= 0x24f ||
+      charCode >= 0x370 && charCode <= 0x4ff;
+
+  /// Glyphs the atlas takes in two cells: CJK punctuation, kana, Han, Hangul
+  /// and fullwidth forms - the wide characters a text run takes - but not the
+  /// few of them with an emoji form, which a colour font may draw and a tint
+  /// would flatten.
+  static bool _atlasCoversWide(int charCode) =>
+      isWideRunUnit(charCode) && !isExtendedPictographic(charCode);
+
+  Size get _wideCellSize => Size(_cellSize.width * 2, _cellSize.height);
+
+  /// Draws the cell through [_glyphAtlas] if it can; returns false for a cell
+  /// the normal path has to draw. Skipped cells - invisible, blinking off -
+  /// count as drawn.
+  ///
+  /// Left to the normal path: combining characters, glyphs outside
+  /// [_atlasCovers] and [_atlasCoversWide] (spaces, symbols, emoji and
+  /// procedural box drawing among them), an underline coloured apart from the
+  /// text or curly, dotted or dashed, framed and encircled cells, and
+  /// glyphs that do not fit the cell.
+  bool _paintAtlasGlyph(
+    Canvas canvas,
+    Offset offset,
+    CellData cellData, {
+    required bool hasCombiningCharacters,
+    required BufferLine line,
+    required int column,
+    required bool blinkVisible,
+    required int? activeHyperlinkId,
+    required Color? foregroundOverride,
+    required bool ensureSelectionContrast,
+  }) {
+    final content = cellData.content;
+    final charCode = content & CellContent.codepointMask;
+    final wide = switch (content >> CellContent.widthShift) {
+      1 => false,
+      2 => true,
+      _ => null,
+    };
+    if (wide == null ||
+        !(wide ? _atlasCoversWide(charCode) : _atlasCovers(charCode))) {
+      return false;
+    }
+    if (hasCombiningCharacters && line.getCombiningCharacters(column) != null) {
+      return false;
+    }
+    final cellFlags = cellData.flags;
+    if (cellFlags & CellFlags.invisible != 0) return true;
+    if (cellFlags & CellFlags.blink != 0 && !blinkVisible) return true;
+    // Curly, dotted and dashed underlines come out of a tinted sprite up to
+    // 32 levels off at their edges; they are rare enough to draw directly.
+    if (cellFlags & _atlasExcludedUnderlines != 0) return false;
+    // A frame goes over the glyph, so it has to wait for the sprite.
+    if (cellFlags & CellAttr.frameMask != 0) return false;
+
+    final isActiveHyperlink =
+        cellData.hyperlinkId != 0 && cellData.hyperlinkId == activeHyperlinkId;
+    final color = switch (ensureSelectionContrast) {
+      true => resolveSelectionForegroundColor(
+          cellData,
+          foregroundOverride: foregroundOverride,
+        ),
+      false => resolveCellForegroundColor(
+          cellData,
+          foregroundOverride: foregroundOverride,
+        ),
+    };
+    final decorationColor = switch (cellData.underlineColor) {
+      0 => _underlineDecorationColor(cellFlags, color),
+      _ => resolveForegroundColor(cellData.underlineColor),
+    };
+    if (decorationColor != color) return false;
+
+    final bucket = GlyphAtlas.luminanceBucket(color);
+    final styleBits = (cellFlags & _atlasGlyphFlags) |
+        switch (isActiveHyperlink) {
+          true => 1 << 13,
+          false => 0,
+        };
+    // Arithmetic rather than shifts: the key needs more than 32 bits, which
+    // shifts do not give on the web.
+    final key = (styleBits * 8 + bucket) * 0x110000 + charCode;
+    final atlas = wide ? _wideGlyphAtlas : _glyphAtlas;
+    final cellSize = wide ? _wideCellSize : _cellSize;
+    var sprite = atlas.sprite(key);
+    if (sprite == null) {
+      final grey = GlyphAtlas.bucketGrey(bucket);
+      final style = _textStyle.toTextStyle(
+        color: grey,
+        decorationColor: grey,
+        bold: cellFlags & CellFlags.bold != 0,
+        italic: cellFlags & CellFlags.italic != 0,
+        underline: _hasUnderline(cellFlags) || isActiveHyperlink,
+        doubleUnderline: _hasDoubleUnderline(cellFlags, isActiveHyperlink),
+        decorationStyle: _decorationStyle(cellFlags),
+        strikethrough: cellFlags & CellAttr.strikethrough != 0,
+        overline: cellFlags & CellAttr.overline != 0,
+      );
+      final builder = ParagraphBuilder(style.getParagraphStyle())
+        ..pushStyle(style.getTextStyle(textScaler: _textScaler))
+        ..addText(String.fromCharCode(charCode));
+      final paragraph = builder.build()
+        ..layout(const ParagraphConstraints(width: double.infinity));
+      sprite = atlas.add(key, paragraph, cellSize, _devicePixelRatio);
+    }
+    if (sprite < 0) return false;
+
+    atlas.queue(sprite, offset, color);
+    return true;
   }
 
   /// Number of consecutive cells starting at [column] that may be shaped as a

@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/widgets.dart'
     show TextDecoration, TextDecorationStyle, TextScaler, TextStyle;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xterm3/src/ui/glyph_atlas.dart';
 import 'package:xterm3/src/ui/painter.dart';
 import 'package:xterm3/xterm.dart';
 
@@ -65,6 +66,224 @@ void main() {
     cell.flags = CellFlags.inverse;
     expect(painter.resolveCellBackgroundColor(cell), isNull);
     painter.dispose();
+  });
+
+  group('glyph atlas', () {
+    TerminalPainter painterWith({required bool atlas}) => TerminalPainter(
+          theme: TerminalThemes.whiteOnBlack,
+          textStyle:
+              TerminalStyle(fontSize: 20, height: 1, useGlyphAtlas: atlas),
+          textScaler: TextScaler.noScaling,
+        );
+
+    // Plain, themed, 256-colour and 24-bit colour, bold, underlined, a wide
+    // character from the wide atlas, and the cells the atlas leaves to the
+    // normal path: a combining mark, box drawing and an underline in a
+    // colour of its own.
+    const text = 'ab\x1b[31mab\x1b[38;5;120mab\x1b[38;2;250;20;200mab'
+        '\x1b[0;1mB\x1b[0;4mu\x1b[0m中e\u0301─\x1b[4;58;2;1;2;3mx';
+
+    Future<Uint8List> render(TerminalPainter painter, BufferLine line) async {
+      final ratio = painter.devicePixelRatio;
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder)..scale(ratio);
+      painter.paintLine(canvas, Offset.zero, line);
+      final picture = recorder.endRecording();
+      final image =
+          await picture.toImage((400 * ratio).round(), (40 * ratio).round());
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      picture.dispose();
+      image.dispose();
+      return bytes!.buffer.asUint8List();
+    }
+
+    int difference(Uint8List a, Uint8List b) {
+      var result = 0;
+      for (var i = 0; i < a.length; i++) {
+        result = max(result, (a[i] - b[i]).abs());
+      }
+      return result;
+    }
+
+    test('draws what the paragraph path draws', () async {
+      // The test font's glyphs are solid boxes on whole pixels, so a sprite
+      // tinted to a colour has to land on the same pixels in the same colour.
+      // The test rasteriser's tint rounds differently from a direct draw by up
+      // to four levels a channel, eight where two glyphs' edges share a pixel
+      // at a device pixel ratio of 2 (the real app, on Impeller, matches
+      // exactly on plain and theme colours); a sprite in the wrong place or
+      // colour differs by tens of levels.
+      for (final ratio in [1.0, 2.0]) {
+        final line = (Terminal()..write(text)).buffer.lines[0];
+        final stock = painterWith(atlas: false)..devicePixelRatio = ratio;
+        final atlas = painterWith(atlas: true)..devicePixelRatio = ratio;
+        final expected = await render(stock, line);
+        expect(difference(expected, await render(atlas, line)),
+            lessThanOrEqualTo(8),
+            reason: 'device pixel ratio $ratio');
+        expect(atlas.glyphAtlasSpriteCount, greaterThan(0));
+        stock.dispose();
+        atlas.dispose();
+      }
+    });
+
+    test('still draws early glyphs after their pages are merged', () async {
+      // Each line brings a new sprite and so a page of its own; past sixteen
+      // pages they are merged, and every sprite moves. The test font draws
+      // most glyphs as the same box but p and É apart, so a sprite taken from
+      // the wrong place shows. A sprite is keyed by luminance band and style
+      // too, which makes a hundred of them out of two letters: enough for a
+      // merged page of two rows.
+      final terminal = Terminal(maxLines: 200);
+      for (var i = 0; i < 100; i++) {
+        final grey = i % 8 * 32 + 16;
+        final combo = i ~/ 8;
+        final style = [
+          if (combo & 1 != 0) ';1',
+          if (combo & 2 != 0) ';3',
+          if (combo & 4 != 0) ';9',
+          if (combo & 8 != 0) ';53',
+        ].join();
+        final glyph = i % 5 == 0 ? 'p' : 'É';
+        terminal.write('\x1b[38;2;$grey;$grey;$grey${style}m$glyph\x1b[0m\r\n');
+      }
+      final stock = painterWith(atlas: false);
+      final atlas = painterWith(atlas: true);
+      for (var i = 0; i < 100; i++) {
+        await render(atlas, terminal.buffer.lines[i]);
+      }
+      expect(atlas.glyphAtlasSpriteCount, 100);
+      for (final i in [0, 7, 15, 16, 31, 63, 64, 71, 99]) {
+        final line = terminal.buffer.lines[i];
+        expect(difference(await render(stock, line), await render(atlas, line)),
+            lessThanOrEqualTo(6),
+            reason: 'line $i');
+      }
+      stock.dispose();
+      atlas.dispose();
+    });
+
+    test('keys a sprite by glyph, style and luminance band, not colour', () {
+      final painter = painterWith(atlas: true);
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      // Two reds of the same luminance band: one sprite each for a and b.
+      final terminal = Terminal()
+        ..write('\x1b[38;2;200;0;0mab\x1b[38;2;201;0;0mab\x1b[0m');
+      painter.paintLine(canvas, Offset.zero, terminal.buffer.lines[0]);
+      expect(painter.glyphAtlasSpriteCount, 2);
+      expect(painter.paragraphCacheLength, 0);
+      // Drawing it again adds nothing.
+      painter.paintLine(canvas, Offset.zero, terminal.buffer.lines[0]);
+      expect(painter.glyphAtlasSpriteCount, 2);
+      // Another band, then bold: two more each.
+      painter.paintLine(canvas, Offset.zero,
+          (Terminal()..write('\x1b[38;2;100;0;0mab')).buffer.lines[0]);
+      expect(painter.glyphAtlasSpriteCount, 4);
+      painter.paintLine(canvas, Offset.zero,
+          (Terminal()..write('\x1b[1;38;2;100;0;0mab')).buffer.lines[0]);
+      expect(painter.glyphAtlasSpriteCount, 6);
+      recorder.endRecording().dispose();
+      painter.dispose();
+    });
+
+    test('is not used unless asked for, nor with ligatures', () {
+      for (final style in [
+        const TerminalStyle(fontSize: 20, height: 1),
+        const TerminalStyle(
+            fontSize: 20,
+            height: 1,
+            useGlyphAtlas: true,
+            enableLigatures: true),
+      ]) {
+        final painter = TerminalPainter(
+          theme: TerminalThemes.whiteOnBlack,
+          textStyle: style,
+          textScaler: TextScaler.noScaling,
+        );
+        final recorder = ui.PictureRecorder();
+        painter.paintLine(ui.Canvas(recorder), Offset.zero,
+            (Terminal()..write('abc')).buffer.lines[0]);
+        expect(painter.glyphAtlasSpriteCount, 0);
+        recorder.endRecording().dispose();
+        painter.dispose();
+      }
+    });
+
+    test('starts over when the font changes', () {
+      final painter = painterWith(atlas: true);
+      final recorder = ui.PictureRecorder();
+      final line = (Terminal()..write('abc')).buffer.lines[0];
+      painter.paintLine(ui.Canvas(recorder), Offset.zero, line);
+      expect(painter.glyphAtlasSpriteCount, 3);
+      painter.textStyle =
+          const TerminalStyle(fontSize: 22, height: 1, useGlyphAtlas: true);
+      expect(painter.glyphAtlasSpriteCount, 0);
+      recorder.endRecording().dispose();
+      painter.dispose();
+    });
+
+    test('stamps queued sprites before a cell it does not draw', () {
+      // The box-drawing character between the letters is drawn the normal
+      // way; the letter before it has to go down first, as it would on the
+      // paragraph path, so that ink overlaps the same way.
+      final painter = painterWith(atlas: true);
+      final canvas = _CallLog();
+      painter.paintLineForegrounds(canvas, Offset.zero,
+          (Terminal()..write('a\u2502 b')).buffer.lines[0]);
+      final calls =
+          canvas.calls.where((call) => call != #save && call != #restore);
+      expect(calls.first, #drawRawAtlas);
+      expect(calls.last, #drawRawAtlas);
+      expect(calls.where((call) => call == #drawRawAtlas), hasLength(2));
+      painter.dispose();
+    });
+
+    test('keeps merged pages within the size limit and starts over when full',
+        () {
+      ui.Paragraph glyph(String text) {
+        final builder = ui.ParagraphBuilder(ui.ParagraphStyle(fontSize: 8))
+          ..addText(text);
+        return builder.build()
+          ..layout(const ui.ParagraphConstraints(width: double.infinity));
+      }
+
+      // Sprites of cells this tall fit two rows to 8192 pixels, 64 a row: 128
+      // in all. Merged one page per row, sixteen pages were already 48000
+      // pixels tall. A long line goes past the capacity before the next one
+      // starts over: what it adds past it is left to the normal path.
+      const cell = ui.Size(10, 2000);
+      final atlas = GlyphAtlas();
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      atlas.beginLine();
+      for (var i = 0; i < 200; i++) {
+        final sprite = atlas.add(i, glyph('a'), cell, 1);
+        expect(sprite, i < 128 ? i : -1);
+        if (sprite >= 0) {
+          atlas.queue(sprite, Offset.zero, const ui.Color(0xFFFFFFFF));
+        }
+        atlas.flush(canvas);
+        expect(atlas.pages.length, lessThanOrEqualTo(16));
+        for (final page in atlas.pages) {
+          expect(page.width, lessThanOrEqualTo(8192));
+          expect(page.height, lessThanOrEqualTo(8192));
+        }
+      }
+      expect(atlas.spriteCount, 128);
+      atlas.beginLine();
+      expect(atlas.spriteCount, 0);
+      expect(atlas.sprite(0), isNull);
+      atlas.dispose();
+
+      // A cell too large for a page takes no sprite at all.
+      final huge = GlyphAtlas();
+      expect(huge.add(0, glyph('a'), const ui.Size(5000, 20), 1), -1);
+      huge.beginLine();
+      huge.flush(canvas);
+      huge.dispose();
+      recorder.endRecording().dispose();
+    });
   });
 
   test('paintLine hides blinking text during the off phase', () async {
@@ -1738,4 +1957,15 @@ int _paintedColumnCount(ByteData byteData, int width, int y, int endX) {
     }
   }
   return count;
+}
+
+/// Records the name of every canvas call.
+class _CallLog implements ui.Canvas {
+  final calls = <Symbol>[];
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    calls.add(invocation.memberName);
+    return null;
+  }
 }
