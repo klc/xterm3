@@ -785,6 +785,23 @@ void main() {
       expect(output.where(isLeftRelease), hasLength(1));
     });
 
+    testWidgets(
+      'removing the view while a touch press is pending does not throw',
+      (tester) async {
+        await pumpMouseApp(tester);
+
+        final gesture = await tester.startGesture(
+          viewPoint(tester, const Offset(200, 150)),
+          kind: PointerDeviceKind.touch,
+        );
+        await tester.pump(kPressTimeout + const Duration(milliseconds: 50));
+        await tester.pumpWidget(const SizedBox());
+
+        expect(tester.takeException(), isNull);
+        await gesture.up();
+      },
+    );
+
     testWidgets('a touch tap reports one press and one release', (
       tester,
     ) async {

@@ -83,10 +83,10 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   final Map<int, int> _reportedMouseButtons = {};
 
-  /// The button and position of a touch tap-down reported to the
-  /// application, kept so that a tap cancelled by a scroll or a long press
-  /// still releases it.
-  (TerminalMouseButton, Offset)? _reportedTouchPress;
+  /// The render terminal, button and position of a touch tap-down reported
+  /// to the application, kept so that a tap cancelled by a scroll or a long
+  /// press still releases it.
+  (RenderTerminal, TerminalMouseButton, Offset)? _reportedTouchPress;
 
   /// The cell a long-press selection started on; see [_dragStartAnchor].
   CellAnchor? _longPressStartAnchor;
@@ -260,7 +260,9 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         details.localPosition,
         modifiers: _currentModifiers(),
       );
-      if (handled) _reportedTouchPress = (button, details.localPosition);
+      if (handled) {
+        _reportedTouchPress = (renderTerminal, button, details.localPosition);
+      }
     }
     // If the event was not handled by the terminal, use the supplied callback.
     if (!handled || forceCallback) {
@@ -296,8 +298,11 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     final press = _reportedTouchPress;
     if (press == null) return;
     _reportedTouchPress = null;
-    final (button, position) = press;
-    renderTerminal.mouseEvent(
+    final (render, button, position) = press;
+    // Disposing the view disposes the tap recognizer, which cancels a pending
+    // tap after the viewport has gone.
+    if (!render.attached) return;
+    render.mouseEvent(
       button,
       TerminalMouseButtonState.up,
       position,
