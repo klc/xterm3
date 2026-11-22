@@ -637,6 +637,11 @@ class Buffer {
       if (joins != null) return joins;
     }
 
+    // A lone low surrogate as the base has no high one before it to pair
+    // with, so segmentation breaks after it - and package:characters throws
+    // on a string that opens with one.
+    if (base >= 0xdc00 && base <= 0xdfff) return false;
+
     final previous = String.fromCharCode(base) + (combining ?? '');
     final storedGraphemes = previous.characters;
     final character = String.fromCharCode(codePoint);
@@ -1022,7 +1027,7 @@ class Buffer {
   void fillRect(int char, int top, int left, int bottom, int right) {
     final rect = _normalizeRect(top, left, bottom, right);
     if (rect == null) return;
-    if (unicodeV11.wcwidth(char) != 1) return;
+    if (unicodeV11.wcwidth(char) != 1 || _isSurrogate(char)) return;
 
     for (var row = rect.top; row <= rect.bottom; row++) {
       final line = lines[row + scrollBack];

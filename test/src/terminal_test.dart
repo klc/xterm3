@@ -756,6 +756,24 @@ void main() {
     expect(terminal.buffer.cursorX, 2);
   });
 
+  test('Terminal joins nothing to a cell holding a lone low surrogate', () {
+    // Malformed UTF-16: a lone low surrogate has no high one before it to
+    // pair with. Handed a string that opens with one, package:characters
+    // threw a RangeError out of Terminal.write.
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('\uDC00\uDC00Z\r\n\uDC00­Z');
+
+    final first = terminal.buffer.lines[0];
+    expect(first.getCodePoint(0), 0xDC00);
+    expect(first.getCodePoint(1), 0xDC00);
+    expect(first.getCodePoint(2), 'Z'.codeUnitAt(0));
+    final second = terminal.buffer.lines[1];
+    expect(second.getCodePoint(0), 0xDC00);
+    expect(second.getCombiningCharacters(0), isNull);
+    expect(second.getCodePoint(1), 'Z'.codeUnitAt(0));
+  });
+
   test(
       'Terminal joins a pictograph after a ZWJ to a cell holding lone '
       'surrogates as segmentation does', () {
@@ -3828,6 +3846,29 @@ void main() {
 
     expect(terminal.buffer.lines[0].getText(0, 6), 'aXXXef');
     expect(terminal.buffer.lines[1].getText(0, 6), 'gXXXkl');
+  });
+
+  test('Terminal ignores a lone surrogate as a fill character', () {
+    // A surrogate is no character, and xterm does not fill with one. Stored
+    // as a cell's base, U+DC00 made the next character that reached grapheme
+    // segmentation - U+00AD here - throw out of Terminal.write.
+    for (final char in [0xDC00, 0xD800]) {
+      final terminal = Terminal()..resize(4, 1);
+
+      terminal.write('abc\x1b[$char;1;1;1;3\$x\x1b[1;2H­Z');
+
+      expect(terminal.buffer.lines[0].getText(0, 3), 'aZc', reason: '$char');
+    }
+  });
+
+  test('Terminal ignores a control character as a fill character', () {
+    for (final char in [7, 0x7f, 0x85]) {
+      final terminal = Terminal()..resize(4, 1);
+
+      terminal.write('abc\x1b[$char;1;1;1;3\$x\x1b[1;2H­Z');
+
+      expect(terminal.buffer.lines[0].getText(0, 3), 'aZc', reason: '$char');
+    }
   });
 
   test('Terminal preserves protected cells during selective rectangle erase',
