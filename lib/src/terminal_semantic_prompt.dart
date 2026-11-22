@@ -197,12 +197,12 @@ String? _parseSemanticPromptCommandLine(Map<String, String> options) {
 String? _decodeSemanticPromptPrintfQ(String value) {
   final data = switch (value) {
     final text when text.startsWith(r"$'") => switch (text.endsWith("'")) {
-        true => text.substring(2, text.length - 1),
-        false => null,
+        true when text.length > 2 => text.substring(2, text.length - 1),
+        _ => null,
       },
     final text when text.startsWith("'") => switch (text.endsWith("'")) {
-        true => text.substring(1, text.length - 1),
-        false => null,
+        true when text.length > 1 => text.substring(1, text.length - 1),
+        _ => null,
       },
     _ => value,
   };

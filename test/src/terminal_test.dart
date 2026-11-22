@@ -2768,6 +2768,19 @@ void main() {
     expect(states[2].commandLine, isNull);
   });
 
+  test('Terminal keeps parsing after a lone quote OSC 133 command line', () {
+    final states = <TerminalSemanticPromptState>[];
+    final terminal = Terminal(onSemanticPrompt: states.add);
+
+    terminal.write('a\x1b]133;C;cmdline=' "'" '\x07b');
+    terminal.write('\x1b]133;C;cmdline=\$' "'" '\x07c');
+    terminal.write('\x1b]133;C;cmdline=' "''" '\x07d');
+    terminal.write('\x1b]133;C;cmdline=\$' "''" '\x07e');
+
+    expect(terminal.buffer.lines[0].getText(), 'abcde');
+    expect(states.map((state) => state.commandLine), [null, null, '', '']);
+  });
+
   test('Terminal tracks OSC 633 shell integration state', () {
     final states = <TerminalSemanticPromptState>[];
     final terminal = Terminal(onSemanticPrompt: states.add);
