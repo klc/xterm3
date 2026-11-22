@@ -24,6 +24,8 @@ class EscapeParser {
 
   static const _maxCsiParamValue = 65535;
 
+  static const _maxEscRawLength = 256;
+
   static const _maxOscRawLength = 8192;
 
   static const _maxOscParams = 256;
@@ -118,6 +120,15 @@ class EscapeParser {
         final processed = _processPendingEscape();
         if (!processed) {
           _queue.rollback(tokenEnd - tokenBegin);
+          return;
+        }
+        continue;
+      }
+
+      if (_escResume case final escapeHandler?) {
+        _escResume = null;
+        if (!escapeHandler()) {
+          _escResume = escapeHandler;
           return;
         }
         continue;
@@ -543,10 +554,25 @@ class EscapeParser {
     }
 
     _pendingEscape = false;
+    final begin = _queue.totalConsumed;
     final processed = escapeHandler();
-    if (!processed) _pendingEscape = true;
-    return processed;
+    if (processed) return true;
+    // A handler [char] 0x20-0x2F dispatches to waits in [_consumeEscFinalByte]
+    // and keeps nothing from what it has consumed (a new one must do the
+    // same), so past [_maxEscRawLength] it takes up the next write where this
+    // one ended rather than reading the whole sequence again with every write.
+    if (char <= Ascii.slash &&
+        _queue.totalConsumed - begin >= _maxEscRawLength) {
+      _escResume = escapeHandler;
+      return true;
+    }
+    _pendingEscape = true;
+    return false;
   }
+
+  /// The handler of an unfinished `ESC` sequence with an intermediate byte
+  /// that has gone on past [_maxEscRawLength]; see [_processPendingEscape].
+  _EscHandler? _escResume;
 
   late final _sbcHandlers = FastLookupTable<_SbcHandler>({
     0x05: handler.enquiry,
