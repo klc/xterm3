@@ -645,6 +645,20 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _terminal.buffer.createAnchorFromOffset(fromEnd),
         mode: mode,
       );
+    } else if (mode == SelectionMode.block) {
+      // A block spans columns, not reading order, so the corners take the
+      // outer edges of both endpoint cells whichever way the drag went.
+      final toStart = _cellSelectionStart(toPosition);
+      final toEnd = _cellSelectionEnd(toPosition);
+      _controller.setSelection(
+        _terminal.buffer.createAnchorFromOffset(
+          CellOffset(min(fromStart.x, toStart.x), fromStart.y),
+        ),
+        _terminal.buffer.createAnchorFromOffset(
+          CellOffset(max(fromEnd.x, toEnd.x), toEnd.y),
+        ),
+        mode: mode,
+      );
     } else {
       if (toPosition.isAfterOrSame(fromPosition)) {
         _controller.setSelection(
