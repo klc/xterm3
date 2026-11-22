@@ -11,6 +11,7 @@ class TerminalGestureDetector extends StatefulWidget {
     this.onRepeatedTapUp,
     this.onTapUp,
     this.onTapDown,
+    this.onTapCancel,
     this.onSecondaryTapDown,
     this.onSecondaryTapUp,
     this.onTertiaryTapDown,
@@ -35,6 +36,9 @@ class TerminalGestureDetector extends StatefulWidget {
   final GestureTapUpCallback? onRepeatedTapUp;
 
   final GestureTapDownCallback? onTapDown;
+
+  /// Called when a tap of any button is cancelled after its down was sent.
+  final GestureTapCancelCallback? onTapCancel;
 
   final GestureTapDownCallback? onSecondaryTapDown;
 
@@ -147,10 +151,13 @@ class _TerminalGestureDetectorState extends State<TerminalGestureDetector> {
         instance
           ..onTapDown = _handleTapDown
           ..onTapUp = _handleTapUp
+          ..onTapCancel = widget.onTapCancel
           ..onSecondaryTapDown = widget.onSecondaryTapDown
           ..onSecondaryTapUp = widget.onSecondaryTapUp
+          ..onSecondaryTapCancel = widget.onTapCancel
           ..onTertiaryTapDown = widget.onTertiaryTapDown
-          ..onTertiaryTapUp = widget.onTertiaryTapUp;
+          ..onTertiaryTapUp = widget.onTertiaryTapUp
+          ..onTertiaryTapCancel = widget.onTapCancel;
       },
     );
 

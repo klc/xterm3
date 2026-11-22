@@ -83,6 +83,11 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   final Map<int, int> _reportedMouseButtons = {};
 
+  /// The button and position of a touch tap-down reported to the
+  /// application, kept so that a tap cancelled by a scroll or a long press
+  /// still releases it.
+  (TerminalMouseButton, Offset)? _reportedTouchPress;
+
   /// The cell a long-press selection started on; see [_dragStartAnchor].
   CellAnchor? _longPressStartAnchor;
 
@@ -112,6 +117,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         onSingleTapUp: onSingleTapUp,
         onRepeatedTapUp: onSingleTapUp,
         onTapDown: onTapDown,
+        onTapCancel: onTapCancel,
         onSecondaryTapDown: onSecondaryTapDown,
         onSecondaryTapUp: onSecondaryTapUp,
         onTertiaryTapDown: onTertiaryTapDown,
@@ -208,6 +214,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void _onPointerMotion(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+
     final input = switch (event.buttons) {
       0 => PointerInput.move,
       _ => PointerInput.drag,
@@ -252,6 +260,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         details.localPosition,
         modifiers: _currentModifiers(),
       );
+      if (handled) _reportedTouchPress = (button, details.localPosition);
     }
     // If the event was not handled by the terminal, use the supplied callback.
     if (!handled || forceCallback) {
@@ -265,6 +274,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     TerminalMouseButton button, {
     bool forceCallback = false,
   }) {
+    _reportedTouchPress = null;
     // Check if the terminal should and can handle the tap up event.
     var handled =
         details.kind == PointerDeviceKind.mouse && _applicationHandlesTap;
@@ -280,6 +290,19 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     if (!handled || forceCallback) {
       callback?.call(details);
     }
+  }
+
+  void onTapCancel() {
+    final press = _reportedTouchPress;
+    if (press == null) return;
+    _reportedTouchPress = null;
+    final (button, position) = press;
+    renderTerminal.mouseEvent(
+      button,
+      TerminalMouseButtonState.up,
+      position,
+      modifiers: _currentModifiers(),
+    );
   }
 
   bool _isMouseButtonReported(TerminalMouseButton button) {

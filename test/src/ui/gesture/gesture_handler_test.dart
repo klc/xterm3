@@ -686,4 +686,138 @@ void main() {
       },
     );
   });
+
+  // These mount a whole [TerminalView] rather than [harness]: the scroll that
+  // takes a touch drag over lives in the view's own scroll handler.
+  group('TerminalGestureHandler touch input in a mouse-reporting app', () {
+    bool isLeftPress(String v) => v.startsWith('\x1b[<0;') && v.endsWith('M');
+    bool isLeftRelease(String v) => v.startsWith('\x1b[<0;') && v.endsWith('m');
+    bool isLeftDrag(String v) => v.startsWith('\x1b[<32;');
+    bool isWheel(String v) =>
+        v.startsWith('\x1b[<64;') || v.startsWith('\x1b[<65;');
+
+    // An app tracking button events in SGR, like tmux `mouse on`.
+    Future<List<String>> pumpMouseApp(WidgetTester tester) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)..resize(40, 15);
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 400,
+            height: 300,
+            child: TerminalView(terminal, autoResize: false),
+          ),
+        ),
+      ));
+      terminal.write('\x1b[?1049h\x1b[?1002h\x1b[?1006h');
+      await tester.pump();
+      return output;
+    }
+
+    Offset viewPoint(WidgetTester tester, Offset local) {
+      final box = tester.renderObject<RenderBox>(find.byType(TerminalView));
+      return box.localToGlobal(local);
+    }
+
+    Future<void> dragUp(
+      WidgetTester tester,
+      PointerDeviceKind kind, {
+      Duration hold = Duration.zero,
+    }) async {
+      final start = viewPoint(tester, const Offset(200, 250));
+      final gesture = await tester.startGesture(start, kind: kind);
+      await tester.pump(hold);
+      for (var i = 1; i <= 10; i++) {
+        await gesture.moveTo(start - Offset(0, i * 15.0));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a touch scroll is reported only as wheel events', (
+      tester,
+    ) async {
+      final output = await pumpMouseApp(tester);
+
+      await dragUp(tester, PointerDeviceKind.touch);
+
+      expect(output, isNotEmpty);
+      expect(output.where((v) => !isWheel(v)), isEmpty);
+    });
+
+    testWidgets(
+      'a touch held past the tap deadline and then scrolled releases the '
+      'press before the wheel events',
+      (tester) async {
+        final output = await pumpMouseApp(tester);
+
+        await dragUp(
+          tester,
+          PointerDeviceKind.touch,
+          hold: kPressTimeout + const Duration(milliseconds: 50),
+        );
+
+        expect(output.where(isLeftDrag), isEmpty);
+        expect(output.where(isLeftPress), hasLength(1));
+        expect(output.where(isLeftRelease), hasLength(1));
+        expect(
+          output.indexWhere(isLeftRelease),
+          lessThan(output.indexWhere(isWheel)),
+        );
+      },
+    );
+
+    testWidgets('a touch long press releases the press it reported', (
+      tester,
+    ) async {
+      final output = await pumpMouseApp(tester);
+
+      final gesture = await tester.startGesture(
+        viewPoint(tester, const Offset(200, 150)),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      expect(output.where(isLeftPress), hasLength(1));
+      expect(output.where(isLeftRelease), hasLength(1));
+    });
+
+    testWidgets('a touch tap reports one press and one release', (
+      tester,
+    ) async {
+      final output = await pumpMouseApp(tester);
+
+      await tester.tapAt(
+        viewPoint(tester, const Offset(200, 150)),
+        kind: PointerDeviceKind.touch,
+      );
+      await tester.pumpAndSettle();
+
+      expect(output, hasLength(2));
+      expect(isLeftPress(output[0]), isTrue);
+      expect(isLeftRelease(output[1]), isTrue);
+    });
+
+    testWidgets('a held mouse drag reports press, drag and one release', (
+      tester,
+    ) async {
+      final output = await pumpMouseApp(tester);
+
+      await dragUp(
+        tester,
+        PointerDeviceKind.mouse,
+        hold: kPressTimeout + const Duration(milliseconds: 50),
+      );
+
+      expect(isLeftPress(output.first), isTrue);
+      expect(isLeftRelease(output.last), isTrue);
+      expect(output.where(isLeftPress), hasLength(1));
+      expect(output.where(isLeftRelease), hasLength(1));
+      expect(output.where(isLeftDrag), isNotEmpty);
+      expect(output.where(isWheel), isEmpty);
+    });
+  });
 }
