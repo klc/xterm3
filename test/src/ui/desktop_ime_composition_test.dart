@@ -532,5 +532,35 @@ void main() {
 
       expect(output.join(), '한ㄱ');
     });
+
+    macTest('the same word composed again after commitComposing is sent', (
+      tester,
+    ) async {
+      await pumpTerminal(tester, markedText: true);
+
+      await ime.typeScriptedKey(
+        LogicalKeyboardKey.keyK,
+        'k',
+        [('mark', 'か')],
+        physicalKey: PhysicalKeyboardKey.keyK,
+      );
+      expect(viewState(tester).commitComposing(), isTrue);
+
+      // Resetting the document discarded the marked text, so no echo comes.
+      await ime.typeScriptedKey(
+        LogicalKeyboardKey.keyK,
+        'k',
+        [('mark', 'か')],
+        physicalKey: PhysicalKeyboardKey.keyK,
+      );
+      await ime.typeScriptedKey(
+        LogicalKeyboardKey.enter,
+        '\r',
+        [('commit', 'か')],
+        physicalKey: PhysicalKeyboardKey.enter,
+      );
+
+      expect(output.join(), 'かか');
+    });
   });
 }

@@ -371,6 +371,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return;
     }
 
+    // The guard lives for exactly this call, composing or not, see
+    // [_updateEditingValueWithDeleteDetection].
+    final actionCommittedText = _actionCommittedText;
+    _actionCommittedText = null;
+
     // Get input after composing is done
     if (!_currentEditingState.composing.isCollapsed) {
       final text = _currentEditingState.text;
@@ -382,11 +387,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     widget.onComposing(null);
 
     final textDelta = _textDelta(_currentEditingState);
-    final actionCommittedText = _actionCommittedText;
 
     if (actionCommittedText != null) {
       if (textDelta == actionCommittedText) {
-        _actionCommittedText = null;
         _resetEditingState();
         return;
       }
@@ -395,7 +398,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       // This is uncommon, but it prevents losing a character if an IME batches
       // the next edit with its final composition commit.
       if (textDelta.startsWith(actionCommittedText)) {
-        _actionCommittedText = null;
         final remainingText = textDelta.substring(actionCommittedText.length);
         if (remainingText.isNotEmpty) {
           widget.onInsert(remainingText);
@@ -403,8 +405,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         _resetEditingState();
         return;
       }
-
-      _actionCommittedText = null;
     }
 
     if (_currentEditingState.text.length < _initEditingState.text.length) {
@@ -589,6 +589,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void _updateEditingValueDesktop(TextEditingValue value) {
     final text = value.text;
     final composing = value.composing;
+    final actionCommittedText = _actionCommittedText;
+    _actionCommittedText = null;
 
     if (!composing.isCollapsed) {
       _syncSent(text.substring(0, composing.start.clamp(0, text.length)));
@@ -597,8 +599,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return;
     }
 
-    final actionCommittedText = _actionCommittedText;
-    _actionCommittedText = null;
     if (actionCommittedText != null && text == actionCommittedText) {
       widget.onComposing(null);
       _resetPending = true;

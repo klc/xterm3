@@ -465,5 +465,64 @@ void main() {
 
       expect(output.join(), 'htop\r');
     });
+
+    group('deleteDetection: false', () {
+      testWidgets('ignores the IME echo of a committed composition', (
+        tester,
+      ) async {
+        final (output, viewKey) = await pumpTerminal(tester);
+
+        compose(tester, '', 'www', collapsed: false);
+        expect(viewKey.currentState!.commitComposing(), isTrue);
+        compose(tester, '', 'www', collapsed: true);
+
+        expect(output.join(), 'www');
+      });
+
+      // No echo came, so the guard must not outlive the next editing value,
+      // even when that value is still composing.
+      testWidgets('keeps the same word composed again after a commit', (
+        tester,
+      ) async {
+        final (output, viewKey) = await pumpTerminal(tester);
+
+        compose(tester, '', 'www', collapsed: false);
+        expect(viewKey.currentState!.commitComposing(), isTrue);
+        compose(tester, '', 'w', collapsed: false);
+        compose(tester, '', 'ww', collapsed: false);
+        compose(tester, '', 'www', collapsed: false);
+        compose(tester, '', 'www', collapsed: true);
+
+        expect(output.join(), 'wwwwww');
+      });
+
+      testWidgets('keeps a composed word that starts with the committed one', (
+        tester,
+      ) async {
+        final (output, viewKey) = await pumpTerminal(tester);
+
+        compose(tester, '', 'cd', collapsed: false);
+        expect(viewKey.currentState!.commitComposing(), isTrue);
+        compose(tester, '', 'c', collapsed: false);
+        compose(tester, '', 'cd', collapsed: false);
+        compose(tester, '', 'cd ', collapsed: true);
+
+        expect(output.join(), 'cdcd ');
+      });
+
+      testWidgets('keeps the word composed after an action commit', (
+        tester,
+      ) async {
+        final (output, _) = await pumpTerminal(tester);
+
+        compose(tester, '', 'ls', collapsed: false);
+        await tester.testTextInput.receiveAction(TextInputAction.newline);
+        compose(tester, '', 'l', collapsed: false);
+        compose(tester, '', 'lsblk', collapsed: false);
+        compose(tester, '', 'lsblk ', collapsed: true);
+
+        expect(output.join(), 'ls\rlsblk ');
+      });
+    });
   });
 }
