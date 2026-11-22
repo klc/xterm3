@@ -1275,6 +1275,133 @@ void main() {
 
       expect(output.join(), 'abc');
     });
+
+    testWidgets('leaves Cmd shortcuts to ancestors', (tester) async {
+      final output = <String>[];
+      var appShortcutFired = 0;
+      final terminal = Terminal(onOutput: output.add);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.keyT, meta: true): () =>
+                  appShortcutFired++,
+            },
+            child: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.metaLeft,
+        platform: 'macos',
+      );
+      for (final (key, character) in [
+        (LogicalKeyboardKey.keyT, 't'),
+        (LogicalKeyboardKey.keyK, 'k'),
+      ]) {
+        await tester.sendKeyDownEvent(
+          key,
+          character: character,
+          platform: 'macos',
+        );
+        await tester.sendKeyUpEvent(key, platform: 'macos');
+      }
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.metaLeft,
+        platform: 'macos',
+      );
+
+      expect(output, isEmpty);
+      expect(appShortcutFired, 1);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+    testWidgets('does not type the character of an unmapped Ctrl key', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'linux',
+      );
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.equal,
+        character: '=',
+        platform: 'linux',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.equal, platform: 'linux');
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'linux',
+      );
+
+      expect(output, isEmpty);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('types plain and shifted printable keys once', (tester) async {
+      final platform = defaultTargetPlatform.name.toLowerCase();
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.keyA,
+        character: 'a',
+        platform: platform,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA, platform: platform);
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.shiftLeft,
+        platform: platform,
+      );
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.digit1,
+        character: '!',
+        platform: platform,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.digit1,
+          platform: platform);
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.shiftLeft,
+        platform: platform,
+      );
+
+      expect(output.join(), 'a!');
+    },
+        variant: TargetPlatformVariant({
+          TargetPlatform.macOS,
+          TargetPlatform.linux,
+        }));
   });
 
   group('TerminalView scrollback shortcuts', () {

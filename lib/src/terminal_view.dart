@@ -531,8 +531,6 @@ class TerminalViewState extends State<TerminalView> {
         child: child,
         focusNode: _focusNode,
         autofocus: widget.autofocus,
-        onInsert: _onInsert,
-        onComposing: _onComposing,
         onKeyEvent: _handleKeyEvent,
       );
     }
