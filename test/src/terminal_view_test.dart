@@ -2957,6 +2957,162 @@ void main() {
       expect(terminalOutput.join(), isEmpty);
     });
   });
+
+  group('TerminalView keyboard insets', () {
+    testWidgets('an animated close keeps a scrolled-up view in place', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+      final offset = await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, _keyboardInset, 0);
+
+      expect(focusNode.hasFocus, isTrue);
+      expect(scrollController.offset, offset);
+    });
+
+    testWidgets('a keyboard height change keeps a scrolled-up view in place', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+      final offset = await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(
+        tester,
+        _keyboardInset,
+        _keyboardInset + 44 * _keyboardTestDpr,
+      );
+
+      expect(scrollController.offset, offset);
+    });
+
+    testWidgets(
+        'a view mounted with the keyboard open keeps its place on close',
+        (tester) async {
+      tester.view.viewInsets = const FakeViewPadding(bottom: _keyboardInset);
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      final offset = await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, _keyboardInset, 0);
+
+      expect(focusNode.hasFocus, isTrue);
+      expect(scrollController.offset, offset);
+    });
+
+    testWidgets('an animated open at the bottom keeps the cursor row visible', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      expect(
+          scrollController.offset, scrollController.position.maxScrollExtent);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+
+      _expectCursorRowAtBottom(tester, scrollController);
+    });
+
+    testWidgets('an animated open while scrolled up jumps to the cursor row', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+
+      _expectCursorRowAtBottom(tester, scrollController);
+    });
+  });
+}
+
+const _keyboardTestDpr = 3.0;
+const _keyboardInset = 336 * _keyboardTestDpr;
+
+/// A focused full-screen view at the bottom of 200 lines of scrollback, sized
+/// like a phone so [_keyboardInset] resizes it through the [Scaffold].
+Future<(ScrollController, FocusNode)> _pumpKeyboardView(
+  WidgetTester tester,
+) async {
+  tester.view.physicalSize = const Size(1170, 2532);
+  tester.view.devicePixelRatio = _keyboardTestDpr;
+  addTearDown(tester.view.reset);
+  final terminal = Terminal(maxLines: 1000)
+    ..write(List.generate(200, (index) => 'line $index\r\n').join())
+    ..write(r'$ ');
+  final scrollController = ScrollController();
+  addTearDown(scrollController.dispose);
+  final focusNode = FocusNode();
+  addTearDown(focusNode.dispose);
+
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: TerminalView(
+          terminal,
+          scrollController: scrollController,
+          focusNode: focusNode,
+          autofocus: true,
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  return (scrollController, focusNode);
+}
+
+/// Moves the bottom view inset from [from] to [to] over several frames, the
+/// way the platform reports a keyboard animation.
+Future<void> _animateKeyboardInset(
+  WidgetTester tester,
+  double from,
+  double to,
+) async {
+  const frames = 10;
+  for (var frame = 1; frame <= frames; frame++) {
+    tester.view.viewInsets = FakeViewPadding(
+      bottom: from + (to - from) * frame / frames,
+    );
+    await tester.pump(const Duration(milliseconds: 16));
+  }
+  await tester.pumpAndSettle();
+}
+
+/// Scrolls up by more than the keyboard height, so a closing keyboard does not
+/// clamp the offset, and returns the new offset.
+Future<double> _scrollUpFromBottom(
+  WidgetTester tester,
+  ScrollController scrollController,
+) async {
+  await tester.drag(find.byType(TerminalView), const Offset(0, 600));
+  await tester.pumpAndSettle();
+  expect(
+    scrollController.offset,
+    lessThan(
+      scrollController.position.maxScrollExtent -
+          _keyboardInset / _keyboardTestDpr,
+    ),
+  );
+  return scrollController.offset;
+}
+
+void _expectCursorRowAtBottom(
+  WidgetTester tester,
+  ScrollController scrollController,
+) {
+  expect(scrollController.offset, scrollController.position.maxScrollExtent);
+  final render =
+      tester.state<TerminalViewState>(find.byType(TerminalView)).renderTerminal;
+  expect(render.cursorOffset.dy, greaterThanOrEqualTo(0));
+  expect(
+    render.cursorOffset.dy + render.lineHeight,
+    lessThanOrEqualTo(render.size.height),
+  );
 }
 
 Future<void> _sendPromptNavigationShortcut(
