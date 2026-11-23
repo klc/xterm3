@@ -431,6 +431,13 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final lines = _terminal.buffer.lines;
     if (_stickToBottom) {
       _offset.correctBy(_maxScrollExtent - _scrollOffset);
+      // A momentum scroll that overran the end restarts from its uncorrected
+      // pixels when the content grows, and would pull the view back up.
+      if (_offset case final ScrollPositionWithSingleContext position
+          // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+          when position.activity is BallisticScrollActivity) {
+        position.goIdle();
+      }
     } else if (identical(lines, _layoutLines)) {
       final trimmed = lines.absoluteStartIndex - _layoutTrimmedLines;
       if (trimmed > 0) {

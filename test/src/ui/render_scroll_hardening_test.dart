@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm3/src/ui/render.dart';
@@ -135,6 +137,91 @@ void main() {
     }
 
     expect(pos.pixels, pos.maxScrollExtent);
+  });
+
+  group('flick at the bottom while streaming', () {
+    final platforms = TargetPlatformVariant({
+      TargetPlatform.macOS,
+      TargetPlatform.iOS,
+      TargetPlatform.linux,
+    });
+
+    // Flicks by [dy] a frame (negative: toward the end) with the platform's
+    // pointer and lets the momentum run out, while a line arrives every 6
+    // frames like a build log.
+    Future<void> flick(WidgetTester tester, Terminal t, double dy) async {
+      var frame = 0;
+      Future<void> tick() async {
+        if (frame++ % 6 == 0) t.write('log $frame\r\n');
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      final center = tester.getCenter(find.byType(TerminalView));
+      if (defaultTargetPlatform == TargetPlatform.macOS) {
+        final pointer = TestPointer(1, PointerDeviceKind.trackpad);
+        await tester.sendEventToBinding(pointer.panZoomStart(center));
+        for (var i = 1; i <= 5; i++) {
+          await tester.sendEventToBinding(pointer.panZoomUpdate(center,
+              pan: Offset(0, dy * i),
+              timeStamp: Duration(milliseconds: 16 * i)));
+          await tick();
+        }
+        await tester.sendEventToBinding(
+            pointer.panZoomEnd(timeStamp: const Duration(milliseconds: 96)));
+      } else {
+        final pointer = TestPointer(1, PointerDeviceKind.touch);
+        await tester.sendEventToBinding(pointer.down(center));
+        for (var i = 1; i <= 5; i++) {
+          await tester.sendEventToBinding(pointer.move(
+              center + Offset(0, dy * i),
+              timeStamp: Duration(milliseconds: 16 * i)));
+          await tick();
+        }
+        await tester.sendEventToBinding(
+            pointer.up(timeStamp: const Duration(milliseconds: 96)));
+      }
+      for (var f = 0; f < 120; f++) {
+        await tick();
+      }
+    }
+
+    Future<(Terminal, ScrollPosition)> setUp(WidgetTester tester) async {
+      final t = Terminal(maxLines: 10000);
+      await tester.pumpWidget(_app(t));
+      for (var i = 0; i < 200; i++) {
+        t.write('line $i\r\n');
+      }
+      await tester.pump();
+      final pos = _pos(tester);
+      expect(pos.pixels, pos.maxScrollExtent);
+      return (t, pos);
+    }
+
+    testWidgets('toward the end keeps following', (tester) async {
+      final (t, pos) = await setUp(tester);
+      await flick(tester, t, -20);
+      expect(pos.pixels, pos.maxScrollExtent);
+
+      for (var i = 0; i < 3; i++) {
+        t.write('tail $i\r\n');
+        await tester.pump();
+      }
+      expect(pos.pixels, pos.maxScrollExtent);
+    }, variant: platforms);
+
+    testWidgets('toward the top stops following and holds the text',
+        (tester) async {
+      final (t, pos) = await setUp(tester);
+      await flick(tester, t, 20);
+      final pixels = pos.pixels;
+      expect(pixels, lessThan(pos.maxScrollExtent));
+
+      for (var i = 0; i < 3; i++) {
+        t.write('tail $i\r\n');
+        await tester.pump();
+      }
+      expect(pos.pixels, pixels);
+    }, variant: platforms);
   });
 
   group('full scrollback while scrolled up', () {
