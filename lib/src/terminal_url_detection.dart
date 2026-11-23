@@ -68,20 +68,26 @@ extension TerminalUrlDetection on Terminal {
 
 int _trimTrailingPunctuation(String text, int start, int end) {
   var trimmedEnd = end;
-  while (
-      trimmedEnd > start && _trimmableTrailing.contains(text[trimmedEnd - 1])) {
-    trimmedEnd--;
-  }
-  // A trailing ')' is kept when it closes an earlier '(' inside the match
-  // (e.g. a wiki URL like `.../Foo_(bar)`), and trimmed otherwise (e.g. a
-  // URL wrapped in parentheses by the surrounding prose).
-  while (trimmedEnd > start && text[trimmedEnd - 1] == ')') {
-    // Scan everything before this candidate ')' — excluding itself — for an
-    // '(' that it would balance.
+  // Repeat until nothing changes: trimming a closer can uncover punctuation,
+  // and trimming punctuation can uncover a closer (e.g. `(see .../docs.)`).
+  while (trimmedEnd > start) {
+    final last = text[trimmedEnd - 1];
+    if (_trimmableTrailing.contains(last)) {
+      trimmedEnd--;
+      continue;
+    }
+    // A trailing ')', ']' or '}' is kept when it closes an earlier opener of
+    // the same kind inside the match (e.g. a wiki URL like `.../Foo_(bar)` or
+    // an IPv6 host like `http://[::1]`), and trimmed otherwise (e.g. a URL
+    // wrapped in brackets by the surrounding prose).
+    final open = const {')': '(', ']': '[', '}': '{'}[last];
+    if (open == null) break;
+    // Scan everything before this candidate closer — excluding itself — for
+    // an opener that it would balance.
     var unclosedOpens = 0;
     for (var i = start; i < trimmedEnd - 1; i++) {
-      if (text[i] == '(') unclosedOpens++;
-      if (text[i] == ')') unclosedOpens--;
+      if (text[i] == open) unclosedOpens++;
+      if (text[i] == last) unclosedOpens--;
     }
     if (unclosedOpens > 0) break;
     trimmedEnd--;
