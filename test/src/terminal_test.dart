@@ -4799,6 +4799,66 @@ void main() {
     expect(terminal.kittyKeyboardMode, 1);
   });
 
+  test('Terminal drops alt screen Kitty keyboard mode on leaving 1049', () {
+    final output = <String>[];
+    final terminal = Terminal(onOutput: output.add);
+
+    // A TUI pushes flags on the alt screen and exits without popping them.
+    terminal.write('\x1b[?1049h\x1b[>1u\x1b[?1049l');
+    expect(terminal.kittyKeyboardMode, 0);
+
+    terminal.keyInput(TerminalKey.keyC, ctrl: true);
+    expect(output, ['\x03']);
+  });
+
+  test('Terminal keeps separate Kitty keyboard modes per screen', () {
+    final terminal = Terminal();
+
+    terminal.write('\x1b[>1u\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 0);
+
+    terminal.write('\x1b[>2u');
+    expect(terminal.kittyKeyboardMode, 2);
+
+    terminal.write('\x1b[?1049l');
+    expect(terminal.kittyKeyboardMode, 1);
+
+    terminal.write('\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 2);
+  });
+
+  test('Terminal pops alt screen Kitty keyboard stack only', () {
+    final terminal = Terminal();
+
+    terminal.write('\x1b[>1u\x1b[>3u\x1b[?1049h\x1b[<99u\x1b[?1049l');
+    expect(terminal.kittyKeyboardMode, 3);
+
+    terminal.write('\x1b[<u');
+    expect(terminal.kittyKeyboardMode, 1);
+  });
+
+  test('Terminal reports Kitty keyboard mode of the active screen', () {
+    final output = <String>[];
+    final terminal = Terminal(onOutput: output.add);
+
+    terminal.write('\x1b[>1u\x1b[?1049h\x1b[>2u\x1b[?u\x1b[?1049l\x1b[?u');
+    expect(output, ['\x1b[?2u', '\x1b[?1u']);
+  });
+
+  test('Terminal resets Kitty keyboard modes of both screens', () {
+    final terminal = Terminal();
+
+    terminal.write('\x1b[=1u\x1b[?1049h\x1b[>1u\x1b[?1049l\x1bc');
+    expect(terminal.kittyKeyboardMode, 0);
+    terminal.write('\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 0);
+
+    terminal.write('\x1b[>1u\x1b[?1049l\x1b[=1u\x1b[!p');
+    expect(terminal.kittyKeyboardMode, 0);
+    terminal.write('\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 0);
+  });
+
   test('Terminal restores main cursor when leaving 1049 alternate screen', () {
     final terminal = Terminal()..resize(5, 5);
 

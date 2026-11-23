@@ -549,7 +549,11 @@ class Terminal
   bool get graphemeClusterMode => _modes._graphemeClusterMode;
 
   @override
-  int get kittyKeyboardMode => _modes._kittyKeyboardMode;
+  int get kittyKeyboardMode => _kittyKeyboard._mode;
+
+  /// Kitty keyboard flags and stack of the active screen.
+  _KittyKeyboardModes get _kittyKeyboard =>
+      isUsingAltBuffer ? _modes._altKittyKeyboard : _modes._mainKittyKeyboard;
 
   @override
   int get modifyOtherKeysMode => _modes._modifyOtherKeysMode;
@@ -2415,45 +2419,45 @@ class Terminal
 
   @override
   void reportKittyKeyboardMode() {
-    _replySink
-        ?.call('\x1b[?${_modes._kittyKeyboardMode & _kittyKeyboardModeMask}u');
+    _replySink?.call('\x1b[?${_kittyKeyboard._mode & _kittyKeyboardModeMask}u');
   }
 
   @override
   void setKittyKeyboardMode(int mode, int behavior) {
     final normalizedMode = mode & _kittyKeyboardModeMask;
-    _modes._kittyKeyboardMode = switch (behavior) {
-      2 => _modes._kittyKeyboardMode | normalizedMode,
-      3 => _modes._kittyKeyboardMode & ~normalizedMode,
+    final kitty = _kittyKeyboard;
+    kitty._mode = switch (behavior) {
+      2 => kitty._mode | normalizedMode,
+      3 => kitty._mode & ~normalizedMode,
       _ => normalizedMode,
     };
   }
 
   @override
   void pushKittyKeyboardMode(int mode) {
-    if (_modes._kittyKeyboardModeStack.length >=
-        _maxKittyKeyboardModeStackDepth) {
-      _modes._kittyKeyboardModeStack.removeAt(0);
+    final kitty = _kittyKeyboard;
+    if (kitty._stack.length >= _maxKittyKeyboardModeStackDepth) {
+      kitty._stack.removeAt(0);
     }
 
     final normalizedMode = mode & _kittyKeyboardModeMask;
-    _modes._kittyKeyboardModeStack.add(_modes._kittyKeyboardMode);
-    _modes._kittyKeyboardMode = normalizedMode;
+    kitty._stack.add(kitty._mode);
+    kitty._mode = normalizedMode;
   }
 
   @override
   void popKittyKeyboardModes(int count) {
     if (count <= 0) return;
 
-    if (count > _modes._kittyKeyboardModeStack.length) {
-      _modes._kittyKeyboardModeStack.clear();
-      _modes._kittyKeyboardMode = 0;
+    final kitty = _kittyKeyboard;
+    if (count > kitty._stack.length) {
+      kitty.reset();
       return;
     }
 
-    final newLength = _modes._kittyKeyboardModeStack.length - count;
-    _modes._kittyKeyboardMode = _modes._kittyKeyboardModeStack[newLength];
-    _modes._kittyKeyboardModeStack.length = newLength;
+    final newLength = kitty._stack.length - count;
+    kitty._mode = kitty._stack[newLength];
+    kitty._stack.length = newLength;
   }
 
   @override

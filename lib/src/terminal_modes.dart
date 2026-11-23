@@ -82,11 +82,13 @@ class _TerminalModes {
 
   bool _cursorLineHighlightMode = false;
 
-  int _kittyKeyboardMode = 0;
+  /// Kitty keyboard flags and stack, one copy per screen: the spec requires
+  /// independent stacks for the main and alternate screens.
+  final _mainKittyKeyboard = _KittyKeyboardModes();
+
+  final _altKittyKeyboard = _KittyKeyboardModes();
 
   int _modifyOtherKeysMode = 0;
-
-  final _kittyKeyboardModeStack = <int>[];
 
   bool _synchronizedUpdateMode = false;
 
@@ -127,9 +129,9 @@ class _TerminalModes {
     _graphemeClusterMode = true;
     _leftRightMarginMode = false;
     _cursorLineHighlightMode = false;
-    _kittyKeyboardMode = 0;
+    _mainKittyKeyboard.reset();
+    _altKittyKeyboard.reset();
     _modifyOtherKeysMode = 0;
-    _kittyKeyboardModeStack.clear();
   }
 
   /// Soft mode reset (DECSTR). Does not touch [_cursorLineHighlightMode].
@@ -167,8 +169,19 @@ class _TerminalModes {
     _reportColorSchemeMode = false;
     _graphemeClusterMode = true;
     _leftRightMarginMode = false;
-    _kittyKeyboardMode = 0;
+    _mainKittyKeyboard.reset();
+    _altKittyKeyboard.reset();
     _modifyOtherKeysMode = 0;
-    _kittyKeyboardModeStack.clear();
+  }
+}
+
+class _KittyKeyboardModes {
+  int _mode = 0;
+
+  final _stack = <int>[];
+
+  void reset() {
+    _mode = 0;
+    _stack.clear();
   }
 }
