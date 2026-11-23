@@ -307,6 +307,8 @@ class TerminalViewState extends State<TerminalView> {
   void initState() {
     _focusNode = widget.focusNode ?? FocusNode();
     _focusNode.addListener(_reportFocusChange);
+    // Record without reporting: autofocus lands a frame later.
+    widget.terminal.focused = _focusNode.hasFocus;
     _controller = widget.controller ?? TerminalController();
     _scrollController = widget.scrollController ?? ScrollController();
     _shortcutManager = ShortcutManager(
@@ -328,6 +330,7 @@ class TerminalViewState extends State<TerminalView> {
       _installColorQuery(widget.terminal);
       _installColorSchemeQuery(widget.terminal);
       _installClipboardHandlers(widget.terminal);
+      _reportFocus(oldWidget.terminal, false);
     }
     if (oldWidget.focusNode != widget.focusNode) {
       _focusNode.removeListener(_reportFocusChange);
@@ -337,6 +340,7 @@ class TerminalViewState extends State<TerminalView> {
       _focusNode = widget.focusNode ?? FocusNode();
       _focusNode.addListener(_reportFocusChange);
     }
+    _reportFocusChange();
     if (oldWidget.controller != widget.controller) {
       if (oldWidget.controller == null) {
         _controller.dispose();
@@ -364,6 +368,8 @@ class TerminalViewState extends State<TerminalView> {
     _hoveredUrlUnderline?.dispose();
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _focusNode.removeListener(_reportFocusChange);
+    // The node is already detached here, so its unfocus never reaches us.
+    _reportFocus(widget.terminal, false);
     if (widget.focusNode == null) {
       _focusNode.dispose();
     }
@@ -448,7 +454,11 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _reportFocusChange() {
-    widget.terminal.focusInput(_focusNode.hasFocus);
+    _reportFocus(widget.terminal, _focusNode.hasFocus);
+  }
+
+  void _reportFocus(Terminal terminal, bool focused) {
+    if (terminal.focused != focused) terminal.focusInput(focused);
   }
 
   @override

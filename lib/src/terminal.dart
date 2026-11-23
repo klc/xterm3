@@ -440,7 +440,9 @@ class Terminal
   TerminalCursorType? get applicationCursorType =>
       _modes._applicationCursorType;
 
-  bool _focused = true;
+  /// Whether the viewport has input focus. [focusInput] sets and reports it;
+  /// assigning it records the state without reporting it.
+  bool focused = true;
 
   bool get cursorLineHighlightMode => _modes._cursorLineHighlightMode;
 
@@ -782,7 +784,7 @@ class Terminal
 
   /// Reports a terminal viewport focus change to the underlying application.
   void focusInput(bool focused) {
-    _focused = focused;
+    this.focused = focused;
     if (_isDisposed) return;
     if (!_modes._reportFocusMode) return;
     _replySink?.call(switch (focused) {
@@ -2116,7 +2118,7 @@ class Terminal
     _modes._reportFocusMode = enabled;
     if (!enabled) return;
 
-    focusInput(_focused);
+    focusInput(focused);
   }
 
   @override

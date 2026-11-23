@@ -318,6 +318,110 @@ void main() {
       otherFocus.dispose();
     });
 
+    testWidgets('reports focus to terminals swapped in and out', (
+      tester,
+    ) async {
+      final outputA = <String>[];
+      final outputB = <String>[];
+      final terminalA = Terminal(onOutput: outputA.add);
+      final terminalB = Terminal(onOutput: outputB.add)
+        ..focusInput(false)
+        ..write('\x1b[?1004h');
+      final focusNode = FocusNode();
+      Widget view(Terminal terminal) =>
+          MaterialApp(home: TerminalView(terminal, focusNode: focusNode));
+
+      await tester.pumpWidget(view(terminalA));
+      focusNode.requestFocus();
+      await tester.pump();
+      terminalA.write('\x1b[?1004h');
+      expect(outputA, ['\x1b[I']);
+      outputA.clear();
+      outputB.clear();
+
+      await tester.pumpWidget(view(terminalB));
+      expect(focusNode.hasFocus, isTrue);
+      expect(outputA, ['\x1b[O']);
+      expect(outputB, ['\x1b[I']);
+
+      await tester.pumpWidget(view(terminalA));
+      expect(outputA, ['\x1b[O', '\x1b[I']);
+      expect(outputB, ['\x1b[I', '\x1b[O']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode.dispose();
+    });
+
+    testWidgets('reports focus out when a focused view is disposed', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode = FocusNode();
+
+      await tester.pumpWidget(
+        MaterialApp(home: TerminalView(terminal, focusNode: focusNode)),
+      );
+      focusNode.requestFocus();
+      await tester.pump();
+      terminal.write('\x1b[?1004h');
+      output.clear();
+
+      await tester.pumpWidget(const SizedBox());
+      expect(output, ['\x1b[O']);
+      await tester.pump();
+      expect(output, ['\x1b[O']);
+      focusNode.dispose();
+    });
+
+    testWidgets('does not report focus in for an unfocused view', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode = FocusNode();
+
+      await tester.pumpWidget(
+        MaterialApp(home: TerminalView(terminal, focusNode: focusNode)),
+      );
+      terminal.write('\x1b[?1004h');
+      expect(output, ['\x1b[O']);
+
+      focusNode.requestFocus();
+      await tester.pump();
+      expect(output, ['\x1b[O', '\x1b[I']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode.dispose();
+    });
+
+    testWidgets('reports the state of a swapped focus node', (tester) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode1 = FocusNode();
+      final focusNode2 = FocusNode();
+      Widget view(FocusNode focusNode) =>
+          MaterialApp(home: TerminalView(terminal, focusNode: focusNode));
+
+      await tester.pumpWidget(view(focusNode1));
+      focusNode1.requestFocus();
+      await tester.pump();
+      terminal.write('\x1b[?1004h');
+      output.clear();
+
+      await tester.pumpWidget(view(focusNode2));
+      await tester.pump();
+      expect(output, ['\x1b[O']);
+
+      focusNode2.requestFocus();
+      await tester.pump();
+      expect(output, ['\x1b[O', '\x1b[I']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode1.dispose();
+      focusNode2.dispose();
+    });
+
     testWidgets('is not listened when terminal is disposed', (tester) async {
       final terminal = Terminal();
 
