@@ -2114,6 +2114,156 @@ void main() {
     });
 
     testWidgets(
+      'holding the pointer outside the viewport keeps scrolling the selection',
+      (tester) async {
+        final terminal = Terminal(maxLines: 1000)..resize(20, 5);
+        final controller = TerminalController();
+        final scrollController = ScrollController();
+
+        terminal.write(
+          List.generate(200, (index) => 'line $index\r\n').join(),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 400,
+                height: 120,
+                child: TerminalView(
+                  terminal,
+                  controller: controller,
+                  scrollController: scrollController,
+                  autoResize: false,
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final state =
+            tester.state<TerminalViewState>(find.byType(TerminalView));
+        final renderTerminal = state.renderTerminal;
+        final lineHeight = renderTerminal.lineHeight;
+        final startOffset = scrollController.offset;
+        final start = renderTerminal.localToGlobal(
+          Offset(
+            renderTerminal.cellSize.width * 4,
+            renderTerminal.size.height - lineHeight,
+          ),
+        );
+        final startRow =
+            renderTerminal.getCellOffset(renderTerminal.globalToLocal(start)).y;
+        // Two rows above the top edge, where the pointer is then held still.
+        final beyondTop = renderTerminal.localToGlobal(
+          Offset(renderTerminal.cellSize.width, -lineHeight * 2),
+        );
+
+        final gesture = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+        );
+        await gesture.down(start);
+        await gesture.moveTo(beyondTop);
+        final firstRow = controller.selection!.normalized.begin.y;
+        for (var i = 0; i < 50; i++) {
+          await tester.pump(const Duration(milliseconds: 40));
+        }
+
+        // Scrolling goes on past the two rows the pointer overshot by, and
+        // the rows it brings in extend the selection.
+        expect(
+          startOffset - scrollController.offset,
+          greaterThan(lineHeight * 6),
+        );
+        expect(
+            controller.selection!.normalized.begin.y, lessThan(firstRow - 6));
+        expect(controller.selection!.normalized.end.y, startRow);
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+        final offsetAfterDrag = scrollController.offset;
+        await tester.pump(const Duration(milliseconds: 500));
+
+        expect(scrollController.offset, offsetAfterDrag);
+        expect(
+          offsetAfterDrag,
+          greaterThan(scrollController.position.minScrollExtent),
+        );
+
+        // Held until the top of the scrollback, the scroller stops there by
+        // itself: pumpAndSettle only returns once nothing animates.
+        final topGesture = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+        );
+        await topGesture.down(start);
+        await topGesture.moveTo(beyondTop);
+        await tester.pumpAndSettle();
+
+        expect(
+          scrollController.offset,
+          scrollController.position.minScrollExtent,
+        );
+        expect(controller.selection!.normalized.begin.y, 0);
+
+        await topGesture.up();
+        await tester.pumpAndSettle();
+
+        controller.dispose();
+        scrollController.dispose();
+      },
+    );
+
+    testWidgets('disposing the view while auto-scrolling does not throw', (
+      tester,
+    ) async {
+      final terminal = Terminal(maxLines: 1000)..resize(20, 5);
+      final scrollController = ScrollController();
+
+      terminal.write(
+        List.generate(200, (index) => 'line $index\r\n').join(),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 400,
+              height: 120,
+              child: TerminalView(
+                terminal,
+                scrollController: scrollController,
+                autoResize: false,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final renderTerminal = state.renderTerminal;
+      final gesture = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.down(
+        renderTerminal.localToGlobal(
+          Offset(renderTerminal.cellSize.width, renderTerminal.lineHeight),
+        ),
+      );
+      await gesture.moveTo(
+        renderTerminal.localToGlobal(
+          Offset(renderTerminal.cellSize.width, -renderTerminal.lineHeight),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 10));
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 100));
+      await gesture.up();
+
+      scrollController.dispose();
+    });
+
+    testWidgets(
       'dragging inside an offset terminal does not trigger upward auto scroll',
       (tester) async {
         final terminal = Terminal(maxLines: 100)..resize(20, 5);

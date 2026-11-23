@@ -77,6 +77,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   Offset? _lastDragPosition;
 
+  Offset? _lastGlobalDragPosition;
+
   var _applicationOwnsPointerDrag = false;
 
   final Map<int, int> _pressedMouseButtons = {};
@@ -437,6 +439,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   void onDragUpdate(DragUpdateDetails details) {
     _lastDragPosition = details.localPosition;
+    _lastGlobalDragPosition = details.globalPosition;
     if (_applicationOwnsPointerDrag) return;
     _updateDragSelection();
     _startSelectionAutoScroll(details.globalPosition);
@@ -471,7 +474,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
       _selectionAutoScroller = EdgeDraggingAutoScroller(
         scrollable,
         velocityScalar: _selectionScrollVelocity,
-        onScrollViewScrolled: _updateDragSelection,
+        onScrollViewScrolled: _onSelectionAutoScrolled,
       );
     }
 
@@ -480,12 +483,29 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     );
   }
 
+  /// [EdgeDraggingAutoScroller] holds the drag target relative to the
+  /// content, so it stops once the scroll brings that point into view. Restart
+  /// it from where the pointer still is, so a pointer held outside the view
+  /// keeps scrolling.
+  void _onSelectionAutoScrolled() {
+    if (!mounted) return;
+    _updateDragSelection();
+    final dragPosition = _lastGlobalDragPosition;
+    if (_dragStartAnchor == null ||
+        _applicationOwnsPointerDrag ||
+        dragPosition == null) {
+      return;
+    }
+    _startSelectionAutoScroll(dragPosition);
+  }
+
   void _finishDragSelection() {
     _stopSelectionAutoScroll();
     _applicationOwnsPointerDrag = false;
     _dragStartAnchor?.dispose();
     _dragStartAnchor = null;
     _lastDragPosition = null;
+    _lastGlobalDragPosition = null;
   }
 
   void _stopSelectionAutoScroll() {
