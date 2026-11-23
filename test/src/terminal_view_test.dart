@@ -3029,6 +3029,160 @@ void main() {
       _expectCursorRowAtBottom(tester, scrollController);
     });
   });
+
+  group('TerminalView keyboard requests', () {
+    for (final focused in [false, true]) {
+      testWidgets(
+          'a touch long press with the keyboard closed selects the pressed row '
+          '(focused: $focused)', (tester) async {
+        final controller = TerminalController();
+        addTearDown(controller.dispose);
+        await _pumpKeyboardView(
+          tester,
+          autofocus: focused,
+          controller: controller,
+        );
+        // A focused view whose keyboard the user dismissed.
+        tester.testTextInput.hide();
+        final render = tester
+            .state<TerminalViewState>(find.byType(TerminalView))
+            .renderTerminal;
+        final press = Offset(render.cellSize.width * 2.5, 300);
+        final pressedRow = render.getCellOffset(press).y;
+
+        final gesture = await tester.startGesture(render.localToGlobal(press));
+        await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+        // The test binding never raises a keyboard, so do what the platform
+        // does once the view asks for one.
+        if (tester.testTextInput.isVisible) {
+          await _animateKeyboardInset(tester, 0, _keyboardInset);
+        }
+        await tester.pump(kLongPressTimeout);
+
+        expect(controller.selection!.normalized.begin.y, pressedRow);
+        expect(tester.testTextInput.isVisible, isFalse);
+
+        await gesture.up();
+        await tester.pump();
+        expect(tester.testTextInput.isVisible, isFalse);
+      },
+          variant: const TargetPlatformVariant({
+            TargetPlatform.android,
+            TargetPlatform.iOS,
+          }));
+    }
+
+    for (final hardwareKeyboardOnly in [false, true]) {
+      testWidgets(
+          'a touch tap focuses on tap up '
+          '(hardwareKeyboardOnly: $hardwareKeyboardOnly)', (tester) async {
+        final (_, focusNode) = await _pumpKeyboardView(
+          tester,
+          autofocus: false,
+          hardwareKeyboardOnly: hardwareKeyboardOnly,
+        );
+
+        final gesture = await tester.startGesture(
+          tester.getCenter(find.byType(TerminalView)),
+        );
+        await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+        expect(focusNode.hasFocus, isFalse);
+
+        await gesture.up();
+        await tester.pump();
+        expect(focusNode.hasFocus, isTrue);
+        expect(tester.testTextInput.isVisible, !hardwareKeyboardOnly);
+      });
+
+      testWidgets(
+          'a mouse click focuses on press '
+          '(hardwareKeyboardOnly: $hardwareKeyboardOnly)', (tester) async {
+        final (_, focusNode) = await _pumpKeyboardView(
+          tester,
+          autofocus: false,
+          hardwareKeyboardOnly: hardwareKeyboardOnly,
+        );
+
+        final gesture = await tester.startGesture(
+          tester.getCenter(find.byType(TerminalView)),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+        expect(focusNode.hasFocus, isTrue);
+
+        await gesture.up();
+        await tester.pump();
+        expect(focusNode.hasFocus, isTrue);
+      });
+    }
+
+    testWidgets(
+        'a touch double tap does not request the keyboard on the first down',
+        (tester) async {
+      final controller = TerminalController();
+      addTearDown(controller.dispose);
+      await _pumpKeyboardView(tester, autofocus: false, controller: controller);
+      final render = tester
+          .state<TerminalViewState>(find.byType(TerminalView))
+          .renderTerminal;
+      final press = Offset(render.cellSize.width * 2.5, 300);
+      final pressedRow = render.getCellOffset(press).y;
+      final position = render.localToGlobal(press);
+
+      final first = await tester.startGesture(position);
+      await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+      expect(tester.testTextInput.isVisible, isFalse);
+      await first.up();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(position);
+      await tester.pump();
+
+      expect(controller.selection!.normalized.begin.y, pressedRow);
+    });
+
+    testWidgets('a touch tap that clears a selection keeps the keyboard closed',
+        (tester) async {
+      final controller = TerminalController();
+      addTearDown(controller.dispose);
+      await _pumpKeyboardView(tester, autofocus: false, controller: controller);
+      final render = tester
+          .state<TerminalViewState>(find.byType(TerminalView))
+          .renderTerminal;
+      render.selectWord(Offset(render.cellSize.width * 2.5, 300));
+      expect(controller.selection, isNotNull);
+
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+
+      expect(controller.selection, isNull);
+      expect(tester.testTextInput.isVisible, isFalse);
+    });
+
+    testWidgets('a touch tap in a mouse-reporting app opens the keyboard', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)
+        ..write('\x1b[?1000h\x1b[?1006h');
+      final focusNode = FocusNode();
+      addTearDown(focusNode.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(terminal, focusNode: focusNode),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+
+      expect(output.where((value) => value.endsWith('M')), hasLength(1));
+      expect(output.where((value) => value.endsWith('m')), hasLength(1));
+      expect(focusNode.hasFocus, isTrue);
+      expect(tester.testTextInput.isVisible, isTrue);
+    });
+  });
 }
 
 const _keyboardTestDpr = 3.0;
@@ -3037,8 +3191,11 @@ const _keyboardInset = 336 * _keyboardTestDpr;
 /// A focused full-screen view at the bottom of 200 lines of scrollback, sized
 /// like a phone so [_keyboardInset] resizes it through the [Scaffold].
 Future<(ScrollController, FocusNode)> _pumpKeyboardView(
-  WidgetTester tester,
-) async {
+  WidgetTester tester, {
+  bool autofocus = true,
+  TerminalController? controller,
+  bool hardwareKeyboardOnly = false,
+}) async {
   tester.view.physicalSize = const Size(1170, 2532);
   tester.view.devicePixelRatio = _keyboardTestDpr;
   addTearDown(tester.view.reset);
@@ -3055,9 +3212,11 @@ Future<(ScrollController, FocusNode)> _pumpKeyboardView(
       home: Scaffold(
         body: TerminalView(
           terminal,
+          controller: controller,
           scrollController: scrollController,
           focusNode: focusNode,
-          autofocus: true,
+          autofocus: autofocus,
+          hardwareKeyboardOnly: hardwareKeyboardOnly,
         ),
       ),
     ),

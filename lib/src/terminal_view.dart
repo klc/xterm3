@@ -282,6 +282,9 @@ class TerminalViewState extends State<TerminalView> {
 
   var _hyperlinkModifierPressed = false;
 
+  /// Whether the touch press under way focuses the view once it ends as a tap.
+  var _focusOnTapUp = false;
+
   late TerminalController _controller;
 
   late ScrollController _scrollController;
@@ -634,6 +637,10 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _onTapUp(TapUpDetails details) {
+    if (_focusOnTapUp) {
+      _focusOnTapUp = false;
+      _focusForInput();
+    }
     _updateHyperlinkModifierState();
     final offset = renderTerminal.getCellOffset(details.localPosition);
     // Touch has no modifier key to hold, so a tap opens a link directly.
@@ -753,15 +760,25 @@ class TerminalViewState extends State<TerminalView> {
     return false;
   }
 
-  void _onTapDown(TapDownDetails _) {
+  void _onTapDown(TapDownDetails details) {
+    _focusOnTapUp = false;
     if (_controller.selection != null) {
       _controller.clearSelection();
+    } else if (details.kind == PointerDeviceKind.mouse) {
+      _focusForInput();
     } else {
-      if (!widget.hardwareKeyboardOnly) {
-        _customTextEditKey.currentState?.requestKeyboard();
-      } else {
-        _focusNode.requestFocus();
-      }
+      // A touch press may still become a long press or a scroll. Bringing up
+      // the keyboard now would resize and scroll the view under the finger
+      // before they resolve, so it waits for the tap to complete.
+      _focusOnTapUp = true;
+    }
+  }
+
+  void _focusForInput() {
+    if (!widget.hardwareKeyboardOnly) {
+      _customTextEditKey.currentState?.requestKeyboard();
+    } else {
+      _focusNode.requestFocus();
     }
   }
 
