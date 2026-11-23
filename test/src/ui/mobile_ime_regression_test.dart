@@ -390,6 +390,107 @@ void main() {
     },
   );
 
+  // A keyboard can move the caret inside the sentinel without changing the
+  // text: HeliBoard's space-bar swipe calls setSelection, an iOS two-finger
+  // select calls setSelectedTextRange. The next commitText then inserts at
+  // that caret, not at the end of the sentinel.
+  group('Caret moved inside the sentinel (deleteDetection: true)', () {
+    int setEditingStateCalls(WidgetTester tester) => tester.testTextInput.log
+        .where((call) => call.method == 'TextInput.setEditingState')
+        .length;
+
+    /// Moves the caret like the keyboard, then commits [typed] the way the
+    /// engine does: at its own caret, which is the keyboard's unless the
+    /// framework set the editing state in between.
+    void moveCaretThenCommit(
+      WidgetTester tester,
+      TextSelection selection,
+      String typed,
+    ) {
+      tester.testTextInput.log.clear();
+      var engine = TextEditingValue(text: '  ', selection: selection);
+      tester.testTextInput.updateEditingValue(engine);
+      if (setEditingStateCalls(tester) > 0) {
+        engine = TextEditingValue.fromJSON(tester.testTextInput.editingState!);
+      }
+      final text = engine.selection.textBefore(engine.text) +
+          typed +
+          engine.selection.textAfter(engine.text);
+      tester.testTextInput.updateEditingValue(
+        TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(
+            offset: engine.selection.start + typed.length,
+          ),
+        ),
+      );
+    }
+
+    final selections = {
+      'caret 1': const TextSelection.collapsed(offset: 1),
+      'caret 0': const TextSelection.collapsed(offset: 0),
+      'select all': const TextSelection(baseOffset: 0, extentOffset: 2),
+    };
+    for (final MapEntry(key: name, value: selection) in selections.entries) {
+      testWidgets('$name, then a typed character sends that character', (
+        tester,
+      ) async {
+        final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+
+        moveCaretThenCommit(tester, selection, 'l');
+
+        expect(output.join(), 'l');
+      });
+    }
+
+    testWidgets('a selection-only change puts the caret back at the end', (
+      tester,
+    ) async {
+      final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+      tester.testTextInput.log.clear();
+
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: '  ',
+          selection: TextSelection.collapsed(offset: 1),
+        ),
+      );
+
+      expect(output, isEmpty);
+      expect(setEditingStateCalls(tester), 1);
+      final state = tester.testTextInput.editingState!;
+      expect(state['text'], '  ');
+      expect(state['selectionBase'], 2);
+      expect(state['selectionExtent'], 2);
+    });
+
+    testWidgets(
+        'typing and backspace are unchanged, and the sentinel with '
+        'the caret at the end is left alone', (tester) async {
+      final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+
+      compose(tester, '  ', 'l', collapsed: true);
+      compose(tester, '  ', 's', collapsed: true);
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: ' ',
+          selection: TextSelection.collapsed(offset: 1),
+        ),
+      );
+      expect(output.join(), 'ls\x7f');
+
+      tester.testTextInput.log.clear();
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: '  ',
+          selection: TextSelection.collapsed(offset: 2),
+        ),
+      );
+      expect(output.join(), 'ls\x7f');
+      expect(setEditingStateCalls(tester), 0);
+    });
+  });
+
   group('commitComposing (input from outside the keyboard)', () {
     testWidgets(
       'flushes an open composition so the next out-of-band key lands after it',

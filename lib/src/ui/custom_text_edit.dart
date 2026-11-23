@@ -590,7 +590,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return;
     }
 
-    if (text != _initEditingState.text) {
+    // A keyboard can move the caret into the sentinel without changing the
+    // text (HeliBoard's space-bar swipe, an iOS two-finger select). Left
+    // there, the next character is inserted before the end and the diff
+    // above reads the wrong characters, so the caret is put back as well.
+    if (text != _initEditingState.text ||
+        value.selection.baseOffset != initLength ||
+        value.selection.extentOffset != initLength) {
       _resetEditingState();
     }
   }
