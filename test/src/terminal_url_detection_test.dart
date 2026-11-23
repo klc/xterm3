@@ -103,4 +103,20 @@ void main() {
 
     expect(terminal.urlAt(const CellOffset(1, 1)), isNull);
   });
+
+  // Untrusted output: one long logical line whose match ends in a huge run of
+  // unbalanced closers. Trimming must stay linear, not rescan per closer.
+  for (final closer in [']', ')']) {
+    test('urlAt trims 100k trailing "$closer" in linear time', () {
+      final terminal = Terminal(maxLines: 10000)..resize(80, 24);
+      terminal.write('http://a${closer * 100000}');
+
+      final stopwatch = Stopwatch()..start();
+      final match = terminal.urlAt(const CellOffset(3, 0));
+      stopwatch.stop();
+
+      expect(match!.text, 'http://a');
+      expect(stopwatch.elapsedMilliseconds, lessThan(500));
+    });
+  }
 }

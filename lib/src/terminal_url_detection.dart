@@ -67,6 +67,16 @@ extension TerminalUrlDetection on Terminal {
 }
 
 int _trimTrailingPunctuation(String text, int start, int end) {
+  const openerOf = {')': '(', ']': '[', '}': '{'};
+  // Opens minus closes of each bracket kind over [start, trimmedEnd), kept in
+  // step as trimmedEnd moves left so no closer has to rescan the match.
+  final netOpens = {'(': 0, '[': 0, '{': 0};
+  for (var i = start; i < end; i++) {
+    final c = text[i];
+    if (netOpens.containsKey(c)) netOpens[c] = netOpens[c]! + 1;
+    final open = openerOf[c];
+    if (open != null) netOpens[open] = netOpens[open]! - 1;
+  }
   var trimmedEnd = end;
   // Repeat until nothing changes: trimming a closer can uncover punctuation,
   // and trimming punctuation can uncover a closer (e.g. `(see .../docs.)`).
@@ -80,16 +90,13 @@ int _trimTrailingPunctuation(String text, int start, int end) {
     // the same kind inside the match (e.g. a wiki URL like `.../Foo_(bar)` or
     // an IPv6 host like `http://[::1]`), and trimmed otherwise (e.g. a URL
     // wrapped in brackets by the surrounding prose).
-    final open = const {')': '(', ']': '[', '}': '{'}[last];
+    final open = openerOf[last];
     if (open == null) break;
-    // Scan everything before this candidate closer — excluding itself — for
-    // an opener that it would balance.
-    var unclosedOpens = 0;
-    for (var i = start; i < trimmedEnd - 1; i++) {
-      if (text[i] == open) unclosedOpens++;
-      if (text[i] == last) unclosedOpens--;
-    }
+    // Count everything before this candidate closer — excluding itself, hence
+    // the +1 — for an opener that it would balance.
+    final unclosedOpens = netOpens[open]! + 1;
     if (unclosedOpens > 0) break;
+    netOpens[open] = unclosedOpens;
     trimmedEnd--;
   }
   return trimmedEnd;
