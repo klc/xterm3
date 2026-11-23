@@ -46,5 +46,28 @@ void main() {
 
       expect(output, ['\x1b[27;2;13~']);
     });
+
+    test('encodes the key, not the C0 control macOS gives as Ctrl text', () {
+      // AppKit applies Control to the characters: Ctrl+P arrives as `\x10`.
+      terminal.keyInput(TerminalKey.keyP, ctrl: true, text: '\x10');
+      terminal.keyInput(TerminalKey.keyA,
+          shift: true, ctrl: true, text: '\x01');
+
+      expect(output, ['\x1b[27;5;112~', '\x1b[27;6;65~']);
+    });
+
+    test('keeps the control text of a key with no character', () {
+      terminal.keyInput(TerminalKey.tab, ctrl: true, text: '\t');
+
+      expect(output, ['\x1b[27;5;9~']);
+    });
+
+    test('leaves legacy Ctrl+P a C0 control when the mode is off', () {
+      final legacyOutput = <String>[];
+      Terminal(onOutput: legacyOutput.add)
+          .keyInput(TerminalKey.keyP, ctrl: true, text: '\x10');
+
+      expect(legacyOutput, ['\x10']);
+    });
   });
 }

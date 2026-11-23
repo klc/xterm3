@@ -150,9 +150,11 @@ class ModifyOtherKeysInputHandler implements TerminalInputHandler {
 
   int? _codepoint(TerminalKeyboardEvent event) {
     final text = event.text;
-    if (text != null) {
-      final codePoint = singleCodePoint(text);
-      if (codePoint != null) return codePoint;
+    final textCodePoint = text == null ? null : singleCodePoint(text);
+    // macOS applies Control to the text (Ctrl+P is `\x10`), so a control
+    // character names the key only when the key has no character of its own.
+    if (textCodePoint != null && !isControlCodepoint(textCodePoint)) {
+      return textCodePoint;
     }
 
     final key = event.key;
@@ -179,7 +181,7 @@ class ModifyOtherKeysInputHandler implements TerminalInputHandler {
       TerminalKey.comma => 44,
       TerminalKey.period => 46,
       TerminalKey.slash => 47,
-      _ => null,
+      _ => textCodePoint,
     };
   }
 

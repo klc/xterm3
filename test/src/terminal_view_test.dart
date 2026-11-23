@@ -1357,6 +1357,43 @@ void main() {
       expect(output, isEmpty);
     }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
+    testWidgets('encodes macOS Ctrl+P by its key under modifyOtherKeys', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)..write('\x1b[>4;2m');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'macos',
+      );
+      // AppKit applies Control to the characters: Ctrl+P arrives as `\x10`.
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.keyP,
+        character: '\x10',
+        platform: 'macos',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyP, platform: 'macos');
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'macos',
+      );
+
+      expect(output, ['\x1b[27;5;112~']);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
     testWidgets('types plain and shifted printable keys once', (tester) async {
       final platform = defaultTargetPlatform.name.toLowerCase();
       final output = <String>[];
