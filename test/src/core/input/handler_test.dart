@@ -142,6 +142,28 @@ void main() {
       expect(output, ['\x1ba']);
     });
 
+    test('supports iOS alt sends escape mode like macOS', () {
+      final output = <String>[];
+      // An iPad hardware keyboard's Option composes, as on macOS, unless
+      // option-as-meta (1039) is on.
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.ios,
+      );
+
+      terminal.keyInput(TerminalKey.keyA, alt: true);
+      terminal.write('\x1b[?1039h');
+      terminal.keyInput(TerminalKey.keyA, alt: true);
+      // US Option+A is `å`: as meta it is the key's letter.
+      terminal.keyInput(TerminalKey.keyA, alt: true, text: 'å');
+      // Turkish Q Option+Q is `@`.
+      terminal.keyInput(TerminalKey.keyQ, alt: true, text: '@');
+      terminal.write('\x1b[?1039l');
+      terminal.keyInput(TerminalKey.keyA, alt: true);
+
+      expect(output, ['\x1ba', '\x1ba', '\x1b@']);
+    });
+
     test('supports shifted, punctuated, and non-ASCII Alt text', () {
       final output = <String>[];
       final terminal = Terminal(
@@ -665,6 +687,26 @@ void main() {
       expect(output, ['\x1b[113;3u']);
     });
 
+    test('keeps iOS Option-composed text out of Kitty encoding', () {
+      final output = <String>[];
+      // iPad hardware keyboard, Turkish Q: Option+Q is `@`, as on macOS.
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.ios,
+      );
+
+      terminal.write('\x1b[=5u');
+      final handled = terminal.keyInput(
+        TerminalKey.keyQ,
+        alt: true,
+        text: '@',
+      );
+      terminal.keyInput(TerminalKey.keyQ, alt: true);
+
+      expect(handled, isFalse, reason: 'falls through to the text handlers');
+      expect(output, ['\x1b[113;3u']);
+    });
+
     test('reports associated text codepoints', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);
@@ -760,6 +802,28 @@ void main() {
       terminal.keyInput(TerminalKey.keyQ, alt: true, text: '@');
 
       expect(output, ['\x1b[27;3;64~']);
+    });
+
+    test('modifyOtherKeys mode 2 sends Option-composed text as typed on iOS',
+        () {
+      final output = <String>[];
+      final terminal = Terminal(
+        onOutput: output.add,
+        platform: TerminalTargetPlatform.ios,
+      );
+
+      terminal.write('\x1b[>4;2m');
+      // iPad hardware keyboard: Turkish Q Option+Q is `@`, German Option+5 is
+      // `[`. iOS has no AltGr, so Option is the only way to type them.
+      terminal.keyInput(TerminalKey.keyQ, alt: true, text: '@');
+      terminal.keyInput(TerminalKey.digit5, alt: true, text: '[');
+      terminal.keyInput(TerminalKey.keyA, alt: true, text: 'å');
+      // Option on a key that composes nothing is still Alt.
+      terminal.keyInput(TerminalKey.digit8, alt: true, text: '8');
+      // Ctrl or Cmd with Option is a shortcut, not composition.
+      terminal.keyInput(TerminalKey.keyQ, alt: true, ctrl: true, text: '@');
+
+      expect(output, ['@', '[', 'å', '\x1b[27;3;56~', '\x1b[27;7;64~']);
     });
 
     test('encodes every legacy arrow-key modifier combination', () {

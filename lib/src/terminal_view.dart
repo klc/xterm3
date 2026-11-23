@@ -943,7 +943,9 @@ class TerminalViewState extends State<TerminalView> {
     if (!altGraphActive && HardwareKeyboard.instance.isAltPressed) {
       final terminal = widget.terminal;
       final altPrefixesEscape = switch (terminal.platform) {
-        TerminalTargetPlatform.macos => terminal.altSendsEscapeMode,
+        TerminalTargetPlatform.macos ||
+        TerminalTargetPlatform.ios =>
+          terminal.altSendsEscapeMode,
         _ => terminal.altEscPrefixMode,
       };
       if (altPrefixesEscape) return false;

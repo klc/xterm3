@@ -139,7 +139,7 @@ class ModifyOtherKeysInputHandler implements TerminalInputHandler {
     if (event.state.modifyOtherKeysMode != 2) return null;
     // A character Option composed is text, not Alt plus a key: send it as
     // typed.
-    if (isMacOptionComposedText(event)) return event.text;
+    if (isAppleOptionComposedText(event)) return event.text;
 
     final codepoint = _codepoint(event);
     if (codepoint == null) return null;
@@ -359,7 +359,7 @@ class AltInputHandler implements TerminalInputHandler {
     if (!event.alt || event.ctrl || event.superKey) {
       return null;
     }
-    if (event.platform == TerminalTargetPlatform.macos) {
+    if (isApplePlatform(event.platform)) {
       if (!event.state.altSendsEscapeMode) return null;
     } else {
       if (!event.state.altEscPrefixMode) return null;
@@ -381,8 +381,7 @@ class AltInputHandler implements TerminalInputHandler {
     if (text != null) {
       final codePoint = singleCodePoint(text);
       if (codePoint != null && codePoint >= 0x20 && codePoint != 0x7f) {
-        if (event.platform != TerminalTargetPlatform.macos ||
-            codePoint <= 0x7f) {
+        if (!isApplePlatform(event.platform) || codePoint <= 0x7f) {
           return text;
         }
       }

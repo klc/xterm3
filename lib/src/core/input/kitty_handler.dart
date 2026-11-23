@@ -156,13 +156,13 @@ class KittyKeyboardInputHandler implements TerminalInputHandler {
   }
 
   /// Whether the platform composed a character out of a modified key press;
-  /// see [isMacOptionComposedText]. A client that asked for all keys as escape
-  /// codes wants the raw key regardless.
+  /// see [isAppleOptionComposedText]. A client that asked for all keys as
+  /// escape codes wants the raw key regardless.
   bool _isComposedTextEvent(TerminalKeyboardEvent event, int mode) {
     if (mode & _reportAllKeysAsEscapeCodes != 0) {
       return false;
     }
-    return isMacOptionComposedText(event);
+    return isAppleOptionComposedText(event);
   }
 
   bool _shouldUseLegacyControlCode(TerminalKeyboardEvent event, int mode) {

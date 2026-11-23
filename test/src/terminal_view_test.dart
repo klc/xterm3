@@ -2809,6 +2809,77 @@ void main() {
       expect(terminalOutput, ['é']);
     });
 
+    // An iPad hardware keyboard's Option composes, as on macOS: iOS has no
+    // AltGr, so Option is the only way to type `@ [ ] { } | \ ~` on Turkish Q
+    // or German. The engine reports Turkish Q Option+Q as keyQ with Option
+    // held and the composed `@`.
+    for (final (mode, enable) in [
+      ('legacy', ''),
+      ('modifyOtherKeys 2', '\x1b[>4;2m'),
+      ('kitty', '\x1b[=5u'),
+    ]) {
+      testWidgets('types iPad Option-composed ASCII ($mode)', (tester) async {
+        final terminalOutput = <String>[];
+        final terminal = Terminal(
+          onOutput: terminalOutput.add,
+          platform: TerminalTargetPlatform.ios,
+        );
+        terminal.write(enable);
+
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(terminal, autofocus: true),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump(const Duration(seconds: 1));
+
+        await tester.sendKeyDownEvent(
+          LogicalKeyboardKey.altLeft,
+          platform: 'ios',
+        );
+        await tester.sendKeyDownEvent(
+          LogicalKeyboardKey.keyQ,
+          character: '@',
+          platform: 'ios',
+        );
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyQ, platform: 'ios');
+        await tester.sendKeyUpEvent(
+          LogicalKeyboardKey.altLeft,
+          platform: 'ios',
+        );
+
+        expect(terminalOutput, ['@']);
+      }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+    }
+
+    testWidgets('preserves iPad Option-composed text when Alt escape is off', (
+      tester,
+    ) async {
+      final terminalOutput = <String>[];
+      final terminal = Terminal(
+        onOutput: terminalOutput.add,
+        platform: TerminalTargetPlatform.ios,
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        home: TerminalView(terminal, autofocus: true),
+      ));
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump(const Duration(seconds: 1));
+
+      // US layout: Option+A is `å`.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft,
+          platform: 'ios');
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.keyA,
+        character: 'å',
+        platform: 'ios',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA, platform: 'ios');
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft, platform: 'ios');
+
+      expect(terminalOutput, ['å']);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
     testWidgets('preserves AltGr-composed text on desktop platforms', (
       tester,
     ) async {
