@@ -10,6 +10,7 @@ import 'package:xterm3/src/core/buffer/buffer.dart';
 import 'package:xterm3/src/core/buffer/cell_offset.dart';
 import 'package:xterm3/src/core/buffer/line.dart';
 import 'package:xterm3/src/core/cell.dart';
+import 'package:xterm3/src/core/charset.dart';
 import 'package:xterm3/src/core/color_scheme.dart';
 import 'package:xterm3/src/core/cursor.dart';
 import 'package:xterm3/src/core/escape/emitter.dart';
@@ -396,6 +397,7 @@ class Terminal
     isAltBuffer: false,
     wordSeparators: wordSeparators,
     onLineEvicted: _onScrollbackLineEvicted,
+    charset: _charset,
   );
 
   late final _altBuffer = Buffer(
@@ -404,7 +406,12 @@ class Terminal
     isAltBuffer: true,
     wordSeparators: wordSeparators,
     onLineEvicted: _onScrollbackLineEvicted,
+    charset: _charset,
   );
+
+  /// The live G0-G3 designations and GL, shared by both buffers: switching
+  /// screens keeps them, as in xterm. Each buffer keeps its own DECSC copy.
+  final _charset = Charset();
 
   final _tabStops = TabStops();
 
@@ -995,12 +1002,12 @@ class Terminal
 
   @override
   void shiftOut() {
-    _buffer.charset.use(1);
+    _charset.use(1);
   }
 
   @override
   void shiftIn() {
-    _buffer.charset.use(0);
+    _charset.use(0);
   }
 
   @override
@@ -1069,6 +1076,7 @@ class Terminal
     _pendingEvictedHyperlinkIds.clear();
     _nextHyperlinkId = 1;
     _tabStops.reset();
+    _charset.reset();
     _mainBuffer.reset();
     _altBuffer.reset();
   }
@@ -1096,7 +1104,8 @@ class Terminal
     _cursorStyle.semanticAttrs = 0;
     _modes.softReset();
     _tabStops.reset();
-    _buffer.charset.reset();
+    _charset.reset();
+    _buffer.resetSavedCharset();
     _buffer.resetVerticalMargins();
     _buffer.resetHorizontalMargins();
   }
@@ -1128,17 +1137,17 @@ class Terminal
 
   @override
   void designateCharset(int charset, int name) {
-    _buffer.charset.designate(charset, name);
+    _charset.designate(charset, name);
   }
 
   @override
   void useCharset(int charset) {
-    _buffer.charset.use(charset);
+    _charset.use(charset);
   }
 
   @override
   void singleShiftCharset(int charset) {
-    _buffer.charset.singleShift(charset);
+    _charset.singleShift(charset);
   }
 
   @override

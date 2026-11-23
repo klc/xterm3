@@ -37,7 +37,8 @@ class Buffer {
     required this.isAltBuffer,
     this.wordSeparators,
     this.onLineEvicted,
-  }) {
+    Charset? charset,
+  }) : charset = charset ?? Charset() {
     for (int i = 0; i < terminal.viewHeight; i++) {
       lines.push(_newEmptyLine());
     }
@@ -70,7 +71,11 @@ class Buffer {
 
   final _savedCursorStyle = CursorStyle();
 
-  final charset = Charset();
+  /// The live G0-G3 designations and GL. A terminal hands both of its
+  /// buffers the same one, as in xterm: only the DECSC copy is per screen.
+  final Charset charset;
+
+  final _savedCharset = Charset();
 
   /// Width of the viewport in columns. Also the index of the last column.
   int get viewWidth => terminal.viewWidth;
@@ -1567,11 +1572,15 @@ class Buffer {
     _savedCursorStyle.underlineColor = terminal.cursor.underlineColor;
     _savedCursorStyle.attrs = terminal.cursor.attrs;
     _savedCursorStyle.hyperlinkId = terminal.cursor.hyperlinkId;
-    charset.save();
+    _savedCharset.copyFrom(charset);
   }
 
   void clearSavedCursorHyperlink() {
     _savedCursorStyle.hyperlinkId = 0;
+  }
+
+  void resetSavedCharset() {
+    _savedCharset.reset();
   }
 
   /// Restore cursor position, charmap and text attributes.
@@ -1583,7 +1592,7 @@ class Buffer {
     terminal.cursor.underlineColor = _savedCursorStyle.underlineColor;
     terminal.cursor.attrs = _savedCursorStyle.attrs;
     terminal.cursor.hyperlinkId = _savedCursorStyle.hyperlinkId;
-    charset.restore();
+    charset.copyFrom(_savedCharset);
     return _savedOriginMode;
   }
 
@@ -1784,7 +1793,7 @@ class Buffer {
     _savedOriginMode = false;
     _savedCursorStyle.reset();
     _savedCursorStyle.hyperlinkId = 0;
-    charset.reset();
+    _savedCharset.reset();
     resetVerticalMargins();
     resetHorizontalMargins();
   }

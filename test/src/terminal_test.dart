@@ -43,6 +43,52 @@ void main() {
     expect(terminal.buffer.lines[0].getText(), '┌─┐abc');
   });
 
+  test('Terminal keeps the live charsets across alt screen switches', () {
+    for (final mode in [47, 1047, 1049]) {
+      final terminal = Terminal()..resize(20, 5);
+
+      // ncurses enacs on the main screen, then smcup, then smacs/rmacs.
+      terminal.write('\x1b)0\x1b[?${mode}h\x0elqk\x0f');
+
+      expect(terminal.isUsingAltBuffer, isTrue);
+      expect(terminal.buffer.lines[0].getText(), '┌─┐', reason: '?$mode');
+    }
+
+    for (final mode in [47, 1047]) {
+      final terminal = Terminal()..resize(20, 5);
+
+      terminal.write('\x1b[?${mode}h\x1b(0\x1b[?${mode}llqk');
+
+      expect(terminal.buffer.lines[0].getText(), '┌─┐', reason: '?$mode');
+    }
+
+    // ?1049l restores the main screen's DECSC copy, saved by ?1049h.
+    final terminal = Terminal()..resize(20, 5);
+    terminal.write('\x1b[?1049h\x1b(0\x1b[?1049llqk');
+    expect(terminal.buffer.lines[0].getText(), 'lqk');
+  });
+
+  test('Terminal keeps one DECSC charset copy per screen', () {
+    final terminal = Terminal()..resize(20, 5);
+
+    terminal.write('\x1b(0\x1b7\x1b[?1049h\x1b(B\x1b7\x1b8\x1b[?1049llqk');
+
+    expect(terminal.isUsingAltBuffer, isFalse);
+    expect(terminal.buffer.lines[0].getText(), '┌─┐');
+  });
+
+  test('Terminal resets the charsets on RIS and DECSTR', () {
+    final ris = Terminal()..resize(20, 5);
+    ris.write('\x1b)0\x0e\x1b7\x1bc\x1b[3Hlqk\x1b8lqk');
+    expect(ris.buffer.lines[2].getText(), 'lqk');
+    expect(ris.buffer.lines[0].getText(), 'lqk');
+
+    final decstr = Terminal()..resize(20, 5);
+    decstr.write('\x1b)0\x0e\x1b7\x1b[!p\x1b[3Hlqk\x1b8lqk');
+    expect(decstr.buffer.lines[2].getText(), 'lqk');
+    expect(decstr.buffer.lines[0].getText(), 'lqk');
+  });
+
   test('Terminal renders the British national replacement charset', () {
     final terminal = Terminal();
 
