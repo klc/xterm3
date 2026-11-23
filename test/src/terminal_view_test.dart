@@ -374,6 +374,32 @@ void main() {
       focusNode.dispose();
     });
 
+    testWidgets('reports focus out when a focused view is replaced', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode1 = FocusNode();
+      final focusNode2 = FocusNode();
+      Widget view(Key key, FocusNode focusNode) => MaterialApp(
+            home: TerminalView(terminal, key: key, focusNode: focusNode),
+          );
+
+      await tester.pumpWidget(view(const ValueKey(1), focusNode1));
+      focusNode1.requestFocus();
+      await tester.pump();
+      terminal.write('\x1b[?1004h');
+      output.clear();
+
+      await tester.pumpWidget(view(const ValueKey(2), focusNode2));
+      await tester.pump();
+      expect(output, ['\x1b[O']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode1.dispose();
+      focusNode2.dispose();
+    });
+
     testWidgets('does not report focus in for an unfocused view', (
       tester,
     ) async {

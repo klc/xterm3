@@ -257,6 +257,9 @@ class TerminalView extends StatefulWidget {
 class TerminalViewState extends State<TerminalView> {
   late FocusNode _focusNode;
 
+  /// The focus state this view last gave [TerminalView.terminal].
+  late bool _reportedFocus;
+
   late final ShortcutManager _shortcutManager;
 
   final _customTextEditKey = GlobalKey<CustomTextEditState>();
@@ -308,7 +311,8 @@ class TerminalViewState extends State<TerminalView> {
     _focusNode = widget.focusNode ?? FocusNode();
     _focusNode.addListener(_reportFocusChange);
     // Record without reporting: autofocus lands a frame later.
-    widget.terminal.focused = _focusNode.hasFocus;
+    _reportedFocus = _focusNode.hasFocus;
+    widget.terminal.focused = _reportedFocus;
     _controller = widget.controller ?? TerminalController();
     _scrollController = widget.scrollController ?? ScrollController();
     _shortcutManager = ShortcutManager(
@@ -330,7 +334,8 @@ class TerminalViewState extends State<TerminalView> {
       _installColorQuery(widget.terminal);
       _installColorSchemeQuery(widget.terminal);
       _installClipboardHandlers(widget.terminal);
-      _reportFocus(oldWidget.terminal, false);
+      if (_reportedFocus) oldWidget.terminal.focusInput(false);
+      _reportedFocus = widget.terminal.focused;
     }
     if (oldWidget.focusNode != widget.focusNode) {
       _focusNode.removeListener(_reportFocusChange);
@@ -369,7 +374,7 @@ class TerminalViewState extends State<TerminalView> {
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _focusNode.removeListener(_reportFocusChange);
     // The node is already detached here, so its unfocus never reaches us.
-    _reportFocus(widget.terminal, false);
+    if (_reportedFocus) widget.terminal.focusInput(false);
     if (widget.focusNode == null) {
       _focusNode.dispose();
     }
@@ -454,11 +459,9 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _reportFocusChange() {
-    _reportFocus(widget.terminal, _focusNode.hasFocus);
-  }
-
-  void _reportFocus(Terminal terminal, bool focused) {
-    if (terminal.focused != focused) terminal.focusInput(focused);
+    if (_focusNode.hasFocus == _reportedFocus) return;
+    _reportedFocus = _focusNode.hasFocus;
+    widget.terminal.focusInput(_reportedFocus);
   }
 
   @override
