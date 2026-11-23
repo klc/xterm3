@@ -1,3 +1,59 @@
+## [6.6.0-beta.2] - 2026-11-23
+
+A second pre-release: bug fixes found while reviewing beta.1 in real use, most
+of them in touch, IME and keyboard input. No speed changes.
+
+### Fixed
+
+* Untrusted output can no longer stall or break `Terminal.write`: an
+  over-long unfinished ESC intermediate or charset sequence fed in chunks is
+  no longer re-parsed on every write (quadratic time), a lone quote in an
+  OSC 133 printf-%q cmdline and a DECFRA fill with a surrogate no longer
+  throw a `RangeError` mid-chunk, and trimming a URL that ends in many
+  closing brackets is linear instead of O(n*m).
+* URLs drop trailing punctuation and unbalanced `)`, `]` or `}` until
+  nothing changes: `(see https://example.com/docs.)` and
+  `[https://example.com/docs]` no longer keep the `.` or `]`.
+* Lines opened by scrolling, IL and DL take the current SGR background
+  (bce), as EL and ED already did; vim colour schemes no longer leave
+  stripes when they scroll.
+* The live G0-G3/GL charset state is shared by the main and alternate
+  screens, as in xterm; ncurses box lines drawn after `enacs` on the main
+  screen no longer come out as `lqqqk`.
+* Kitty keyboard flags and their stack are kept per screen, so a TUI that
+  leaves the alternate screen without popping them no longer leaves the
+  shell sending CSI-u for Ctrl+C and Esc.
+* Reflow keeps an emptied continuation row after its content; an Alt+drag
+  block selection spans both endpoint cells in every drag direction.
+* Input: macOS Ctrl+letter under modifyOtherKeys 2 is encoded by key
+  (`CSI 27;5;112~` for Ctrl+P), Option-composed characters (`@ [ ] { } |`)
+  type on iPad hardware keyboards, and in `hardwareKeyboardOnly` mode keys
+  the view declines (Cmd+T, Cmd+K) bubble to the app instead of typing.
+* IME: the iOS return key sends one Enter instead of CR LF, the
+  action-commit echo guard no longer swallows the next composed word, and a
+  caret moved into the `deleteDetection` sentinel by a cursor swipe is put
+  back.
+* Focus reporting (1004) sends CSI I / CSI O when a view swaps terminals,
+  is disposed or mounts, and tracks the focus each view reported.
+* Touch: a touch scroll is reported to mouse-reporting apps only as wheel
+  events, a cancelled touch press is released, auto-scroll continues while
+  a selection drag is held outside the view, and a momentum scroll that
+  ends at the bottom keeps following output.
+* The keyboard counts as shown only when its inset leaves zero, so the
+  frames of a closing or resizing keyboard no longer jump a scrolled-up
+  view to the bottom.
+
+### Changed behaviour
+
+* Soft-keyboard text that `Terminal.isPasteSafe` rejects (a multi-line or
+  control-carrying paste through the IME) goes through `Terminal.paste`,
+  so bracketed paste and sanitising apply. Typed text is unchanged.
+* A touch or stylus tap focuses the view and opens the keyboard on tap up,
+  as `TextField` does, not on tap down; a press that turns into a scroll or
+  a long press no longer opens it. Mouse clicks still focus on press.
+* `Terminal.focused` is public: `focusInput` sets and reports it, assigning
+  it records the state without reporting it.
+
 ## [6.6.0-beta.1] - 2026-11-21
 
 A pre-release. Most of the write path and part of the painter were rewritten
