@@ -525,4 +525,101 @@ void main() {
       });
     });
   });
+
+  // For a newline return key the iOS engine sends performAction(newline) and
+  // then lets UIKit insert "\n" too (shouldChangeTextInRange returns YES for
+  // UIReturnKeyDefault). Android sends only the action.
+  group('Return key (newline action)', () {
+    final iOS = TargetPlatformVariant.only(TargetPlatform.iOS);
+
+    for (final deleteDetection in [true, false]) {
+      final prefix = deleteDetection ? '  ' : '';
+
+      group('deleteDetection: $deleteDetection', () {
+        testWidgets('iOS sends one CR, not CR LF', (tester) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          compose(tester, prefix, 'l', collapsed: true);
+          compose(tester, prefix, 's', collapsed: true);
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, '\n', collapsed: true);
+
+          expect(output.join(), 'ls\r');
+          expect(tester.testTextInput.editingState?['text'], prefix);
+
+          compose(tester, prefix, 'a', collapsed: true);
+          expect(output.join(), 'ls\ra');
+        }, variant: iOS);
+
+        // insertText replaces the marked range with "\n"; an engine that
+        // replaced only the selection would leave the marked text before it.
+        for (final inserted in ['\n', '日本\n']) {
+          testWidgets(
+            'iOS commits an open composition and sends one CR '
+            '(inserted: ${inserted.replaceAll('\n', r'\n')})',
+            (tester) async {
+              final (output, _) = await pumpTerminal(
+                tester,
+                deleteDetection: deleteDetection,
+              );
+
+              compose(tester, prefix, '日本', collapsed: false);
+              await tester.testTextInput.receiveAction(TextInputAction.newline);
+              compose(tester, prefix, inserted, collapsed: true);
+
+              expect(output.join(), '日本\r');
+            },
+            variant: iOS,
+          );
+        }
+
+        testWidgets('Android sends one CR and keeps the next key', (
+          tester,
+        ) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          compose(tester, prefix, 'l', collapsed: true);
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, 's', collapsed: true);
+
+          expect(output.join(), 'l\rs');
+        });
+
+        testWidgets('a newline that does not follow the action is sent', (
+          tester,
+        ) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, 'a', collapsed: true);
+          compose(tester, prefix, '\n', collapsed: true);
+
+          expect(output.join(), '\ra\n');
+        }, variant: iOS);
+
+        testWidgets('multi-line text right after the action is sent as is', (
+          tester,
+        ) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, 'a\nb', collapsed: true);
+
+          expect(output.join(), '\ra\nb');
+        }, variant: iOS);
+      });
+    }
+  });
 }

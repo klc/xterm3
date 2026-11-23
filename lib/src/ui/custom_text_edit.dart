@@ -81,6 +81,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// collapsed editing value; it must not reach the terminal twice.
   String? _actionCommittedText;
 
+  /// Whether a newline action came since the last editing value. For the
+  /// newline return key the iOS engine sends the action and then lets UIKit
+  /// insert "\n" as well (`shouldChangeTextInRange` returns YES for
+  /// UIReturnKeyDefault). Enter was sent for the action, so that "\n" is
+  /// dropped. Android sends only the action.
+  bool _newlineActionPending = false;
+
   /// The content of an open, not-yet-resolved composing range in
   /// [deleteDetection] mode - see [_updateEditingValueWithDeleteDetection].
   /// Non-null exactly while such a range is open and its fate (genuine
@@ -360,6 +367,19 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void updateEditingValue(TextEditingValue value) {
     final previousText = _currentEditingState.text;
     _currentEditingState = value;
+
+    // Only the very next editing value can be the inserted "\n", see
+    // [_newlineActionPending]. It replaces the marked text, or follows the
+    // text the action committed on an engine that leaves that in place.
+    final afterNewlineAction = _newlineActionPending;
+    _newlineActionPending = false;
+    final delta = _textDelta(value);
+    if (afterNewlineAction &&
+        (delta == '\n' || delta == '${_actionCommittedText ?? ''}\n')) {
+      _actionCommittedText = null;
+      _resetEditingState();
+      return;
+    }
 
     if (widget.deleteDetection) {
       _updateEditingValueWithDeleteDetection(value);
@@ -698,6 +718,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   @override
   void performAction(TextInputAction action) {
     _commitComposingTextForAction();
+    _newlineActionPending = action == TextInputAction.newline;
     widget.onAction(action);
   }
 
