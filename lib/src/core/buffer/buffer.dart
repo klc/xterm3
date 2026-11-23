@@ -1285,7 +1285,7 @@ class Buffer {
       if (i >= absoluteMarginTop + count) {
         lines.move(i - count, i);
       } else {
-        lines[i] = _newEmptyLine();
+        lines[i] = _newScrolledLine();
       }
     }
   }
@@ -1294,13 +1294,13 @@ class Buffer {
     if (_canScrollUpByPushingLines) {
       final linesToPush = min(count, _marginBottom + 1);
       for (var i = 0; i < linesToPush; i++) {
-        lines.push(_newEmptyLine());
+        lines.push(_newScrolledLine());
         // Rows below the scroll region keep their place on screen.
         if (_marginBottom < viewHeight - 1) {
           for (var row = viewHeight - 1; row > _marginBottom; row--) {
             lines.move(row - 1 + scrollBack, row + scrollBack);
           }
-          lines[absoluteMarginBottom] = _newEmptyLine();
+          lines[absoluteMarginBottom] = _newScrolledLine();
         }
       }
       return;
@@ -1310,7 +1310,7 @@ class Buffer {
       if (i <= absoluteMarginBottom - count) {
         lines.move(i + count, i);
       } else {
-        lines[i] = _newEmptyLine();
+        lines[i] = _newScrolledLine();
       }
     }
   }
@@ -1352,7 +1352,7 @@ class Buffer {
       if (isAltBuffer) {
         scrollUp(1);
       } else {
-        lines.push(_newEmptyLine());
+        lines.push(_newScrolledLine());
       }
     } else {
       // there're still lines so we simply move cursor down.
@@ -1887,11 +1887,11 @@ class Buffer {
 
     for (var i = 0; i < linesToMove; i++) {
       final index = absoluteMarginBottom - i;
-      lines[index] = lines.swap(index - linesToInsert, _newEmptyLine());
+      lines[index] = lines.swap(index - linesToInsert, _newScrolledLine());
     }
 
     for (var i = linesToMove; i < linesToInsert; i++) {
-      lines[absoluteCursorY + i] = _newEmptyLine();
+      lines[absoluteCursorY + i] = _newScrolledLine();
     }
   }
 
@@ -1938,7 +1938,7 @@ class Buffer {
     }
 
     for (var i = 0; i < count; i++) {
-      lines[absoluteMarginBottom - i] = _newEmptyLine();
+      lines[absoluteMarginBottom - i] = _newScrolledLine();
     }
   }
 
@@ -2114,6 +2114,15 @@ class Buffer {
       _spareStorage = null;
       line.adoptStorage(storage);
     }
+    return line;
+  }
+
+  /// A new line for one that scrolling, IL or DL opens: blank in the current
+  /// background, as an erase leaves it (bce).
+  BufferLine _newScrolledLine() {
+    final line = _newEmptyLine();
+    final style = terminal.cursor;
+    if (style.background != 0) line.eraseRange(0, viewWidth, style);
     return line;
   }
 

@@ -1668,6 +1668,69 @@ void main() {
     expect(deletedLine.getAttributes(6), 0);
   });
 
+  group('Terminal lines opened by scrolling keep only the background', () {
+    // Each sequence opens the listed viewport rows on an 8x8 screen.
+    final cases = <(String, String, List<int>)>[
+      ('LF at the bottom', '\x1b[8;1H\n', [7]),
+      ('LF at the alt-screen bottom', '\x1b[?1049h\x1b[8;1H\n', [7]),
+      ('SU', '\x1b[S', [7]),
+      ('SD', '\x1b[T', [0]),
+      ('RI at the top', '\x1b[1;1H\x1bM', [0]),
+      ('IL', '\x1b[1;1H\x1b[L', [0]),
+      ('IL past the lines it moves', '\x1b[1;1H\x1b[6L', [0, 1, 2, 3, 4, 5]),
+      ('DL', '\x1b[1;1H\x1b[M', [7]),
+      ('LF inside a scroll region', '\x1b[3;6r\x1b[6;1H\n', [5]),
+      ('LF at a top scroll region', '\x1b[1;5r\x1b[5;1H\n', [4]),
+      ('LF below a scroll region', '\x1b[1;5r\x1b[8;1H\n', [7]),
+    ];
+    for (final (name, sequence, rows) in cases) {
+      test(name, () {
+        final terminal = Terminal()..resize(8, 8);
+        terminal.write('\x1b[31;44;1;4m$sequence');
+        for (final row in rows) {
+          _expectBlankRow(terminal, row, CellColor.named | NamedColor.blue);
+        }
+      });
+
+      test('$name with the default background', () {
+        final terminal = Terminal()..resize(8, 8);
+        terminal.write('\x1b[31;44;1;4m\x1b[0m$sequence');
+        for (final row in rows) {
+          _expectBlankRow(terminal, row, CellColor.normal);
+        }
+      });
+    }
+
+    test('leaves scrollback and rows below the region as they were', () {
+      final terminal = Terminal()..resize(8, 8);
+      terminal.write('top\x1b[8;1Hlow\x1b[1;5r\x1b[44m\x1b[5;1H\n');
+
+      final buffer = terminal.buffer;
+      expect(buffer.scrollBack, 1);
+      expect(buffer.lines[0].getText(), 'top');
+      expect(buffer.lines[0].getBackground(7), CellColor.normal);
+      _expectBlankRow(terminal, 4, CellColor.named | NamedColor.blue);
+      expect(buffer.lines[buffer.scrollBack + 7].getText(), 'low');
+      expect(buffer.lines[buffer.scrollBack + 7].getBackground(7), 0);
+    });
+
+    test('fills recycled lines without leaking their old cells', () {
+      // 10000 x 80 cells is over Buffer.recycleThresholdCells, so lines
+      // opened once the scrollback is full reuse evicted storage.
+      final terminal = Terminal(maxLines: 10000)..resize(80, 8);
+      final text = '\x1b[31;45;1m${'x' * 80}\x1b[0m\r\n';
+      for (var i = 0; i < 10010; i++) {
+        terminal.write(text);
+      }
+
+      terminal.write('\x1b[31;44;1;4m\n');
+      _expectBlankRow(terminal, 7, CellColor.named | NamedColor.blue);
+      terminal.write('\x1b[0m\n');
+      _expectBlankRow(terminal, 7, CellColor.normal);
+      _expectBlankRow(terminal, 6, CellColor.named | NamedColor.blue);
+    });
+  });
+
   test('Terminal resets bold and faint intensity with SGR 22', () {
     final terminal = Terminal()..resize(20, 5);
 
@@ -5782,6 +5845,20 @@ class _TrackingTerminal extends Terminal {
   void writeMixedWidthText(String text, int start, int end) {
     bulkWrites++;
     super.writeMixedWidthText(text, start, end);
+  }
+}
+
+/// Expects viewport [row] blank over its full width, in [background] and
+/// otherwise the default style, as an erase leaves it.
+void _expectBlankRow(Terminal terminal, int row, int background) {
+  final line = terminal.buffer.lines[terminal.buffer.scrollBack + row];
+  for (var column = 0; column < terminal.viewWidth; column++) {
+    final reason = 'row $row, column $column';
+    expect(line.getCodePoint(column), 0, reason: reason);
+    expect(line.getForeground(column), CellColor.normal, reason: reason);
+    expect(line.getBackground(column), background, reason: reason);
+    expect(line.getAttributes(column), 0, reason: reason);
+    expect(line.getUnderlineColor(column), CellColor.normal, reason: reason);
   }
 }
 
