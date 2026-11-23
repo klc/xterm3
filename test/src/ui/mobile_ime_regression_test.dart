@@ -606,7 +606,7 @@ void main() {
           expect(output.join(), '\ra\n');
         }, variant: iOS);
 
-        testWidgets('multi-line text right after the action is sent as is', (
+        testWidgets('multi-line text right after the action is pasted', (
           tester,
         ) async {
           final (output, _) = await pumpTerminal(
@@ -617,9 +617,93 @@ void main() {
           await tester.testTextInput.receiveAction(TextInputAction.newline);
           compose(tester, prefix, 'a\nb', collapsed: true);
 
-          expect(output.join(), '\ra\nb');
+          expect(output.join(), '\ra\rb');
         }, variant: iOS);
       });
     }
+  });
+
+  // The keyboard's own paste (iOS paste: -> insertText, Android's context-menu
+  // paste, a clipboard commitText) arrives as an editing value, not as a paste
+  // intent, so text that is not safe to type must be sent as a paste.
+  group('Paste through the keyboard', () {
+    for (final deleteDetection in [true, false]) {
+      final prefix = deleteDetection ? '  ' : '';
+
+      group('deleteDetection: $deleteDetection', () {
+        Future<List<String>> pumpWithBracketedPaste(
+          WidgetTester tester, {
+          bool bracketedPaste = true,
+        }) async {
+          final (output, viewKey) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+          if (bracketedPaste) {
+            viewKey.currentState!.widget.terminal.write('\x1b[?2004h');
+          }
+          return output;
+        }
+
+        testWidgets('multi-line text is wrapped in bracketed paste', (
+          tester,
+        ) async {
+          final output = await pumpWithBracketedPaste(tester);
+
+          compose(tester, prefix, 'rm -rf ~/tmp/x\necho done\n',
+              collapsed: true);
+
+          expect(
+            output.join(),
+            '\x1b[200~rm -rf ~/tmp/x\necho done\n\x1b[201~',
+          );
+        });
+
+        testWidgets('a bracketed paste terminator in the text is stripped', (
+          tester,
+        ) async {
+          final output = await pumpWithBracketedPaste(tester);
+
+          compose(tester, prefix, 'ls\x1b[201~\nid\n', collapsed: true);
+
+          expect(output.join(), '\x1b[200~ls\nid\n\x1b[201~');
+        });
+
+        testWidgets('without bracketed paste, line breaks are sent as CR', (
+          tester,
+        ) async {
+          final output = await pumpWithBracketedPaste(
+            tester,
+            bracketedPaste: false,
+          );
+
+          compose(tester, prefix, 'a\nb\n', collapsed: true);
+
+          expect(output.join(), 'a\rb\r');
+        });
+
+        // Swipe word, autocorrect commit, emoji ZWJ sequence, CJK commit.
+        for (final typed in ['hello', 'the ', '👨‍👩‍👧', '日本語']) {
+          testWidgets('typed text "$typed" is sent as is', (tester) async {
+            final output = await pumpWithBracketedPaste(tester);
+
+            compose(tester, prefix, typed, collapsed: true);
+
+            expect(output.join(), typed);
+          });
+        }
+      });
+    }
+
+    testWidgets('macOS: multi-line text is wrapped in bracketed paste', (
+      tester,
+    ) async {
+      final (output, viewKey) = await pumpTerminal(tester);
+      viewKey.currentState!.widget.terminal.write('\x1b[?2004h');
+
+      compose(tester, '', 'a\nb', collapsed: true);
+
+      expect(output.join(), '\x1b[200~a\nb\x1b[201~');
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
   });
 }

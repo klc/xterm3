@@ -802,7 +802,14 @@ class TerminalViewState extends State<TerminalView> {
     }
     final mappedKey = charToTerminalKey(text);
     if (mappedKey == null && singleCodePoint(text) == null) {
-      widget.terminal.textInput(text);
+      // The keyboard's own paste (iOS paste:, Android's context-menu paste,
+      // a clipboard commitText) arrives here too, so text that is not safe to
+      // type gets the bracketing and sanitizing of a paste.
+      if (Terminal.isPasteSafe(text)) {
+        widget.terminal.textInput(text);
+      } else {
+        widget.terminal.paste(text);
+      }
       _scrollToBottom();
       return;
     }
