@@ -12,9 +12,6 @@ class Charset {
 
   int? _singleShiftIndex;
 
-  var _savedCharsetMap = <int, CharsetTranslator>{};
-  var _savedIndex = 0;
-
   var _cached = asciiTranslator;
 
   bool get isAscii =>
@@ -50,22 +47,18 @@ class Charset {
     _singleShiftIndex = index;
   }
 
-  void save() {
-    _savedCharsetMap = Map.from(_charsetMap);
-    _savedIndex = _currentIndex;
-  }
-
-  void restore() {
-    _charsetMap = Map.from(_savedCharsetMap);
-    _currentIndex = _savedIndex;
+  /// Copies the G0-G3 designations and GL of [other], leaving the single
+  /// shift alone. DECSC and DECRC copy between the live charsets and a
+  /// screen's saved copy.
+  void copyFrom(Charset other) {
+    _charsetMap = Map.from(other._charsetMap);
+    _currentIndex = other._currentIndex;
     _updateCache();
   }
 
   void reset() {
     _charsetMap.clear();
     _currentIndex = 0;
-    _savedCharsetMap.clear();
-    _savedIndex = 0;
     _singleShiftIndex = null;
     _updateCache();
   }

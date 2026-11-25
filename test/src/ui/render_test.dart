@@ -315,6 +315,43 @@ void main() {
     setup.focusNode.dispose();
   });
 
+  group('block character selection includes both endpoint columns', () {
+    const plain = 'abcde\r\nfghij';
+    // 好 takes columns 1 and 2 of the first row.
+    const wide = 'a好cde\r\nfghij';
+    for (final (name, text, from, to, left, right, selected) in [
+      ('down-right', plain, (1, 0), (3, 1), 1, 4, 'bcd\nghi'),
+      ('up-left', plain, (3, 1), (1, 0), 1, 4, 'bcd\nghi'),
+      ('down-left', plain, (3, 0), (1, 1), 1, 4, 'bcd\nghi'),
+      ('up-right', plain, (1, 1), (3, 0), 1, 4, 'bcd\nghi'),
+      ('down one column', plain, (2, 0), (2, 1), 2, 3, 'c\nh'),
+      ('up one column', plain, (2, 1), (2, 0), 2, 3, 'c\nh'),
+      ('down from a wide leading half', wide, (1, 0), (1, 1), 1, 3, '好\ngh'),
+      ('up to a wide trailing half', wide, (2, 1), (2, 0), 1, 3, '好\ngh'),
+    ]) {
+      test(name, () {
+        final setup = _createRenderTerminal();
+        final render = setup.render;
+        final cellSize = render.cellSize;
+        setup.terminal.write(text);
+
+        Offset center((int, int) cell) => Offset(
+              cellSize.width * (cell.$1 + 0.5),
+              cellSize.height * (cell.$2 + 0.5),
+            );
+        render.selectCharacters(center(from), center(to), SelectionMode.block);
+
+        final selection = setup.controller.selection!;
+        expect(selection, isA<BufferRangeBlock>());
+        expect(selection.normalized.begin, CellOffset(left, 0));
+        expect(selection.normalized.end, CellOffset(right, 1));
+        expect(setup.terminal.buffer.getText(selection), selected);
+
+        setup.focusNode.dispose();
+      });
+    }
+  });
+
   test('line selection includes soft-wrapped logical line', () {
     final setup = _createRenderTerminal();
     final render = setup.render;

@@ -77,11 +77,18 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   Offset? _lastDragPosition;
 
+  Offset? _lastGlobalDragPosition;
+
   var _applicationOwnsPointerDrag = false;
 
   final Map<int, int> _pressedMouseButtons = {};
 
   final Map<int, int> _reportedMouseButtons = {};
+
+  /// The render terminal, button and position of a touch tap-down reported
+  /// to the application, kept so that a tap cancelled by a scroll or a long
+  /// press still releases it.
+  (RenderTerminal, TerminalMouseButton, Offset)? _reportedTouchPress;
 
   /// The cell a long-press selection started on; see [_dragStartAnchor].
   CellAnchor? _longPressStartAnchor;
@@ -112,6 +119,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         onSingleTapUp: onSingleTapUp,
         onRepeatedTapUp: onSingleTapUp,
         onTapDown: onTapDown,
+        onTapCancel: onTapCancel,
         onSecondaryTapDown: onSecondaryTapDown,
         onSecondaryTapUp: onSecondaryTapUp,
         onTertiaryTapDown: onTertiaryTapDown,
@@ -208,6 +216,8 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
   }
 
   void _onPointerMotion(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+
     final input = switch (event.buttons) {
       0 => PointerInput.move,
       _ => PointerInput.drag,
@@ -252,6 +262,9 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
         details.localPosition,
         modifiers: _currentModifiers(),
       );
+      if (handled) {
+        _reportedTouchPress = (renderTerminal, button, details.localPosition);
+      }
     }
     // If the event was not handled by the terminal, use the supplied callback.
     if (!handled || forceCallback) {
@@ -265,6 +278,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     TerminalMouseButton button, {
     bool forceCallback = false,
   }) {
+    _reportedTouchPress = null;
     // Check if the terminal should and can handle the tap up event.
     var handled =
         details.kind == PointerDeviceKind.mouse && _applicationHandlesTap;
@@ -280,6 +294,22 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     if (!handled || forceCallback) {
       callback?.call(details);
     }
+  }
+
+  void onTapCancel() {
+    final press = _reportedTouchPress;
+    if (press == null) return;
+    _reportedTouchPress = null;
+    final (render, button, position) = press;
+    // Disposing the view disposes the tap recognizer, which cancels a pending
+    // tap after the viewport has gone.
+    if (!render.attached) return;
+    render.mouseEvent(
+      button,
+      TerminalMouseButtonState.up,
+      position,
+      modifiers: _currentModifiers(),
+    );
   }
 
   bool _isMouseButtonReported(TerminalMouseButton button) {
@@ -409,6 +439,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
 
   void onDragUpdate(DragUpdateDetails details) {
     _lastDragPosition = details.localPosition;
+    _lastGlobalDragPosition = details.globalPosition;
     if (_applicationOwnsPointerDrag) return;
     _updateDragSelection();
     _startSelectionAutoScroll(details.globalPosition);
@@ -443,7 +474,7 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
       _selectionAutoScroller = EdgeDraggingAutoScroller(
         scrollable,
         velocityScalar: _selectionScrollVelocity,
-        onScrollViewScrolled: _updateDragSelection,
+        onScrollViewScrolled: _onSelectionAutoScrolled,
       );
     }
 
@@ -452,12 +483,29 @@ class _TerminalGestureHandlerState extends State<TerminalGestureHandler> {
     );
   }
 
+  /// [EdgeDraggingAutoScroller] holds the drag target relative to the
+  /// content, so it stops once the scroll brings that point into view. Restart
+  /// it from where the pointer still is, so a pointer held outside the view
+  /// keeps scrolling.
+  void _onSelectionAutoScrolled() {
+    if (!mounted) return;
+    _updateDragSelection();
+    final dragPosition = _lastGlobalDragPosition;
+    if (_dragStartAnchor == null ||
+        _applicationOwnsPointerDrag ||
+        dragPosition == null) {
+      return;
+    }
+    _startSelectionAutoScroll(dragPosition);
+  }
+
   void _finishDragSelection() {
     _stopSelectionAutoScroll();
     _applicationOwnsPointerDrag = false;
     _dragStartAnchor?.dispose();
     _dragStartAnchor = null;
     _lastDragPosition = null;
+    _lastGlobalDragPosition = null;
   }
 
   void _stopSelectionAutoScroll() {

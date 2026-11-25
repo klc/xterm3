@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:characters/characters.dart';
 import 'package:test/test.dart';
 import 'package:xterm3/core.dart';
+import 'package:xterm3/src/utils/single_cell_text.dart';
 
 void main() {
   test('Terminal batches printable ASCII parser runs', () {
@@ -9,7 +12,8 @@ void main() {
 
     terminal.write('plain\x1b[31mred😀tail');
 
-    expect(terminal.bulkWrites, 3);
+    // `red😀tail` is one run: the emoji carries the single-cell run on.
+    expect(terminal.bulkWrites, 2);
     expect(terminal.buffer.lines[0].getText(), 'plainred😀tail');
     expect(
       terminal.buffer.lines[0].getForeground(5),
@@ -37,6 +41,52 @@ void main() {
     terminal.write('\x1b(0lqk\x1b(Babc');
 
     expect(terminal.buffer.lines[0].getText(), '┌─┐abc');
+  });
+
+  test('Terminal keeps the live charsets across alt screen switches', () {
+    for (final mode in [47, 1047, 1049]) {
+      final terminal = Terminal()..resize(20, 5);
+
+      // ncurses enacs on the main screen, then smcup, then smacs/rmacs.
+      terminal.write('\x1b)0\x1b[?${mode}h\x0elqk\x0f');
+
+      expect(terminal.isUsingAltBuffer, isTrue);
+      expect(terminal.buffer.lines[0].getText(), '┌─┐', reason: '?$mode');
+    }
+
+    for (final mode in [47, 1047]) {
+      final terminal = Terminal()..resize(20, 5);
+
+      terminal.write('\x1b[?${mode}h\x1b(0\x1b[?${mode}llqk');
+
+      expect(terminal.buffer.lines[0].getText(), '┌─┐', reason: '?$mode');
+    }
+
+    // ?1049l restores the main screen's DECSC copy, saved by ?1049h.
+    final terminal = Terminal()..resize(20, 5);
+    terminal.write('\x1b[?1049h\x1b(0\x1b[?1049llqk');
+    expect(terminal.buffer.lines[0].getText(), 'lqk');
+  });
+
+  test('Terminal keeps one DECSC charset copy per screen', () {
+    final terminal = Terminal()..resize(20, 5);
+
+    terminal.write('\x1b(0\x1b7\x1b[?1049h\x1b(B\x1b7\x1b8\x1b[?1049llqk');
+
+    expect(terminal.isUsingAltBuffer, isFalse);
+    expect(terminal.buffer.lines[0].getText(), '┌─┐');
+  });
+
+  test('Terminal resets the charsets on RIS and DECSTR', () {
+    final ris = Terminal()..resize(20, 5);
+    ris.write('\x1b)0\x0e\x1b7\x1bc\x1b[3Hlqk\x1b8lqk');
+    expect(ris.buffer.lines[2].getText(), 'lqk');
+    expect(ris.buffer.lines[0].getText(), 'lqk');
+
+    final decstr = Terminal()..resize(20, 5);
+    decstr.write('\x1b)0\x0e\x1b7\x1b[!p\x1b[3Hlqk\x1b8lqk');
+    expect(decstr.buffer.lines[2].getText(), 'lqk');
+    expect(decstr.buffer.lines[0].getText(), 'lqk');
   });
 
   test('Terminal renders the British national replacement charset', () {
@@ -670,7 +720,7 @@ void main() {
     expect(line.getCodePoint(6), 0x78);
   });
 
-  test('Terminal keeps a wide character out of the batched run path', () {
+  test('Terminal writes a wide character inside a text run in two cells', () {
     final terminal = Terminal()..resize(20, 2);
 
     terminal.write('aö\u{4E00}b');
@@ -680,6 +730,329 @@ void main() {
     expect(line.getWidth(2), 2);
     expect(line.getWidth(3), 0);
     expect(line.getCodePoint(4), 0x62);
+  });
+
+  test('Terminal.writeBytes writes what write does with the bytes decoded', () {
+    const text = 'plain \x1b[1mbold\x1b[0m café — 中文 😀\r\n'
+        'second line ğüş\r\n';
+    final bytes = utf8.encode(text);
+    final viaString = Terminal()..resize(30, 5);
+    viaString.write(text);
+    // Split inside the multi-byte characters and the escape sequence.
+    final viaBytes = Terminal()..resize(30, 5);
+    for (var i = 0; i < bytes.length; i += 5) {
+      viaBytes.writeBytes(Uint8List.fromList(
+          bytes.sublist(i, i + 5 > bytes.length ? bytes.length : i + 5)));
+    }
+    for (var y = 0; y < 3; y++) {
+      expect(viaBytes.buffer.lines[y].getText(),
+          viaString.buffer.lines[y].getText());
+    }
+    expect(viaBytes.buffer.cursorX, viaString.buffer.cursorX);
+    expect(viaBytes.buffer.cursorY, viaString.buffer.cursorY);
+  });
+
+  test('Terminal stores emoji sequences one grapheme cluster per cell', () {
+    // Flags in odd and even runs, ZWJ sequences, VS16, skin tones, tags, and
+    // pictographs after a ZWJ that GB11 does not apply to. Each cell has to
+    // hold exactly one cluster. Not here: a Prepend, which is zero width and
+    // dropped where it cannot join, and a skin tone after an emoji that is no
+    // modifier base, which the terminal shows as a swatch of its own.
+    const texts = [
+      '🇺🇸🇯🇵🇩🇪',
+      '🇺🇸🇯',
+      'a🇺b🇺🇸🇯🇵🇺',
+      '👨‍👩‍👧‍👦x👩‍💻 🏳️‍🌈👨‍🚀',
+      '❤️☀️✔️✌️❤☀',
+      '👍🏽👋🏻✋🏼',
+      '🏴󠁧󠁢󠁳󠁣󠁴󠁿x',
+      'a\u200d😀',
+      '中\u200d👍',
+      '😀\u200d\u200d😀',
+      '❤\uFE0F\u200d🔥',
+      '©\u200d😀',
+    ];
+    for (final text in texts) {
+      final terminal = Terminal()..resize(80, 2);
+      terminal.write(text);
+      final line = terminal.buffer.lines[0];
+      final cells = <String>[];
+      for (var x = 0; x < terminal.viewWidth; x++) {
+        final codePoint = line.getCodePoint(x);
+        if (codePoint == 0) continue;
+        cells.add(String.fromCharCode(codePoint) +
+            (line.getCombiningCharacters(x) ?? ''));
+      }
+      expect(cells, text.characters.toList(), reason: text);
+    }
+  });
+
+  test(
+      'Terminal joins a regional indicator to a cell built from lone '
+      'surrogates as segmentation does', () {
+    // Malformed UTF-16: a lone high surrogate, then (after an SGR) a lone low
+    // one, which pair into U+1F1E6 in the cell; U+1F1E7 completes the flag.
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('\uD83C\x1b[m\uDDE6\u{1F1E7}');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0xD83C);
+    expect(line.getCombiningCharacters(0), '\uDDE6\u{1F1E7}');
+    expect(terminal.buffer.cursorX, 2);
+  });
+
+  test('Terminal joins nothing to a cell holding a lone low surrogate', () {
+    // Malformed UTF-16: a lone low surrogate has no high one before it to
+    // pair with. Handed a string that opens with one, package:characters
+    // threw a RangeError out of Terminal.write.
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('\uDC00\uDC00Z\r\n\uDC00­Z');
+
+    final first = terminal.buffer.lines[0];
+    expect(first.getCodePoint(0), 0xDC00);
+    expect(first.getCodePoint(1), 0xDC00);
+    expect(first.getCodePoint(2), 'Z'.codeUnitAt(0));
+    final second = terminal.buffer.lines[1];
+    expect(second.getCodePoint(0), 0xDC00);
+    expect(second.getCombiningCharacters(0), isNull);
+    expect(second.getCodePoint(1), 'Z'.codeUnitAt(0));
+  });
+
+  test(
+      'Terminal joins a pictograph after a ZWJ to a cell holding lone '
+      'surrogates as segmentation does', () {
+    // Nothing written puts a lone surrogate into the combining string of a
+    // pictograph, so they go in by hand. GB11 looks back past the ZWJ for the
+    // pictograph the sequence started with, reading the string's code points
+    // as [String.runes] does: two halves that pair are one skin tone, which
+    // GB11 looks past; a half on its own ends the look and breaks.
+    const cases = {
+      '\uD83C\uDFFD': true,
+      '\uFE0F\uDFFD': false,
+      '\uDFFD\uD83C': false,
+      '\uD83C': false,
+      '\uDFFD': false,
+    };
+    for (final MapEntry(key: units, value: joins) in cases.entries) {
+      final terminal = Terminal()..resize(20, 2);
+      terminal.write('\u{1F468}');
+      final line = terminal.buffer.lines[0];
+      for (final unit in units.codeUnits) {
+        line.addCombiningCharacter(0, unit);
+      }
+
+      terminal.write('\u200d\u{1F469}');
+
+      final reason = units.codeUnits.map((u) => u.toRadixString(16));
+      if (joins) {
+        expect(line.getCombiningCharacters(0), '$units\u200d\u{1F469}',
+            reason: '$reason');
+        expect(terminal.buffer.cursorX, 2, reason: '$reason');
+      } else {
+        expect(line.getCombiningCharacters(0), '$units\u200d',
+            reason: '$reason');
+        expect(line.getCodePoint(2), 0x1F469, reason: '$reason');
+        expect(terminal.buffer.cursorX, 4, reason: '$reason');
+      }
+    }
+  });
+
+  test('Terminal drops the combining string of a cell it writes over', () {
+    // The cell holding the combining string is the last one written, the
+    // edge where a write stops having to look for one. Over it go a
+    // character written on its own, a single-cell run and a mixed-width run
+    // starting on that cell.
+    for (final (text, x) in [
+      ('é\r❤', 0),
+      ('é\rx', 0),
+      ('abé\x1b[3Gあいう', 2),
+    ]) {
+      final terminal = Terminal()..resize(20, 2);
+
+      terminal.write(text);
+
+      final line = terminal.buffer.lines[0];
+      expect(line.getCodePoint(x), isNot(0x65), reason: text);
+      expect(line.getCombiningCharacters(x), isNull, reason: text);
+    }
+  });
+
+  test('Terminal repeats an emoji that ends a text run (REP)', () {
+    final terminal = Terminal()..resize(20, 2);
+
+    terminal.write('a😀\x1b[2b');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(1), 0x1F600);
+    expect(line.getCodePoint(3), 0x1F600);
+    expect(line.getCodePoint(5), 0x1F600);
+    expect(terminal.buffer.cursorX, 7);
+  });
+
+  group('Terminal mixed-width text runs', () {
+    // A run holding CJK, kana or Hangul goes through Buffer.writeMixedWidth.
+    // Whatever it writes has to be what writing the same code points one at
+    // a time through Terminal.writeChar - the path such text took before -
+    // leaves behind, cell for cell, including the cursor and wrap flags.
+    String digest(Terminal terminal) {
+      final buffer = terminal.buffer;
+      final out = StringBuffer('${buffer.cursorX},${buffer.cursorY};');
+      for (var y = 0; y < buffer.lines.length; y++) {
+        final line = buffer.lines[y];
+        out.write('|${line.isWrapped ? 'w' : ''}');
+        for (var x = 0; x < terminal.viewWidth; x++) {
+          out.write('${line.getCodePoint(x)}/${line.getWidth(x)}/'
+              '${line.getForeground(x)}/${line.getBackground(x)}/'
+              '${line.getAttributes(x)}/${line.getCombiningCharacters(x)} ');
+        }
+      }
+      return out.toString();
+    }
+
+    void expectSameAsPerCharacter(String setup, String text, int width) {
+      final batched = Terminal(maxLines: 50)..resize(width, 4);
+      final perCharacter = Terminal(maxLines: 50)..resize(width, 4);
+      batched.write(setup);
+      perCharacter.write(setup);
+      batched.write(text);
+      for (final codePoint in text.runes) {
+        perCharacter.writeChar(codePoint);
+      }
+      expect(digest(batched), digest(perCharacter),
+          reason: 'width $width, setup ${jsonEncode(setup)}, '
+              'text ${jsonEncode(text)}');
+    }
+
+    const texts = [
+      '中文字符',
+      'a中b文c',
+      'ab中文cd、。ＡＢ',
+      'かなカナー한국어 abc',
+      '中中中中中中中中中中中中中中中',
+      'x中中中中中中中中中中中中中中',
+      '「日本語」の文章，全角！？',
+      '中\u{0301}文',
+      '〰〰〰',
+      'あい〰〰',
+      '〰a〰',
+      '😀🚀a🔥',
+      '中😀文😀😀',
+      '😀👍🏽😀',
+      '😀\u200d👩😀',
+      '😀❤️😀',
+      '🇺🇸😀🇯🇵',
+      'a😀\u{1F004}😀',
+    ];
+    const setups = [
+      '',
+      '\x1b[31;44;1m',
+      '\x1b[4;58:2:1:2:3m',
+      'xx',
+      'x\u{1100}',
+      'x\u{200D}',
+      'x\u{0600}',
+      'a\x1b[3G',
+      '\x1b[?69h\x1b[2;5s\x1b[3G',
+      '\x1b[?69h\x1b[2;3s\x1b[2G',
+      '\x1b[?2027l',
+      // A cell that a run's first unit joins without writing anything
+      // (width 1: the cluster cannot be widened) or drops: the next unit may
+      // still join it.
+      '\u{2764}\u{200D}',
+      '\u{2764}\u{200D}\r',
+      '\u{00A9}\u{200D}',
+      'x\x1b[?2027l\u{0600}\x1b[?2027h',
+      // The cursor beyond the right margin, and a cell left of the left
+      // margin that a wide character could join.
+      '\x1b[?69h\x1b[2;3s\x1b[5G',
+      '\u{2764}\u{200D}\x1b[?69h\x1b[2;3s\x1b[5G',
+      '\x1b[?69h\x1b[3;4s\x1b[2G\u{2764}\u{200D}\x1b[6G',
+    ];
+
+    test('match per-character writes at every width from 1 to 9', () {
+      for (var width = 1; width <= 9; width++) {
+        for (final setup in setups) {
+          for (final text in texts) {
+            expectSameAsPerCharacter(setup, text, width);
+          }
+        }
+      }
+    });
+
+    test('overwrite and split wide characters as per-character writes do', () {
+      for (final setup in [
+        '中文字符中文字符\r',
+        '中文字符中文字符\r\x1b[C',
+        'abcdefgh\r\x1b[2C',
+      ]) {
+        for (final text in texts) {
+          expectSameAsPerCharacter(setup, text, 8);
+        }
+      }
+    });
+
+    test('match per-character writes with insert mode and autowrap off', () {
+      for (final setup in ['\x1b[4h', '\x1b[?7l', '\x1b(0']) {
+        for (final text in texts) {
+          expectSameAsPerCharacter(setup, text, 6);
+        }
+      }
+    });
+
+    test('store every run character as per-character writes do', () {
+      // The run is not classified again when it is stored: a unit below
+      // U+3000 is taken as narrow and one above as wide. Every unit either
+      // predicate accepts, and every run emoji, goes through a run here,
+      // each wide one after a narrow one, so a narrow unit taken as wide or
+      // the other way round moves the cursor or the cells.
+      final narrow = [
+        for (var unit = 0; unit <= 0xffff; unit++)
+          if (isSingleCellPrintable(unit)) unit,
+      ];
+      final wide = [
+        for (var unit = 0; unit <= 0xffff; unit++)
+          if (isWideRunUnit(unit)) unit,
+        for (var codePoint = 0x10000; codePoint <= 0x10ffff; codePoint++)
+          if (isWideRunEmoji(codePoint)) codePoint,
+      ];
+      final chunk = StringBuffer();
+      for (var i = 0; i < wide.length; i++) {
+        chunk
+          ..writeCharCode(narrow[i % narrow.length])
+          ..writeCharCode(wide[i]);
+        if (i % 16 == 15 || i == wide.length - 1) {
+          for (final width in [7, 8]) {
+            expectSameAsPerCharacter('', chunk.toString(), width);
+          }
+          chunk.clear();
+        }
+      }
+      // So that every narrow unit was written too.
+      expect(wide.length, greaterThanOrEqualTo(narrow.length));
+    });
+
+    test('take the single-cell text before a wide character into its run', () {
+      final terminal = _TrackingTerminal()..resize(20, 2);
+
+      terminal.write('ab漢字cd\x1b[31mxy\u{302A}z');
+
+      // `xy` stops at a tone mark, which carries no run on.
+      expect(terminal.bulkWrites, 3);
+      expect(terminal.buffer.lines[0].getText(), 'ab漢字cdxy\u{302A}z');
+    });
+
+    test('a Hangul syllable after a leading jamo still joins its cluster', () {
+      final terminal = Terminal()..resize(10, 2);
+
+      terminal.write('\u{1100}가나');
+
+      final line = terminal.buffer.lines[0];
+      expect(line.getCodePoint(0), 0x1100);
+      expect(line.getCombiningCharacters(0), '가');
+      expect(line.getCodePoint(2), '나'.codeUnitAt(0));
+    });
   });
 
   test('Terminal keeps Latin-1 letters in separate cells', () {
@@ -1106,6 +1479,113 @@ void main() {
     expect(terminal.buffer.cursorX, 2);
   });
 
+  test('Terminal joins Hangul jamo by jamo class', () {
+    // L V T decomposed is one syllable; a syllable after a syllable is not
+    // joined, a syllable after a leading jamo is (GB6).
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('각가ᄀ가x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x1100);
+    expect(line.getCombiningCharacters(0), 'ᅡᆨ');
+    expect(line.getCodePoint(2), 0xac00);
+    expect(line.getCombiningCharacters(2), isNull);
+    expect(line.getCodePoint(4), 0x1100);
+    expect(line.getCombiningCharacters(4), '가');
+    expect(line.getCodePoint(6), 0x78);
+  });
+
+  test('Terminal joins the character after a Prepend code point', () {
+    // GB9b: U+06DD ARABIC END OF AYAH pulls in what follows it, a narrow
+    // letter and a wide ideograph alike.
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('۝بx۝中y');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x06dd);
+    expect(line.getCombiningCharacters(0), 'ب');
+    expect(line.getWidth(0), 2);
+    expect(line.getCodePoint(2), 0x78);
+    expect(line.getCodePoint(3), 0x06dd);
+    expect(line.getCombiningCharacters(3), '中');
+    expect(line.getCodePoint(5), 0x79);
+  });
+
+  test('Terminal stacks marks on marked and wide cells', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('ẹ́̂x中́y');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCombiningCharacters(0), '̣́̂');
+    expect(line.getCodePoint(1), 0x78);
+    expect(line.getCodePoint(2), 0x4e2d);
+    expect(line.getCombiningCharacters(2), '́');
+    expect(line.getCodePoint(4), 0x79);
+  });
+
+  test('Terminal keeps a mark off a line separator cell', () {
+    // U+2028 is width 1 but a control to grapheme segmentation (GB4).
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write(' ́x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCodePoint(0), 0x2028);
+    expect(line.getCombiningCharacters(0), isNull);
+    expect(line.getCodePoint(1), 0x78);
+  });
+
+  test('Terminal starts wide characters after narrow ones', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('a中b가c\u{1F600}d');
+
+    final line = terminal.buffer.lines[0];
+    for (final (index, codePoint) in [
+      (0, 0x61),
+      (1, 0x4e2d),
+      (3, 0x62),
+      (4, 0xac00),
+      (6, 0x63),
+      (7, 0x1F600),
+      (9, 0x64),
+    ]) {
+      expect(line.getCodePoint(index), codePoint);
+      expect(line.getCombiningCharacters(index), isNull);
+    }
+  });
+
+  test('Terminal joins a consonant across a virama, not a vowel sign', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('कितक्षx');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCombiningCharacters(0), 'ि');
+    expect(line.getCodePoint(2), 0x0924);
+    expect(line.getCombiningCharacters(2), isNull);
+    expect(line.getCodePoint(3), 0x0915);
+    expect(line.getCombiningCharacters(3), '्ष');
+    expect(line.getCodePoint(5), 0x78);
+  });
+
+  test('Terminal starts an emoji after VS16 and modifier clusters', () {
+    final terminal = Terminal()..resize(12, 1);
+
+    terminal.write('❤️\u{1F600}\u{1F44D}\u{1F3FD}x');
+
+    final line = terminal.buffer.lines[0];
+    expect(line.getCombiningCharacters(0), '️');
+    expect(line.getCodePoint(2), 0x1F600);
+    expect(line.getCombiningCharacters(2), isNull);
+    expect(line.getCodePoint(4), 0x1F44D);
+    expect(line.getCombiningCharacters(4), '\u{1F3FD}');
+    expect(line.getCodePoint(6), 0x78);
+  });
+
   test('Terminal erase chars clears split wide-character boundaries', () {
     final terminal = Terminal()..resize(8, 1);
 
@@ -1186,6 +1666,69 @@ void main() {
     expect(deletedLine.getForeground(6), CellColor.normal);
     expect(deletedLine.getBackground(6), CellColor.named | NamedColor.red);
     expect(deletedLine.getAttributes(6), 0);
+  });
+
+  group('Terminal lines opened by scrolling keep only the background', () {
+    // Each sequence opens the listed viewport rows on an 8x8 screen.
+    final cases = <(String, String, List<int>)>[
+      ('LF at the bottom', '\x1b[8;1H\n', [7]),
+      ('LF at the alt-screen bottom', '\x1b[?1049h\x1b[8;1H\n', [7]),
+      ('SU', '\x1b[S', [7]),
+      ('SD', '\x1b[T', [0]),
+      ('RI at the top', '\x1b[1;1H\x1bM', [0]),
+      ('IL', '\x1b[1;1H\x1b[L', [0]),
+      ('IL past the lines it moves', '\x1b[1;1H\x1b[6L', [0, 1, 2, 3, 4, 5]),
+      ('DL', '\x1b[1;1H\x1b[M', [7]),
+      ('LF inside a scroll region', '\x1b[3;6r\x1b[6;1H\n', [5]),
+      ('LF at a top scroll region', '\x1b[1;5r\x1b[5;1H\n', [4]),
+      ('LF below a scroll region', '\x1b[1;5r\x1b[8;1H\n', [7]),
+    ];
+    for (final (name, sequence, rows) in cases) {
+      test(name, () {
+        final terminal = Terminal()..resize(8, 8);
+        terminal.write('\x1b[31;44;1;4m$sequence');
+        for (final row in rows) {
+          _expectBlankRow(terminal, row, CellColor.named | NamedColor.blue);
+        }
+      });
+
+      test('$name with the default background', () {
+        final terminal = Terminal()..resize(8, 8);
+        terminal.write('\x1b[31;44;1;4m\x1b[0m$sequence');
+        for (final row in rows) {
+          _expectBlankRow(terminal, row, CellColor.normal);
+        }
+      });
+    }
+
+    test('leaves scrollback and rows below the region as they were', () {
+      final terminal = Terminal()..resize(8, 8);
+      terminal.write('top\x1b[8;1Hlow\x1b[1;5r\x1b[44m\x1b[5;1H\n');
+
+      final buffer = terminal.buffer;
+      expect(buffer.scrollBack, 1);
+      expect(buffer.lines[0].getText(), 'top');
+      expect(buffer.lines[0].getBackground(7), CellColor.normal);
+      _expectBlankRow(terminal, 4, CellColor.named | NamedColor.blue);
+      expect(buffer.lines[buffer.scrollBack + 7].getText(), 'low');
+      expect(buffer.lines[buffer.scrollBack + 7].getBackground(7), 0);
+    });
+
+    test('fills recycled lines without leaking their old cells', () {
+      // 10000 x 80 cells is over Buffer.recycleThresholdCells, so lines
+      // opened once the scrollback is full reuse evicted storage.
+      final terminal = Terminal(maxLines: 10000)..resize(80, 8);
+      final text = '\x1b[31;45;1m${'x' * 80}\x1b[0m\r\n';
+      for (var i = 0; i < 10010; i++) {
+        terminal.write(text);
+      }
+
+      terminal.write('\x1b[31;44;1;4m\n');
+      _expectBlankRow(terminal, 7, CellColor.named | NamedColor.blue);
+      terminal.write('\x1b[0m\n');
+      _expectBlankRow(terminal, 7, CellColor.normal);
+      _expectBlankRow(terminal, 6, CellColor.named | NamedColor.blue);
+    });
   });
 
   test('Terminal resets bold and faint intensity with SGR 22', () {
@@ -1636,6 +2179,17 @@ void main() {
       terminal.write('\x1b[i');
 
       expect(reported, ['ESC[i']);
+    });
+
+    test('reports only the unknown CSI after text and sequences before it', () {
+      final reported = <String>[];
+      final terminal = Terminal(onUnknownSequence: reported.add);
+
+      // The parser takes these tokens from one block without going back to
+      // the queue between them; each must still be the whole token reported.
+      terminal.write('ab\x1b[1mcd\r\n\x1b[3i');
+
+      expect(reported, ['ESC[3i']);
     });
 
     test('fires for an unrecognised OSC Ps', () {
@@ -2339,6 +2893,19 @@ void main() {
     expect(states[0].commandLine, 'echo bobr\nkurwa');
     expect(states[1].commandLine, 'echo bobr;kurwa');
     expect(states[2].commandLine, isNull);
+  });
+
+  test('Terminal keeps parsing after a lone quote OSC 133 command line', () {
+    final states = <TerminalSemanticPromptState>[];
+    final terminal = Terminal(onSemanticPrompt: states.add);
+
+    terminal.write('a\x1b]133;C;cmdline=' "'" '\x07b');
+    terminal.write('\x1b]133;C;cmdline=\$' "'" '\x07c');
+    terminal.write('\x1b]133;C;cmdline=' "''" '\x07d');
+    terminal.write('\x1b]133;C;cmdline=\$' "''" '\x07e');
+
+    expect(terminal.buffer.lines[0].getText(), 'abcde');
+    expect(states.map((state) => state.commandLine), [null, null, '', '']);
   });
 
   test('Terminal tracks OSC 633 shell integration state', () {
@@ -3147,8 +3714,8 @@ void main() {
       '\x1b[?6c',
       '\x1b[?6c',
       '\x1b[?6c',
-      '\x1b[>0;60500;1c',
-      '\x1b[>0;60500;1c',
+      '\x1b[>0;60600;1c',
+      '\x1b[>0;60600;1c',
     ]);
   });
 
@@ -3209,7 +3776,7 @@ void main() {
     terminal.write('\x1b[>0q');
 
     expect(output, [
-      '\x1bP>|xterm3 6.5.0\x1b\\',
+      '\x1bP>|xterm3 6.6.0\x1b\\',
       '\x1bP>|lumide-term 1.0\x1b\\',
     ]);
   });
@@ -3388,6 +3955,29 @@ void main() {
 
     expect(terminal.buffer.lines[0].getText(0, 6), 'aXXXef');
     expect(terminal.buffer.lines[1].getText(0, 6), 'gXXXkl');
+  });
+
+  test('Terminal ignores a lone surrogate as a fill character', () {
+    // A surrogate is no character, and xterm does not fill with one. Stored
+    // as a cell's base, U+DC00 made the next character that reached grapheme
+    // segmentation - U+00AD here - throw out of Terminal.write.
+    for (final char in [0xDC00, 0xD800]) {
+      final terminal = Terminal()..resize(4, 1);
+
+      terminal.write('abc\x1b[$char;1;1;1;3\$x\x1b[1;2H­Z');
+
+      expect(terminal.buffer.lines[0].getText(0, 3), 'aZc', reason: '$char');
+    }
+  });
+
+  test('Terminal ignores a control character as a fill character', () {
+    for (final char in [7, 0x7f, 0x85]) {
+      final terminal = Terminal()..resize(4, 1);
+
+      terminal.write('abc\x1b[$char;1;1;1;3\$x\x1b[1;2H­Z');
+
+      expect(terminal.buffer.lines[0].getText(0, 3), 'aZc', reason: '$char');
+    }
   });
 
   test('Terminal preserves protected cells during selective rectangle erase',
@@ -4207,6 +4797,66 @@ void main() {
 
     terminal.write('\x1b[<2u');
     expect(terminal.kittyKeyboardMode, 1);
+  });
+
+  test('Terminal drops alt screen Kitty keyboard mode on leaving 1049', () {
+    final output = <String>[];
+    final terminal = Terminal(onOutput: output.add);
+
+    // A TUI pushes flags on the alt screen and exits without popping them.
+    terminal.write('\x1b[?1049h\x1b[>1u\x1b[?1049l');
+    expect(terminal.kittyKeyboardMode, 0);
+
+    terminal.keyInput(TerminalKey.keyC, ctrl: true);
+    expect(output, ['\x03']);
+  });
+
+  test('Terminal keeps separate Kitty keyboard modes per screen', () {
+    final terminal = Terminal();
+
+    terminal.write('\x1b[>1u\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 0);
+
+    terminal.write('\x1b[>2u');
+    expect(terminal.kittyKeyboardMode, 2);
+
+    terminal.write('\x1b[?1049l');
+    expect(terminal.kittyKeyboardMode, 1);
+
+    terminal.write('\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 2);
+  });
+
+  test('Terminal pops alt screen Kitty keyboard stack only', () {
+    final terminal = Terminal();
+
+    terminal.write('\x1b[>1u\x1b[>3u\x1b[?1049h\x1b[<99u\x1b[?1049l');
+    expect(terminal.kittyKeyboardMode, 3);
+
+    terminal.write('\x1b[<u');
+    expect(terminal.kittyKeyboardMode, 1);
+  });
+
+  test('Terminal reports Kitty keyboard mode of the active screen', () {
+    final output = <String>[];
+    final terminal = Terminal(onOutput: output.add);
+
+    terminal.write('\x1b[>1u\x1b[?1049h\x1b[>2u\x1b[?u\x1b[?1049l\x1b[?u');
+    expect(output, ['\x1b[?2u', '\x1b[?1u']);
+  });
+
+  test('Terminal resets Kitty keyboard modes of both screens', () {
+    final terminal = Terminal();
+
+    terminal.write('\x1b[=1u\x1b[?1049h\x1b[>1u\x1b[?1049l\x1bc');
+    expect(terminal.kittyKeyboardMode, 0);
+    terminal.write('\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 0);
+
+    terminal.write('\x1b[>1u\x1b[?1049l\x1b[=1u\x1b[!p');
+    expect(terminal.kittyKeyboardMode, 0);
+    terminal.write('\x1b[?1049h');
+    expect(terminal.kittyKeyboardMode, 0);
   });
 
   test('Terminal restores main cursor when leaving 1049 alternate screen', () {
@@ -5249,6 +5899,26 @@ class _TrackingTerminal extends Terminal {
   void writeText(String text, int start, int end) {
     bulkWrites++;
     super.writeText(text, start, end);
+  }
+
+  @override
+  void writeMixedWidthText(String text, int start, int end) {
+    bulkWrites++;
+    super.writeMixedWidthText(text, start, end);
+  }
+}
+
+/// Expects viewport [row] blank over its full width, in [background] and
+/// otherwise the default style, as an erase leaves it.
+void _expectBlankRow(Terminal terminal, int row, int background) {
+  final line = terminal.buffer.lines[terminal.buffer.scrollBack + row];
+  for (var column = 0; column < terminal.viewWidth; column++) {
+    final reason = 'row $row, column $column';
+    expect(line.getCodePoint(column), 0, reason: reason);
+    expect(line.getForeground(column), CellColor.normal, reason: reason);
+    expect(line.getBackground(column), background, reason: reason);
+    expect(line.getAttributes(column), 0, reason: reason);
+    expect(line.getUnderlineColor(column), CellColor.normal, reason: reason);
   }
 }
 

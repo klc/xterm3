@@ -76,6 +76,7 @@ class TerminalStyle {
     this.fontFamilyFallback = _kDefaultFontFamilyFallback,
     this.drawBoldTextWithBrightColors = true,
     this.enableLigatures = false,
+    this.useGlyphAtlas = false,
   });
 
   factory TerminalStyle.fromTextStyle(TextStyle textStyle) {
@@ -128,6 +129,27 @@ class TerminalStyle {
   /// has no visible effect unless the resolved font actually ships the
   /// features, which none of the default fallback families do.
   final bool enableLigatures;
+
+  /// Whether letters and CJK characters are drawn from an atlas of glyph
+  /// sprites tinted per cell, instead of one laid-out paragraph per cell.
+  ///
+  /// The paragraph path lays a glyph out once per colour it appears in, so
+  /// output with many colours - gradients, heat maps, `lolcat` - lays out a
+  /// glyph on most cells it draws; the atlas lays one out once per luminance
+  /// band and draws a line's glyphs in a few calls. On a 100x37 screen of
+  /// random 24-bit colour that took a frame's build from 40 ms to under 1 ms,
+  /// and it lowers the build and raster time of ordinary output too.
+  ///
+  /// The cost is exactness. A sprite is drawn in a grey of its colour's
+  /// luminance band and then tinted, which reproduces plain text and theme
+  /// colours exactly and arbitrary 24-bit colour within a few levels per
+  /// channel at the edges of glyphs; strongly saturated colours near the edge
+  /// of a band can differ more. Sprites are drawn at the device pixel ratio
+  /// without filtering, so text under a scaling transform looks blockier than
+  /// the paragraph path. Emoji, symbols, box drawing, combining characters
+  /// and curly, dotted or dashed underlines keep the paragraph path. Verified
+  /// on macOS. Ignored while [enableLigatures] is on.
+  final bool useGlyphAtlas;
 
   TextStyle toTextStyle({
     Color? color,
@@ -187,6 +209,7 @@ class TerminalStyle {
     List<String>? fontFamilyFallback,
     bool? drawBoldTextWithBrightColors,
     bool? enableLigatures,
+    bool? useGlyphAtlas,
   }) {
     return TerminalStyle(
       fontSize: fontSize ?? this.fontSize,
@@ -196,6 +219,7 @@ class TerminalStyle {
       drawBoldTextWithBrightColors:
           drawBoldTextWithBrightColors ?? this.drawBoldTextWithBrightColors,
       enableLigatures: enableLigatures ?? this.enableLigatures,
+      useGlyphAtlas: useGlyphAtlas ?? this.useGlyphAtlas,
     );
   }
 
@@ -208,6 +232,7 @@ class TerminalStyle {
         fontFamily != other.fontFamily ||
         drawBoldTextWithBrightColors != other.drawBoldTextWithBrightColors ||
         enableLigatures != other.enableLigatures ||
+        useGlyphAtlas != other.useGlyphAtlas ||
         fontFamilyFallback.length != other.fontFamilyFallback.length) {
       return false;
     }
@@ -226,6 +251,7 @@ class TerminalStyle {
         fontFamily,
         drawBoldTextWithBrightColors,
         enableLigatures,
+        useGlyphAtlas,
         Object.hashAll(fontFamilyFallback),
       );
 }

@@ -82,15 +82,20 @@ class _LineReflow {
   void add(BufferLine line) {
     final trimmedLength = line.getTrimmedLength(oldWidth);
 
+    final builder = _builder;
+
     // A fast path for empty lines
     if (trimmedLength == 0) {
+      // Content still in the builder comes before this line.
+      if (builder != null && builder.isNotEmpty) {
+        _lines.add(builder.take(wrapped: _lines.isNotEmpty));
+      }
       _lines.add(line);
       return;
     }
 
     // We already have some content in the buffer, so we copy the content into
     // the builder instead of reusing the line.
-    final builder = _builder;
     if (_lines.isNotEmpty || (builder != null && builder.isNotEmpty)) {
       _addPart(line, from: 0, to: trimmedLength);
       return;

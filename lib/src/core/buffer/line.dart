@@ -16,6 +16,12 @@ const _cellSize = 4;
 /// - which scrolling does once per line of output - allocates nothing at all.
 final _noCells = Uint32List(0);
 
+/// Source for [BufferLine.takeStorage]'s clear: copying zeros in with
+/// `setRange` is a memmove, several times cheaper than storing them one by
+/// one and far cheaper than `fillRange`. 512 cells clears most lines in one
+/// copy; a wider one takes a few.
+final _zeroWords = Uint32List(512 * _cellSize);
+
 const _cellForeground = 0;
 
 const _cellBackground = 1;
@@ -66,6 +72,40 @@ class BufferLine with IndexedItem {
     _data = grown;
   }
 
+  /// Hands this line's cell storage over, cleared, and leaves the line with
+  /// none: it reads as empty afterwards. Returns null if it had no storage.
+  ///
+  /// For a line that has fallen off a large scrollback, so that the next new
+  /// line can use the storage instead of allocating - see
+  /// `Buffer.recycleThresholdCells`. Only the cells below [_used] can hold
+  /// anything, so only they are cleared.
+  @internal
+  Uint32List? takeStorage() {
+    final data = _data;
+    if (data.isEmpty) return null;
+    final words = _used * _cellSize;
+    final zeros = _zeroWords;
+    for (var i = 0; i < words; i += zeros.length) {
+      data.setRange(i, min(i + zeros.length, words), zeros);
+    }
+    _data = _noCells;
+    _used = 0;
+    // The maps are keyed by cell; with no cells left their entries would
+    // outlive [_used], which the writers rely on never happening.
+    _combiningCharacters = null;
+    _underlineColors = null;
+    return data;
+  }
+
+  /// Gives this line, which has no storage yet, the cleared [storage] another
+  /// line handed over with [takeStorage]. Whatever its size: the line grows
+  /// it, as it would grow its own, if it needs more.
+  @internal
+  void adoptStorage(Uint32List storage) {
+    assert(_data.isEmpty && _used == 0);
+    _data = storage;
+  }
+
   /// A cell field, or 0 for a cell this line has never had storage for.
   int _field(int index, int field) {
     final offset = index * _cellSize + field;
@@ -86,18 +126,26 @@ class BufferLine with IndexedItem {
   /// instead of walking the blank tail of a short line.
   int get writtenLength => _used < _length ? _used : _length;
 
-  final _anchors = <CellAnchor>[];
+  /// Null until the line has an anchor, which few ever do: a list per line
+  /// was an object more for every line scrolled through.
+  List<CellAnchor>? _anchors;
 
+  /// Only a cell holding a code point gets a combining string, so every key
+  /// is below [_used]: a write at or past it has nothing here to drop. Text
+  /// written left to right lands there, and on a line of emoji sequences -
+  /// a combining string every few cells - the drops cost more than the cells.
   Map<int, String>? _combiningCharacters;
 
   Map<int, int>? _underlineColors;
 
-  List<CellAnchor> get anchors => UnmodifiableListView(_anchors);
+  // The view stays live, seeing anchors created after it was taken, so it has
+  // to wrap the list those anchors will go into.
+  List<CellAnchor> get anchors => UnmodifiableListView(_anchors ??= []);
 
   /// Whether this line carries any anchors, without building the view
   /// [anchors] returns. Reflow asks this per line and, for a line that has
   /// none, that view was the only thing allocated.
-  bool get hasAnchors => _anchors.isNotEmpty;
+  bool get hasAnchors => _anchors?.isNotEmpty ?? false;
 
   bool get hasCombiningCharacters => _combiningCharacters?.isNotEmpty ?? false;
 
@@ -171,15 +219,46 @@ class BufferLine with IndexedItem {
       return;
     }
 
-    final existing = _combiningCharacters?[index];
+    _appendCombiningCharacter(index, _combiningCharacters?[index], codePoint);
+  }
+
+  /// [addCombiningCharacter] for a caller that has just found the cell's code
+  /// point non-zero and read its combining string as [existing]: the buffer,
+  /// joining a code point to the cluster it has just looked at. Reading the
+  /// string again cost a map lookup per joined code point.
+  @internal
+  void addCombiningCharacterTo(int index, String? existing, int codePoint) {
+    if (index < 0 ||
+        index >= _length ||
+        codePoint < 0 ||
+        codePoint > 0x10FFFF) {
+      return;
+    }
+    assert(getCodePoint(index) != 0);
+    assert(identical(existing, _combiningCharacters?[index]));
+    _appendCombiningCharacter(index, existing, codePoint);
+  }
+
+  void _appendCombiningCharacter(int index, String? existing, int codePoint) {
+    // The marks emoji sequences are made of, without a string built for each.
+    final character = switch (codePoint) {
+      0x200D => '\u200D',
+      0xFE0E => '\uFE0E',
+      0xFE0F => '\uFE0F',
+      _ => String.fromCharCode(codePoint),
+    };
     if (existing == null) {
-      _mutableCombiningCharacters[index] = String.fromCharCode(codePoint);
+      _mutableCombiningCharacters[index] = character;
       return;
     }
 
-    if (existing.runes.length >= _maxCombiningCharactersPerCell) return;
-    _mutableCombiningCharacters[index] =
-        existing + String.fromCharCode(codePoint);
+    // No string has more runes than code units, so one shorter than the cap
+    // is under it without being walked.
+    if (existing.length >= _maxCombiningCharactersPerCell &&
+        existing.runes.length >= _maxCombiningCharactersPerCell) {
+      return;
+    }
+    _mutableCombiningCharacters[index] = existing + character;
   }
 
   void getCellData(
@@ -239,6 +318,7 @@ class BufferLine with IndexedItem {
   void setCell(int index, int char, int width, CursorStyle style) {
     _repairWideCellPairing(index, width, style);
 
+    final used = _used;
     _ensureCapacity(index);
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
@@ -248,8 +328,16 @@ class BufferLine with IndexedItem {
         style.semanticAttrs;
     _data[offset + _cellContent] = char | (width << CellContent.widthShift);
     _setUnderlineColor(index, style.underlineColor);
-    _combiningCharacters?.remove(index);
+    assert(
+      index < used || !(_combiningCharacters?.containsKey(index) ?? false),
+    );
+    if (index < used) _combiningCharacters?.remove(index);
   }
+
+  bool _hasCombiningCharactersIn(int start, int end) =>
+      _combiningCharacters?.keys
+          .any((index) => index >= start && index < end) ??
+      false;
 
   /// Keeps the width-2 lead / width-0 placeholder pairing invariant intact
   /// across a raw [setCell] write, regardless of what the caller remembers
@@ -293,6 +381,7 @@ class BufferLine with IndexedItem {
     assert(textStart >= 0 && textStart + count <= text.length);
     if (count <= 0) return;
 
+    final used = _used;
     _ensureCapacity(start + count - 1);
     clearWideCellAt(start, style);
     clearWideCellAt(start + count - 1, style);
@@ -306,8 +395,8 @@ class BufferLine with IndexedItem {
       final cellOffset = (start + offset) * _cellSize;
       final codeUnit = text.codeUnitAt(textStart + offset);
       // Callers must have established that every unit occupies exactly one
-      // cell - see `ByteConsumer.printableTextRunLength`, which is where the
-      // run this writes comes from.
+      // cell - see `EscapeParser._scanHeadBlock`, which is where the run this
+      // writes comes from.
       assert(isSingleCellPrintable(codeUnit));
       _data[cellOffset + _cellForeground] = foreground;
       _data[cellOffset + _cellBackground] = background;
@@ -317,8 +406,98 @@ class BufferLine with IndexedItem {
     }
 
     final end = start + count;
+    // [removeWhere] visits every combining string on the line, and a run
+    // starting at [_used] or past it - see [_combiningCharacters] - would
+    // find none of them in its span.
+    assert(start < used || !_hasCombiningCharactersIn(start, end));
     if (_combiningCharacters case final combiningCharacters?
-        when combiningCharacters.isNotEmpty) {
+        when start < used && combiningCharacters.isNotEmpty) {
+      combiningCharacters.removeWhere(
+        (index, _) => index >= start && index < end,
+      );
+    }
+    if (style.underlineColor == 0) {
+      if (_underlineColors case final underlineColors?
+          when underlineColors.isNotEmpty) {
+        underlineColors.removeWhere(
+          (index, _) => index >= start && index < end,
+        );
+      }
+      return;
+    }
+    for (var index = start; index < end; index++) {
+      _mutableUnderlineColors[index] = style.underlineColor;
+    }
+  }
+
+  /// [setAsciiCells] for a run that also holds [isWideRunUnit] code units and
+  /// [isWideRunEmoji] surrogate pairs, each written as a width-2 lead and a
+  /// width-0 placeholder. The [count] code units cover [cells] cells.
+  ///
+  /// The run overwrites every cell in its span, so only a wide character
+  /// straddling either end of it can be left broken - the two
+  /// [clearWideCellAt] calls - just as for [setAsciiCells].
+  void setMixedWidthCells(
+    int start,
+    String text,
+    int textStart,
+    int count,
+    int cells,
+    CursorStyle style,
+  ) {
+    assert(start >= 0 && start + cells <= _length);
+    assert(textStart >= 0 && textStart + count <= text.length);
+    if (count <= 0) return;
+
+    final used = _used;
+    _ensureCapacity(start + cells - 1);
+    clearWideCellAt(start, style);
+    clearWideCellAt(start + cells - 1, style);
+
+    final foreground = style.foreground;
+    final background = style.background;
+    final attributes = style.attrs |
+        (style.hyperlinkId << CellAttr.hyperlinkShift) |
+        style.semanticAttrs;
+    // Taken after the [clearWideCellAt] calls, which can grow the storage.
+    // Read from the field, each store may reload it.
+    final data = _data;
+    var cellOffset = start * _cellSize;
+    var offset = textStart;
+    final textEnd = textStart + count;
+    final classes = runClasses;
+    while (offset < textEnd) {
+      final codeUnit = text.codeUnitAt(offset++);
+      data[cellOffset + _cellForeground] = foreground;
+      data[cellOffset + _cellBackground] = background;
+      data[cellOffset + _cellAttributes] = attributes;
+      if (classes[codeUnit] == runClassSingleCell) {
+        data[cellOffset + _cellContent] =
+            codeUnit | (1 << CellContent.widthShift);
+      } else {
+        var codePoint = codeUnit;
+        if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+          codePoint = 0x10000 +
+              ((codeUnit - 0xd800) << 10) +
+              (text.codeUnitAt(offset++) - 0xdc00);
+        }
+        assert(isWideRunUnit(codePoint) || isWideRunEmoji(codePoint));
+        data[cellOffset + _cellContent] =
+            codePoint | (2 << CellContent.widthShift);
+        cellOffset += _cellSize;
+        data[cellOffset + _cellForeground] = foreground;
+        data[cellOffset + _cellBackground] = background;
+        data[cellOffset + _cellAttributes] = attributes;
+        data[cellOffset + _cellContent] = 0;
+      }
+      cellOffset += _cellSize;
+    }
+    assert(cellOffset == (start + cells) * _cellSize);
+
+    final end = start + cells;
+    assert(start < used || !_hasCombiningCharactersIn(start, end));
+    if (_combiningCharacters case final combiningCharacters?
+        when start < used && combiningCharacters.isNotEmpty) {
       combiningCharacters.removeWhere(
         (index, _) => index >= start && index < end,
       );
@@ -555,8 +734,8 @@ class BufferLine with IndexedItem {
     }
 
     // Update anchors, remove anchors that are inside the removed range.
-    if (_anchors.isNotEmpty) {
-      for (final anchor in _anchors.toList()) {
+    if (_anchors case final anchors? when anchors.isNotEmpty) {
+      for (final anchor in anchors.toList()) {
         if (anchor.x >= start) {
           if (anchor.x < start + count) {
             anchor.dispose();
@@ -659,8 +838,8 @@ class BufferLine with IndexedItem {
     }
 
     // Update anchors, move anchors that are after the inserted range.
-    if (_anchors.isNotEmpty) {
-      for (final anchor in _anchors.toList()) {
+    if (_anchors case final anchors? when anchors.isNotEmpty) {
+      for (final anchor in anchors.toList()) {
         if (anchor.x >= end - count && anchor.x < end) {
           anchor.dispose();
           continue;
@@ -704,10 +883,12 @@ class BufferLine with IndexedItem {
       }
     }
 
-    for (var i = 0; i < _anchors.length; i++) {
-      final anchor = _anchors[i];
-      if (anchor.x > _length) {
-        anchor.reposition(_length);
+    if (_anchors case final anchors?) {
+      for (var i = 0; i < anchors.length; i++) {
+        final anchor = anchors[i];
+        if (anchor.x > _length) {
+          anchor.reposition(_length);
+        }
       }
     }
   }
@@ -882,12 +1063,14 @@ class BufferLine with IndexedItem {
 
   CellAnchor createAnchor(int offset) {
     final anchor = CellAnchor(offset, owner: this);
-    _anchors.add(anchor);
+    (_anchors ??= []).add(anchor);
     return anchor;
   }
 
   void dispose() {
-    for (final anchor in _anchors.toList()) {
+    final anchors = _anchors;
+    if (anchors == null) return;
+    for (final anchor in anchors.toList()) {
       anchor.dispose();
     }
   }
@@ -929,9 +1112,9 @@ class CellAnchor {
   bool get attached => _owner?.attached ?? false;
 
   void reparent(BufferLine owner, int offset) {
-    _owner?._anchors.remove(this);
+    _owner?._anchors?.remove(this);
     _owner = owner;
-    _owner?._anchors.add(this);
+    (owner._anchors ??= []).add(this);
     _offset = offset;
   }
 
@@ -940,7 +1123,7 @@ class CellAnchor {
   }
 
   void dispose() {
-    _owner?._anchors.remove(this);
+    _owner?._anchors?.remove(this);
     _owner = null;
   }
 

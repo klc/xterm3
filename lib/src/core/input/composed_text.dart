@@ -5,8 +5,9 @@ import 'package:xterm3/src/core/platform.dart';
 /// Whether the platform composed a character out of a modified key press, so
 /// the modifier is part of the layout rather than a modifier to report.
 ///
-/// macOS composes with Option unless the app opts into option-as-meta: on a
-/// Turkish Q layout Option+Q is how `@` is typed. An encoding that reports the
+/// Apple platforms compose with Option unless the app opts into
+/// option-as-meta: on a Turkish Q layout Option+Q is how `@` is typed, on a
+/// Mac and on an iPad hardware keyboard alike. An encoding that reports the
 /// press as Alt plus the key (kitty's `CSI 113;3u`, modifyOtherKeys'
 /// `CSI 27;3;64~`) hands the application Alt+`@` instead of `@`, and the
 /// character is never typed.
@@ -16,8 +17,8 @@ import 'package:xterm3/src/core/platform.dart';
 /// there, so it is left as Alt. A key with no US-layout character to compare
 /// against (a layout's own letters, such as Turkish `ş` or `ğ`) produced
 /// something only Option could have, so it counts as composed too.
-bool isMacOptionComposedText(TerminalKeyboardEvent event) {
-  if (event.platform != TerminalTargetPlatform.macos) return false;
+bool isAppleOptionComposedText(TerminalKeyboardEvent event) {
+  if (!isApplePlatform(event.platform)) return false;
   if (!event.alt || event.ctrl || event.superKey) return false;
   final text = event.text;
   if (text == null || text.runes.length != 1) return false;
@@ -25,6 +26,13 @@ bool isMacOptionComposedText(TerminalKeyboardEvent event) {
   if (isControlCodepoint(composed)) return false;
   final base = usLayoutCodepoint(event.key);
   return base != composed;
+}
+
+/// Whether Option on [platform] composes characters and is Meta only with
+/// altSendsEscapeMode (1039), as on macOS and iOS (which has no AltGr).
+bool isApplePlatform(TerminalTargetPlatform platform) {
+  return platform == TerminalTargetPlatform.macos ||
+      platform == TerminalTargetPlatform.ios;
 }
 
 bool isControlCodepoint(int codepoint) {

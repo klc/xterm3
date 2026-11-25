@@ -271,6 +271,116 @@ void main() {
     );
   }
 
+  // Cutting the input into writes at other places must not change anything:
+  // cells with their attributes, cursors, modes and everything the terminal
+  // says back. Unlike the fuzz above, which only checks invariants, this
+  // compares against the same input written whole.
+  //
+  // The inputs keep C0 controls out of unfinished sequences on purpose: the
+  // parser runs a control inside a CSI as it reads it, and when the CSI is cut
+  // off by the end of a write it reads the CSI again with the next one, so
+  // such a control runs once per write it spans.
+  group('splitting the input does not change the outcome', () {
+    final colons = List.generate(32, (i) => i + 1).join(':');
+    final inputs = [
+      'plain \x1b[1;31mred\x1b[0m and \x1b[38;5;200mmore\x1b[m',
+      '\x1b[${'1;' * 40}3mmany\x1b[m\x1b[${';' * 35}4mempty\x1b[m',
+      '\x1b[4:3;38:2::10:20:30;58:5:9mcolon\x1b[38:2:${colons}mlong'
+          '\x1b[38:5m\x1b[4m\x1b[38;2;1mshort\x1b[m',
+      '\x1b[99999999999999999999;12345678901H\x1b[65536Gbig',
+      '\x1b[1;3\x18can\x1b[1;3\x1asub\x1b[1;3\x1b[4mesc\x1b[m'
+          '\x1b[2\x1b\x1b[0mtwo',
+      'a😀b👍🏽c🇹🇷d\x1b[1m😀\x1b[m👨‍👩‍👧é中文',
+      '\x1b]0;title 😀\x07\x1b]2;other\x1b\\\x1b]8;;http://x\x1b\\link'
+          '\x1b]8;;\x1b\\\x1b]52;c;aGVsbG8=\x07\x1b]10;?\x07',
+      '\x1bP\$qm\x1b\\\x1bP\$qr\x1b\\\x1b[6n\x1b[c\x1b[>c\x1b[?25\$p\x1b[5n',
+      '\x1b(0lqk\x1b(Bx\x1b7\x1b[5;5Hsaved\x1b8back\x1bD\x1bM\x1bE',
+      '\x1b[?1049halt\x1b[3;10r\x1b[?6h\x1b[2;2Horigin\x1b[?6l\x1b[r'
+          '\x1b[?1049l\x1b[4hins\x1b[4l\x1b[?7l${'w' * 120}\x1b[?7h',
+      '\x9b1;32m8bit\x9bm\x9d0;c1\x07\x1b[?2027l👨‍👩‍👧\x1b[?2027h',
+    ];
+
+    String run(List<String> chunks) {
+      final log = <String>[];
+      final terminal = Terminal(
+        maxLines: 100,
+        onBell: () => log.add('bell'),
+        onTitleChange: (t) => log.add('title $t'),
+        onIconChange: (t) => log.add('icon $t'),
+        onClipboardStore: (s, t) => log.add('clip $s $t'),
+        onColorQuery: (code, index) => 0x123456,
+        onOutput: (d) => log.add('output $d'),
+      )..resize(40, 12);
+      for (final chunk in chunks) {
+        terminal.write(chunk);
+      }
+      final out = StringBuffer();
+      for (final buffer in [terminal.mainBuffer, terminal.altBuffer]) {
+        out.writeln('cursor ${buffer.cursorX},${buffer.cursorY} margins '
+            '${buffer.marginTop},${buffer.marginBottom}');
+        for (var y = 0; y < buffer.height; y++) {
+          final line = buffer.lines[y];
+          out.write(line.isWrapped ? 'w' : '-');
+          for (var x = 0; x < line.length; x++) {
+            out.write(' ${line.getContent(x)}/${line.getForeground(x)}/'
+                '${line.getBackground(x)}/${line.getAttributes(x)}/'
+                '${line.getHyperlinkId(x)}/${line.getUnderlineColor(x)}/'
+                '${line.getCombiningCharacters(x)}');
+          }
+          out.writeln();
+        }
+      }
+      final c = terminal.cursor;
+      out.writeln('style ${c.foreground} ${c.background} ${c.attrs} '
+          '${c.underlineColor} alt ${terminal.isUsingAltBuffer} '
+          'insert ${terminal.insertMode} origin ${terminal.originMode} '
+          'wrap ${terminal.autoWrapMode}');
+      out.writeln(log.join('\n'));
+      return out.toString();
+    }
+
+    List<String> units(String s, int n) => [
+          for (var i = 0; i < s.length; i += n)
+            s.substring(i, min(i + n, s.length)),
+        ];
+
+    test('at every position of every input', () {
+      for (final input in inputs) {
+        final whole = run([input]);
+        for (var i = 1; i < input.length; i++) {
+          expect(
+            run([input.substring(0, i), input.substring(i)]),
+            whole,
+            reason: 'split at $i of ${input.codeUnits}',
+          );
+        }
+      }
+    });
+
+    test('one code unit per write', () {
+      for (final input in [...inputs, inputs.join()]) {
+        expect(run(units(input, 1)), run([input]),
+            reason: '${input.codeUnits}');
+      }
+    });
+
+    test('at seeded random places', () {
+      final all = inputs.join();
+      final whole = run([all]);
+      for (var seed = 0; seed < 50; seed++) {
+        final random = Random(seed);
+        final chunks = <String>[];
+        var i = 0;
+        while (i < all.length) {
+          final end = min(i + random.nextInt(12), all.length);
+          chunks.add(all.substring(i, end));
+          i = end;
+        }
+        expect(run(chunks), whole, reason: 'seed $seed');
+      }
+    });
+  });
+
   group('regressions found by this fuzzer', () {
     // These are RAW (unminimized) repros: they replay the exact same
     // deterministic token/resize stream that _runFuzzSeed produces for the

@@ -318,6 +318,136 @@ void main() {
       otherFocus.dispose();
     });
 
+    testWidgets('reports focus to terminals swapped in and out', (
+      tester,
+    ) async {
+      final outputA = <String>[];
+      final outputB = <String>[];
+      final terminalA = Terminal(onOutput: outputA.add);
+      final terminalB = Terminal(onOutput: outputB.add)
+        ..focusInput(false)
+        ..write('\x1b[?1004h');
+      final focusNode = FocusNode();
+      Widget view(Terminal terminal) =>
+          MaterialApp(home: TerminalView(terminal, focusNode: focusNode));
+
+      await tester.pumpWidget(view(terminalA));
+      focusNode.requestFocus();
+      await tester.pump();
+      terminalA.write('\x1b[?1004h');
+      expect(outputA, ['\x1b[I']);
+      outputA.clear();
+      outputB.clear();
+
+      await tester.pumpWidget(view(terminalB));
+      expect(focusNode.hasFocus, isTrue);
+      expect(outputA, ['\x1b[O']);
+      expect(outputB, ['\x1b[I']);
+
+      await tester.pumpWidget(view(terminalA));
+      expect(outputA, ['\x1b[O', '\x1b[I']);
+      expect(outputB, ['\x1b[I', '\x1b[O']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode.dispose();
+    });
+
+    testWidgets('reports focus out when a focused view is disposed', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode = FocusNode();
+
+      await tester.pumpWidget(
+        MaterialApp(home: TerminalView(terminal, focusNode: focusNode)),
+      );
+      focusNode.requestFocus();
+      await tester.pump();
+      terminal.write('\x1b[?1004h');
+      output.clear();
+
+      await tester.pumpWidget(const SizedBox());
+      expect(output, ['\x1b[O']);
+      await tester.pump();
+      expect(output, ['\x1b[O']);
+      focusNode.dispose();
+    });
+
+    testWidgets('reports focus out when a focused view is replaced', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode1 = FocusNode();
+      final focusNode2 = FocusNode();
+      Widget view(Key key, FocusNode focusNode) => MaterialApp(
+            home: TerminalView(terminal, key: key, focusNode: focusNode),
+          );
+
+      await tester.pumpWidget(view(const ValueKey(1), focusNode1));
+      focusNode1.requestFocus();
+      await tester.pump();
+      terminal.write('\x1b[?1004h');
+      output.clear();
+
+      await tester.pumpWidget(view(const ValueKey(2), focusNode2));
+      await tester.pump();
+      expect(output, ['\x1b[O']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode1.dispose();
+      focusNode2.dispose();
+    });
+
+    testWidgets('does not report focus in for an unfocused view', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode = FocusNode();
+
+      await tester.pumpWidget(
+        MaterialApp(home: TerminalView(terminal, focusNode: focusNode)),
+      );
+      terminal.write('\x1b[?1004h');
+      expect(output, ['\x1b[O']);
+
+      focusNode.requestFocus();
+      await tester.pump();
+      expect(output, ['\x1b[O', '\x1b[I']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode.dispose();
+    });
+
+    testWidgets('reports the state of a swapped focus node', (tester) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      final focusNode1 = FocusNode();
+      final focusNode2 = FocusNode();
+      Widget view(FocusNode focusNode) =>
+          MaterialApp(home: TerminalView(terminal, focusNode: focusNode));
+
+      await tester.pumpWidget(view(focusNode1));
+      focusNode1.requestFocus();
+      await tester.pump();
+      terminal.write('\x1b[?1004h');
+      output.clear();
+
+      await tester.pumpWidget(view(focusNode2));
+      await tester.pump();
+      expect(output, ['\x1b[O']);
+
+      focusNode2.requestFocus();
+      await tester.pump();
+      expect(output, ['\x1b[O', '\x1b[I']);
+
+      await tester.pumpWidget(const SizedBox());
+      focusNode1.dispose();
+      focusNode2.dispose();
+    });
+
     testWidgets('is not listened when terminal is disposed', (tester) async {
       final terminal = Terminal();
 
@@ -1275,6 +1405,170 @@ void main() {
 
       expect(output.join(), 'abc');
     });
+
+    testWidgets('leaves Cmd shortcuts to ancestors', (tester) async {
+      final output = <String>[];
+      var appShortcutFired = 0;
+      final terminal = Terminal(onOutput: output.add);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.keyT, meta: true): () =>
+                  appShortcutFired++,
+            },
+            child: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.metaLeft,
+        platform: 'macos',
+      );
+      for (final (key, character) in [
+        (LogicalKeyboardKey.keyT, 't'),
+        (LogicalKeyboardKey.keyK, 'k'),
+      ]) {
+        await tester.sendKeyDownEvent(
+          key,
+          character: character,
+          platform: 'macos',
+        );
+        await tester.sendKeyUpEvent(key, platform: 'macos');
+      }
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.metaLeft,
+        platform: 'macos',
+      );
+
+      expect(output, isEmpty);
+      expect(appShortcutFired, 1);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+    testWidgets('does not type the character of an unmapped Ctrl key', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'linux',
+      );
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.equal,
+        character: '=',
+        platform: 'linux',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.equal, platform: 'linux');
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'linux',
+      );
+
+      expect(output, isEmpty);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
+
+    testWidgets('encodes macOS Ctrl+P by its key under modifyOtherKeys', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)..write('\x1b[>4;2m');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'macos',
+      );
+      // AppKit applies Control to the characters: Ctrl+P arrives as `\x10`.
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.keyP,
+        character: '\x10',
+        platform: 'macos',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyP, platform: 'macos');
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.controlLeft,
+        platform: 'macos',
+      );
+
+      expect(output, ['\x1b[27;5;112~']);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+    testWidgets('types plain and shifted printable keys once', (tester) async {
+      final platform = defaultTargetPlatform.name.toLowerCase();
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(
+              terminal,
+              autofocus: true,
+              hardwareKeyboardOnly: true,
+            ),
+          ),
+        ),
+      );
+
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.keyA,
+        character: 'a',
+        platform: platform,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA, platform: platform);
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.shiftLeft,
+        platform: platform,
+      );
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.digit1,
+        character: '!',
+        platform: platform,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.digit1,
+          platform: platform);
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.shiftLeft,
+        platform: platform,
+      );
+
+      expect(output.join(), 'a!');
+    },
+        variant: TargetPlatformVariant({
+          TargetPlatform.macOS,
+          TargetPlatform.linux,
+        }));
   });
 
   group('TerminalView scrollback shortcuts', () {
@@ -1816,6 +2110,156 @@ void main() {
       await tester.pumpAndSettle();
 
       controller.dispose();
+      scrollController.dispose();
+    });
+
+    testWidgets(
+      'holding the pointer outside the viewport keeps scrolling the selection',
+      (tester) async {
+        final terminal = Terminal(maxLines: 1000)..resize(20, 5);
+        final controller = TerminalController();
+        final scrollController = ScrollController();
+
+        terminal.write(
+          List.generate(200, (index) => 'line $index\r\n').join(),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 400,
+                height: 120,
+                child: TerminalView(
+                  terminal,
+                  controller: controller,
+                  scrollController: scrollController,
+                  autoResize: false,
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final state =
+            tester.state<TerminalViewState>(find.byType(TerminalView));
+        final renderTerminal = state.renderTerminal;
+        final lineHeight = renderTerminal.lineHeight;
+        final startOffset = scrollController.offset;
+        final start = renderTerminal.localToGlobal(
+          Offset(
+            renderTerminal.cellSize.width * 4,
+            renderTerminal.size.height - lineHeight,
+          ),
+        );
+        final startRow =
+            renderTerminal.getCellOffset(renderTerminal.globalToLocal(start)).y;
+        // Two rows above the top edge, where the pointer is then held still.
+        final beyondTop = renderTerminal.localToGlobal(
+          Offset(renderTerminal.cellSize.width, -lineHeight * 2),
+        );
+
+        final gesture = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+        );
+        await gesture.down(start);
+        await gesture.moveTo(beyondTop);
+        final firstRow = controller.selection!.normalized.begin.y;
+        for (var i = 0; i < 50; i++) {
+          await tester.pump(const Duration(milliseconds: 40));
+        }
+
+        // Scrolling goes on past the two rows the pointer overshot by, and
+        // the rows it brings in extend the selection.
+        expect(
+          startOffset - scrollController.offset,
+          greaterThan(lineHeight * 6),
+        );
+        expect(
+            controller.selection!.normalized.begin.y, lessThan(firstRow - 6));
+        expect(controller.selection!.normalized.end.y, startRow);
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+        final offsetAfterDrag = scrollController.offset;
+        await tester.pump(const Duration(milliseconds: 500));
+
+        expect(scrollController.offset, offsetAfterDrag);
+        expect(
+          offsetAfterDrag,
+          greaterThan(scrollController.position.minScrollExtent),
+        );
+
+        // Held until the top of the scrollback, the scroller stops there by
+        // itself: pumpAndSettle only returns once nothing animates.
+        final topGesture = await tester.createGesture(
+          kind: PointerDeviceKind.mouse,
+        );
+        await topGesture.down(start);
+        await topGesture.moveTo(beyondTop);
+        await tester.pumpAndSettle();
+
+        expect(
+          scrollController.offset,
+          scrollController.position.minScrollExtent,
+        );
+        expect(controller.selection!.normalized.begin.y, 0);
+
+        await topGesture.up();
+        await tester.pumpAndSettle();
+
+        controller.dispose();
+        scrollController.dispose();
+      },
+    );
+
+    testWidgets('disposing the view while auto-scrolling does not throw', (
+      tester,
+    ) async {
+      final terminal = Terminal(maxLines: 1000)..resize(20, 5);
+      final scrollController = ScrollController();
+
+      terminal.write(
+        List.generate(200, (index) => 'line $index\r\n').join(),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 400,
+              height: 120,
+              child: TerminalView(
+                terminal,
+                scrollController: scrollController,
+                autoResize: false,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      final state = tester.state<TerminalViewState>(find.byType(TerminalView));
+      final renderTerminal = state.renderTerminal;
+      final gesture = await tester.createGesture(
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.down(
+        renderTerminal.localToGlobal(
+          Offset(renderTerminal.cellSize.width, renderTerminal.lineHeight),
+        ),
+      );
+      await gesture.moveTo(
+        renderTerminal.localToGlobal(
+          Offset(renderTerminal.cellSize.width, -renderTerminal.lineHeight),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 10));
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 100));
+      await gesture.up();
+
       scrollController.dispose();
     });
 
@@ -2365,6 +2809,77 @@ void main() {
       expect(terminalOutput, ['é']);
     });
 
+    // An iPad hardware keyboard's Option composes, as on macOS: iOS has no
+    // AltGr, so Option is the only way to type `@ [ ] { } | \ ~` on Turkish Q
+    // or German. The engine reports Turkish Q Option+Q as keyQ with Option
+    // held and the composed `@`.
+    for (final (mode, enable) in [
+      ('legacy', ''),
+      ('modifyOtherKeys 2', '\x1b[>4;2m'),
+      ('kitty', '\x1b[=5u'),
+    ]) {
+      testWidgets('types iPad Option-composed ASCII ($mode)', (tester) async {
+        final terminalOutput = <String>[];
+        final terminal = Terminal(
+          onOutput: terminalOutput.add,
+          platform: TerminalTargetPlatform.ios,
+        );
+        terminal.write(enable);
+
+        await tester.pumpWidget(MaterialApp(
+          home: TerminalView(terminal, autofocus: true),
+        ));
+        await tester.tap(find.byType(TerminalView));
+        await tester.pump(const Duration(seconds: 1));
+
+        await tester.sendKeyDownEvent(
+          LogicalKeyboardKey.altLeft,
+          platform: 'ios',
+        );
+        await tester.sendKeyDownEvent(
+          LogicalKeyboardKey.keyQ,
+          character: '@',
+          platform: 'ios',
+        );
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyQ, platform: 'ios');
+        await tester.sendKeyUpEvent(
+          LogicalKeyboardKey.altLeft,
+          platform: 'ios',
+        );
+
+        expect(terminalOutput, ['@']);
+      }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+    }
+
+    testWidgets('preserves iPad Option-composed text when Alt escape is off', (
+      tester,
+    ) async {
+      final terminalOutput = <String>[];
+      final terminal = Terminal(
+        onOutput: terminalOutput.add,
+        platform: TerminalTargetPlatform.ios,
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        home: TerminalView(terminal, autofocus: true),
+      ));
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump(const Duration(seconds: 1));
+
+      // US layout: Option+A is `å`.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft,
+          platform: 'ios');
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.keyA,
+        character: 'å',
+        platform: 'ios',
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.keyA, platform: 'ios');
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft, platform: 'ios');
+
+      expect(terminalOutput, ['å']);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
+
     testWidgets('preserves AltGr-composed text on desktop platforms', (
       tester,
     ) async {
@@ -2513,6 +3028,321 @@ void main() {
       expect(terminalOutput.join(), isEmpty);
     });
   });
+
+  group('TerminalView keyboard insets', () {
+    testWidgets('an animated close keeps a scrolled-up view in place', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+      final offset = await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, _keyboardInset, 0);
+
+      expect(focusNode.hasFocus, isTrue);
+      expect(scrollController.offset, offset);
+    });
+
+    testWidgets('a keyboard height change keeps a scrolled-up view in place', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+      final offset = await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(
+        tester,
+        _keyboardInset,
+        _keyboardInset + 44 * _keyboardTestDpr,
+      );
+
+      expect(scrollController.offset, offset);
+    });
+
+    testWidgets(
+        'a view mounted with the keyboard open keeps its place on close',
+        (tester) async {
+      tester.view.viewInsets = const FakeViewPadding(bottom: _keyboardInset);
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      final offset = await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, _keyboardInset, 0);
+
+      expect(focusNode.hasFocus, isTrue);
+      expect(scrollController.offset, offset);
+    });
+
+    testWidgets('an animated open at the bottom keeps the cursor row visible', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      expect(
+          scrollController.offset, scrollController.position.maxScrollExtent);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+
+      _expectCursorRowAtBottom(tester, scrollController);
+    });
+
+    testWidgets('an animated open while scrolled up jumps to the cursor row', (
+      tester,
+    ) async {
+      final (scrollController, focusNode) = await _pumpKeyboardView(tester);
+      await _scrollUpFromBottom(tester, scrollController);
+      expect(focusNode.hasFocus, isTrue);
+
+      await _animateKeyboardInset(tester, 0, _keyboardInset);
+
+      _expectCursorRowAtBottom(tester, scrollController);
+    });
+  });
+
+  group('TerminalView keyboard requests', () {
+    for (final focused in [false, true]) {
+      testWidgets(
+          'a touch long press with the keyboard closed selects the pressed row '
+          '(focused: $focused)', (tester) async {
+        final controller = TerminalController();
+        addTearDown(controller.dispose);
+        await _pumpKeyboardView(
+          tester,
+          autofocus: focused,
+          controller: controller,
+        );
+        // A focused view whose keyboard the user dismissed.
+        tester.testTextInput.hide();
+        final render = tester
+            .state<TerminalViewState>(find.byType(TerminalView))
+            .renderTerminal;
+        final press = Offset(render.cellSize.width * 2.5, 300);
+        final pressedRow = render.getCellOffset(press).y;
+
+        final gesture = await tester.startGesture(render.localToGlobal(press));
+        await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+        // The test binding never raises a keyboard, so do what the platform
+        // does once the view asks for one.
+        if (tester.testTextInput.isVisible) {
+          await _animateKeyboardInset(tester, 0, _keyboardInset);
+        }
+        await tester.pump(kLongPressTimeout);
+
+        expect(controller.selection!.normalized.begin.y, pressedRow);
+        expect(tester.testTextInput.isVisible, isFalse);
+
+        await gesture.up();
+        await tester.pump();
+        expect(tester.testTextInput.isVisible, isFalse);
+      },
+          variant: const TargetPlatformVariant({
+            TargetPlatform.android,
+            TargetPlatform.iOS,
+          }));
+    }
+
+    for (final hardwareKeyboardOnly in [false, true]) {
+      testWidgets(
+          'a touch tap focuses on tap up '
+          '(hardwareKeyboardOnly: $hardwareKeyboardOnly)', (tester) async {
+        final (_, focusNode) = await _pumpKeyboardView(
+          tester,
+          autofocus: false,
+          hardwareKeyboardOnly: hardwareKeyboardOnly,
+        );
+
+        final gesture = await tester.startGesture(
+          tester.getCenter(find.byType(TerminalView)),
+        );
+        await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+        expect(focusNode.hasFocus, isFalse);
+
+        await gesture.up();
+        await tester.pump();
+        expect(focusNode.hasFocus, isTrue);
+        expect(tester.testTextInput.isVisible, !hardwareKeyboardOnly);
+      });
+
+      testWidgets(
+          'a mouse click focuses on press '
+          '(hardwareKeyboardOnly: $hardwareKeyboardOnly)', (tester) async {
+        final (_, focusNode) = await _pumpKeyboardView(
+          tester,
+          autofocus: false,
+          hardwareKeyboardOnly: hardwareKeyboardOnly,
+        );
+
+        final gesture = await tester.startGesture(
+          tester.getCenter(find.byType(TerminalView)),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+        expect(focusNode.hasFocus, isTrue);
+
+        await gesture.up();
+        await tester.pump();
+        expect(focusNode.hasFocus, isTrue);
+      });
+    }
+
+    testWidgets(
+        'a touch double tap does not request the keyboard on the first down',
+        (tester) async {
+      final controller = TerminalController();
+      addTearDown(controller.dispose);
+      await _pumpKeyboardView(tester, autofocus: false, controller: controller);
+      final render = tester
+          .state<TerminalViewState>(find.byType(TerminalView))
+          .renderTerminal;
+      final press = Offset(render.cellSize.width * 2.5, 300);
+      final pressedRow = render.getCellOffset(press).y;
+      final position = render.localToGlobal(press);
+
+      final first = await tester.startGesture(position);
+      await tester.pump(kPressTimeout + const Duration(milliseconds: 20));
+      expect(tester.testTextInput.isVisible, isFalse);
+      await first.up();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tapAt(position);
+      await tester.pump();
+
+      expect(controller.selection!.normalized.begin.y, pressedRow);
+    });
+
+    testWidgets('a touch tap that clears a selection keeps the keyboard closed',
+        (tester) async {
+      final controller = TerminalController();
+      addTearDown(controller.dispose);
+      await _pumpKeyboardView(tester, autofocus: false, controller: controller);
+      final render = tester
+          .state<TerminalViewState>(find.byType(TerminalView))
+          .renderTerminal;
+      render.selectWord(Offset(render.cellSize.width * 2.5, 300));
+      expect(controller.selection, isNotNull);
+
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+
+      expect(controller.selection, isNull);
+      expect(tester.testTextInput.isVisible, isFalse);
+    });
+
+    testWidgets('a touch tap in a mouse-reporting app opens the keyboard', (
+      tester,
+    ) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add)
+        ..write('\x1b[?1000h\x1b[?1006h');
+      final focusNode = FocusNode();
+      addTearDown(focusNode.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TerminalView(terminal, focusNode: focusNode),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byType(TerminalView));
+      await tester.pump();
+
+      expect(output.where((value) => value.endsWith('M')), hasLength(1));
+      expect(output.where((value) => value.endsWith('m')), hasLength(1));
+      expect(focusNode.hasFocus, isTrue);
+      expect(tester.testTextInput.isVisible, isTrue);
+    });
+  });
+}
+
+const _keyboardTestDpr = 3.0;
+const _keyboardInset = 336 * _keyboardTestDpr;
+
+/// A focused full-screen view at the bottom of 200 lines of scrollback, sized
+/// like a phone so [_keyboardInset] resizes it through the [Scaffold].
+Future<(ScrollController, FocusNode)> _pumpKeyboardView(
+  WidgetTester tester, {
+  bool autofocus = true,
+  TerminalController? controller,
+  bool hardwareKeyboardOnly = false,
+}) async {
+  tester.view.physicalSize = const Size(1170, 2532);
+  tester.view.devicePixelRatio = _keyboardTestDpr;
+  addTearDown(tester.view.reset);
+  final terminal = Terminal(maxLines: 1000)
+    ..write(List.generate(200, (index) => 'line $index\r\n').join())
+    ..write(r'$ ');
+  final scrollController = ScrollController();
+  addTearDown(scrollController.dispose);
+  final focusNode = FocusNode();
+  addTearDown(focusNode.dispose);
+
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: TerminalView(
+          terminal,
+          controller: controller,
+          scrollController: scrollController,
+          focusNode: focusNode,
+          autofocus: autofocus,
+          hardwareKeyboardOnly: hardwareKeyboardOnly,
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+  return (scrollController, focusNode);
+}
+
+/// Moves the bottom view inset from [from] to [to] over several frames, the
+/// way the platform reports a keyboard animation.
+Future<void> _animateKeyboardInset(
+  WidgetTester tester,
+  double from,
+  double to,
+) async {
+  const frames = 10;
+  for (var frame = 1; frame <= frames; frame++) {
+    tester.view.viewInsets = FakeViewPadding(
+      bottom: from + (to - from) * frame / frames,
+    );
+    await tester.pump(const Duration(milliseconds: 16));
+  }
+  await tester.pumpAndSettle();
+}
+
+/// Scrolls up by more than the keyboard height, so a closing keyboard does not
+/// clamp the offset, and returns the new offset.
+Future<double> _scrollUpFromBottom(
+  WidgetTester tester,
+  ScrollController scrollController,
+) async {
+  await tester.drag(find.byType(TerminalView), const Offset(0, 600));
+  await tester.pumpAndSettle();
+  expect(
+    scrollController.offset,
+    lessThan(
+      scrollController.position.maxScrollExtent -
+          _keyboardInset / _keyboardTestDpr,
+    ),
+  );
+  return scrollController.offset;
+}
+
+void _expectCursorRowAtBottom(
+  WidgetTester tester,
+  ScrollController scrollController,
+) {
+  expect(scrollController.offset, scrollController.position.maxScrollExtent);
+  final render =
+      tester.state<TerminalViewState>(find.byType(TerminalView)).renderTerminal;
+  expect(render.cursorOffset.dy, greaterThanOrEqualTo(0));
+  expect(
+    render.cursorOffset.dy + render.lineHeight,
+    lessThanOrEqualTo(render.size.height),
+  );
 }
 
 Future<void> _sendPromptNavigationShortcut(

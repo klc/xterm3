@@ -257,6 +257,9 @@ class TerminalView extends StatefulWidget {
 class TerminalViewState extends State<TerminalView> {
   late FocusNode _focusNode;
 
+  /// The focus state this view last gave [TerminalView.terminal].
+  late bool _reportedFocus;
+
   late final ShortcutManager _shortcutManager;
 
   final _customTextEditKey = GlobalKey<CustomTextEditState>();
@@ -278,6 +281,9 @@ class TerminalViewState extends State<TerminalView> {
   TerminalUnderline? _hoveredUrlUnderline;
 
   var _hyperlinkModifierPressed = false;
+
+  /// Whether the touch press under way focuses the view once it ends as a tap.
+  var _focusOnTapUp = false;
 
   late TerminalController _controller;
 
@@ -307,6 +313,9 @@ class TerminalViewState extends State<TerminalView> {
   void initState() {
     _focusNode = widget.focusNode ?? FocusNode();
     _focusNode.addListener(_reportFocusChange);
+    // Record without reporting: autofocus lands a frame later.
+    _reportedFocus = _focusNode.hasFocus;
+    widget.terminal.focused = _reportedFocus;
     _controller = widget.controller ?? TerminalController();
     _scrollController = widget.scrollController ?? ScrollController();
     _shortcutManager = ShortcutManager(
@@ -328,6 +337,8 @@ class TerminalViewState extends State<TerminalView> {
       _installColorQuery(widget.terminal);
       _installColorSchemeQuery(widget.terminal);
       _installClipboardHandlers(widget.terminal);
+      if (_reportedFocus) oldWidget.terminal.focusInput(false);
+      _reportedFocus = widget.terminal.focused;
     }
     if (oldWidget.focusNode != widget.focusNode) {
       _focusNode.removeListener(_reportFocusChange);
@@ -337,6 +348,7 @@ class TerminalViewState extends State<TerminalView> {
       _focusNode = widget.focusNode ?? FocusNode();
       _focusNode.addListener(_reportFocusChange);
     }
+    _reportFocusChange();
     if (oldWidget.controller != widget.controller) {
       if (oldWidget.controller == null) {
         _controller.dispose();
@@ -364,6 +376,8 @@ class TerminalViewState extends State<TerminalView> {
     _hoveredUrlUnderline?.dispose();
     HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
     _focusNode.removeListener(_reportFocusChange);
+    // The node is already detached here, so its unfocus never reaches us.
+    if (_reportedFocus) widget.terminal.focusInput(false);
     if (widget.focusNode == null) {
       _focusNode.dispose();
     }
@@ -448,7 +462,9 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _reportFocusChange() {
-    widget.terminal.focusInput(_focusNode.hasFocus);
+    if (_focusNode.hasFocus == _reportedFocus) return;
+    _reportedFocus = _focusNode.hasFocus;
+    widget.terminal.focusInput(_reportedFocus);
   }
 
   @override
@@ -531,8 +547,6 @@ class TerminalViewState extends State<TerminalView> {
         child: child,
         focusNode: _focusNode,
         autofocus: widget.autofocus,
-        onInsert: _onInsert,
-        onComposing: _onComposing,
         onKeyEvent: _handleKeyEvent,
       );
     }
@@ -623,6 +637,10 @@ class TerminalViewState extends State<TerminalView> {
   }
 
   void _onTapUp(TapUpDetails details) {
+    if (_focusOnTapUp) {
+      _focusOnTapUp = false;
+      _focusForInput();
+    }
     _updateHyperlinkModifierState();
     final offset = renderTerminal.getCellOffset(details.localPosition);
     // Touch has no modifier key to hold, so a tap opens a link directly.
@@ -742,15 +760,25 @@ class TerminalViewState extends State<TerminalView> {
     return false;
   }
 
-  void _onTapDown(TapDownDetails _) {
+  void _onTapDown(TapDownDetails details) {
+    _focusOnTapUp = false;
     if (_controller.selection != null) {
       _controller.clearSelection();
+    } else if (details.kind == PointerDeviceKind.mouse) {
+      _focusForInput();
     } else {
-      if (!widget.hardwareKeyboardOnly) {
-        _customTextEditKey.currentState?.requestKeyboard();
-      } else {
-        _focusNode.requestFocus();
-      }
+      // A touch press may still become a long press or a scroll. Bringing up
+      // the keyboard now would resize and scroll the view under the finger
+      // before they resolve, so it waits for the tap to complete.
+      _focusOnTapUp = true;
+    }
+  }
+
+  void _focusForInput() {
+    if (!widget.hardwareKeyboardOnly) {
+      _customTextEditKey.currentState?.requestKeyboard();
+    } else {
+      _focusNode.requestFocus();
     }
   }
 
@@ -774,7 +802,14 @@ class TerminalViewState extends State<TerminalView> {
     }
     final mappedKey = charToTerminalKey(text);
     if (mappedKey == null && singleCodePoint(text) == null) {
-      widget.terminal.textInput(text);
+      // The keyboard's own paste (iOS paste:, Android's context-menu paste,
+      // a clipboard commitText) arrives here too, so text that is not safe to
+      // type gets the bracketing and sanitizing of a paste.
+      if (Terminal.isPasteSafe(text)) {
+        widget.terminal.textInput(text);
+      } else {
+        widget.terminal.paste(text);
+      }
       _scrollToBottom();
       return;
     }
@@ -908,7 +943,9 @@ class TerminalViewState extends State<TerminalView> {
     if (!altGraphActive && HardwareKeyboard.instance.isAltPressed) {
       final terminal = widget.terminal;
       final altPrefixesEscape = switch (terminal.platform) {
-        TerminalTargetPlatform.macos => terminal.altSendsEscapeMode,
+        TerminalTargetPlatform.macos ||
+        TerminalTargetPlatform.ios =>
+          terminal.altSendsEscapeMode,
         _ => terminal.altEscPrefixMode,
       };
       if (altPrefixesEscape) return false;

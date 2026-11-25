@@ -1,0 +1,14 @@
+# Throwaway bench package: the end-to-end path without Flutter. A real PTY from
+# flutter_pty2 3.x (which runs in Dart command-line apps), the same driver as
+# run.sh, Utf8Decoder and a headless xterm3 Terminal. See bin/cli_e2e.dart.
+# The flutter_pty2 path below is one machine's checkout of the 3.x branch; point
+# it at yours (or at a pub.dev 3.x release) before `dart pub get`.
+name: cli_e2e
+publish_to: none
+environment:
+  sdk: ^3.10.0
+dependencies:
+  xterm3:
+    path: ../../..
+  flutter_pty2:
+    path: /Users/mkilic/www/klc/flutter_pty2

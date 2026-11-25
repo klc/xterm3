@@ -339,6 +339,27 @@ void main() {
       }
     });
 
+    test('inserting into a full list more times than it holds', () {
+      // Each insert into a full list drops the first item, which moves the
+      // start of the backing array on by one; reads must keep up with it
+      // however far it has gone round.
+      final cl = IndexAwareCircularBuffer<IndexedValue<int>>(4);
+      final model = List.generate(4, (index) => index);
+      cl.pushAll(model.map(IndexedValue.new));
+
+      for (var value = 10; value < 19; value++) {
+        cl.insert(2, value.indexed);
+        model
+          ..insert(2, value)
+          ..removeAt(0);
+
+        expect(cl.toList().map((item) => item.value), model);
+        for (var index = 0; index < cl.length; index++) {
+          expect(cl[index].index, index);
+        }
+      }
+    });
+
     test("trim start works", () {
       final cl = IndexAwareCircularBuffer<IndexedValue<int>>(10);
       cl.pushAll(

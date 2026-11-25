@@ -7,10 +7,6 @@ class CustomKeyboardListener extends StatelessWidget {
 
   final bool autofocus;
 
-  final void Function(String) onInsert;
-
-  final void Function(String?) onComposing;
-
   final KeyEventResult Function(FocusNode, KeyEvent) onKeyEvent;
 
   const CustomKeyboardListener({
@@ -18,31 +14,17 @@ class CustomKeyboardListener extends StatelessWidget {
     required this.child,
     required this.focusNode,
     this.autofocus = false,
-    required this.onInsert,
-    required this.onComposing,
     required this.onKeyEvent,
   });
 
-  KeyEventResult _onKeyEvent(FocusNode focusNode, KeyEvent keyEvent) {
-    // First try to handle the key event directly.
-    final handled = onKeyEvent(focusNode, keyEvent);
-    if (handled == KeyEventResult.ignored) {
-      // If it was not handled, but the key corresponds to a character,
-      // insert the character.
-      if (keyEvent.character != null && keyEvent.character != "") {
-        onInsert(keyEvent.character!);
-        return KeyEventResult.handled;
-      }
-    }
-    return handled;
-  }
-
   @override
   Widget build(BuildContext context) {
+    // onKeyEvent inserts printable text itself; a key it ignores (a Cmd or
+    // Ctrl shortcut) must stay ignored so it reaches ancestor shortcuts.
     return Focus(
       focusNode: focusNode,
       autofocus: autofocus,
-      onKeyEvent: _onKeyEvent,
+      onKeyEvent: onKeyEvent,
       child: child,
     );
   }

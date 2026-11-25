@@ -1,4 +1,5 @@
 import 'dart:math' show max, min;
+import 'dart:typed_data';
 
 import 'package:characters/characters.dart';
 import 'package:xterm3/src/core/buffer/cell_offset.dart';
@@ -36,7 +37,8 @@ class Buffer {
     required this.isAltBuffer,
     this.wordSeparators,
     this.onLineEvicted,
-  }) {
+    Charset? charset,
+  }) : charset = charset ?? Charset() {
     for (int i = 0; i < terminal.viewHeight; i++) {
       lines.push(_newEmptyLine());
     }
@@ -49,13 +51,15 @@ class Buffer {
 
   int _cursorY = 0;
 
-  late int _marginTop;
+  // The constructor sets the margins. Not late: a late field checks that it
+  // was set on every read, and the margins are read for every line.
+  int _marginTop = 0;
 
-  late int _marginBottom;
+  int _marginBottom = 0;
 
-  late int _marginLeft;
+  int _marginLeft = 0;
 
-  late int _marginRight;
+  int _marginRight = 0;
 
   var _savedCursorX = 0;
 
@@ -67,7 +71,11 @@ class Buffer {
 
   final _savedCursorStyle = CursorStyle();
 
-  final charset = Charset();
+  /// The live G0-G3 designations and GL. A terminal hands both of its
+  /// buffers the same one, as in xterm: only the DECSC copy is per screen.
+  final Charset charset;
+
+  final _savedCharset = Charset();
 
   /// Width of the viewport in columns. Also the index of the last column.
   int get viewWidth => terminal.viewWidth;
@@ -79,8 +87,56 @@ class Buffer {
   /// greater than [viewHeight].
   late final lines = IndexAwareCircularBuffer<BufferLine>(
     max(maxLines, terminal.viewHeight),
-    onEvict: onLineEvicted,
+    onEvict: _onLineEvicted,
   );
+
+  /// Cell storage taken from the last line that fell off a large scrollback,
+  /// cleared, for the next new line to use instead of allocating.
+  ///
+  /// A field rather than a list of spares, deliberately: what comes out of a
+  /// field assigned only from [BufferLine]'s own storage is known to the
+  /// compiler to be the same concrete typed-data class. Taken out of a
+  /// `List<Uint32List>`, a store could be any [Uint32List] - a view, say -
+  /// and every cell read and write in the package paid a type check for it:
+  /// 7-9% on output that never recycled a line.
+  Uint32List? _spareStorage;
+
+  /// Scrollbacks at least this many cells large (lines times columns) recycle
+  /// the storage of the lines they evict.
+  ///
+  /// A line that falls off a large scrollback has lived long enough for its
+  /// storage to have left the young generation, and so does each new line's,
+  /// at a cost the example app pays at about twice the command-line rate:
+  /// reusing the evicted storage, cleared, saves that. A line that falls off
+  /// a small scrollback - or the alternate screen, or a terminal with none -
+  /// dies young, where allocating is close to free and clearing is the
+  /// dearer of the two. Measured in the example app at 100 columns, recycling
+  /// lost 12-20% up to 3000 lines, broke even at 5000 and won 10-19% from
+  /// 7000; the threshold is that point, as cells, on the assumption that the
+  /// crossover follows the bytes the scrollback keeps. Those numbers were
+  /// taken while a store was still cleared word by word; clearing has since
+  /// become a block copy, so the crossover is likely lower and not measured.
+  ///
+  /// The cost is memory. A recycled store goes to the next line whatever its
+  /// size, and a line grows a store that is too small for it to the full
+  /// width, so once the scrollback has filled, every line's storage tends to
+  /// the full width - the size every line had before lines were sized to
+  /// their text. 10000 lines at 100 columns hold 19.5 MiB of cells either way,
+  /// against 10.8-14.3 MiB for the same output without recycling. Handing a
+  /// store only to a line that would have allocated one of exactly its size
+  /// kept memory where it was and gave up most of the speed: ascii 6% faster
+  /// instead of 19%, and nothing on output written in several runs a line,
+  /// whose first store is too small and is grown.
+  static const recycleThresholdCells = 700000;
+
+  void _onLineEvicted(BufferLine line) {
+    // The terminal reads the evicted line's hyperlinks first.
+    onLineEvicted?.call(line);
+    if (_spareStorage == null &&
+        lines.maxLength * viewWidth >= recycleThresholdCells) {
+      _spareStorage = line.takeStorage();
+    }
+  }
 
   /// Total number of lines in the buffer. Always equal or greater than
   /// [viewHeight].
@@ -142,24 +198,144 @@ class Buffer {
       return;
     }
 
+    // Most runs are a few cells and fit in one pass, so what each pass reads
+    // is paid per run: the style once, the right limit once unless a wrap
+    // moved the cursor under a different one.
+    final style = terminal.cursor;
     while (start < end) {
-      final rightLimit = _rightLimit;
+      var rightLimit = _rightLimit;
       if (_cursorX >= rightLimit) {
         _wrapInput();
+        rightLimit = _rightLimit;
       }
 
-      final count = min(end - start, _rightLimit - _cursorX);
-      currentLine.setAsciiCells(
-        _cursorX,
-        text,
-        start,
-        count,
-        terminal.cursor,
-      );
+      final count = min(end - start, rightLimit - _cursorX);
+      currentLine.setAsciiCells(_cursorX, text, start, count, style);
       _cursorX += count;
       start += count;
     }
   }
+
+  /// [writeAscii] for a run that also holds [isWideRunUnit] code units and
+  /// [isWideRunEmoji] surrogate pairs, each written as a width-2 lead and a
+  /// width-0 placeholder.
+  ///
+  /// Each stretch of the run that fits on the line is written in one call.
+  /// What has to decide something goes through [writeChar] one unit at a
+  /// time, exactly as before: a wide first unit that continues the cluster in
+  /// the cell before the run (see [isWideRunUnit]), and a wide unit that
+  /// meets the right margin - with one column left, where it pads and wraps
+  /// or is dropped, or with none, where it wraps. None of them comes up more
+  /// than once a line.
+  void writeMixedWidth(String text, int start, int end) {
+    if (terminal.insertMode || !terminal.autoWrapMode || !charset.isAscii) {
+      while (start < end) {
+        start = _writeCharAt(text, start);
+      }
+      return;
+    }
+
+    // Of what [writeChar] does with a wide first unit, only the join check
+    // can come out differently from writing the unit in the run - the loop
+    // below hands it the margin cases - so that is all that is asked here.
+    // The rest, a width lookup, the margin checks and two cell writes of its
+    // own, was paid on every line of CJK text.
+    final first = text.codeUnitAt(start);
+    if (!isSingleCellPrintable(first) &&
+        terminal.graphemeClusterMode &&
+        _joinsPreviousGrapheme(
+            _isHighSurrogate(first)
+                ? 0x10000 +
+                    ((first - 0xd800) << 10) +
+                    (text.codeUnitAt(start + 1) - 0xdc00)
+                : first,
+            2)) {
+      start = _writeCharAt(text, start);
+    }
+
+    final style = terminal.cursor;
+    final classes = runClasses;
+    while (start < end) {
+      var rightLimit = _rightLimit;
+      if (_cursorX >= rightLimit) {
+        // [writeChar] asks whether a wide character joins the cell before
+        // the cursor before it wraps, and that cell can still be one the run
+        // has not written: the first unit may have written nothing (a join
+        // that could not widen the cluster at width 1, or a drop). A narrow
+        // unit joins nothing, so wrapping first is what [writeChar] does too.
+        if (!isSingleCellPrintable(text.codeUnitAt(start))) {
+          start = _writeCharAt(text, start);
+          continue;
+        }
+        _wrapInput();
+        rightLimit = _rightLimit;
+      }
+
+      // Everything in the run that is not single-cell is two cells wide: an
+      // [isWideRunUnit] code unit or an [isWideRunEmoji] surrogate pair.
+      var x = _cursorX;
+      var index = start;
+      var wide = false;
+      while (index < end) {
+        final codeUnit = text.codeUnitAt(index);
+        if (classes[codeUnit] == runClassSingleCell) {
+          if (x >= rightLimit) break;
+          x++;
+          index++;
+        } else {
+          if (x + 2 > rightLimit) break;
+          wide = true;
+          x += 2;
+          // Written out: as a call it stayed one, once per wide unit.
+          index += codeUnit >= 0xd800 && codeUnit <= 0xdbff ? 2 : 1;
+        }
+      }
+
+      if (index == start) {
+        start = _writeCharAt(text, start);
+        continue;
+      }
+
+      if (wide) {
+        currentLine.setMixedWidthCells(
+          _cursorX,
+          text,
+          start,
+          index - start,
+          x - _cursorX,
+          style,
+        );
+      } else {
+        currentLine.setAsciiCells(
+          _cursorX,
+          text,
+          start,
+          index - start,
+          style,
+        );
+      }
+      _cursorX = x;
+      start = index;
+    }
+  }
+
+  /// [writeChar] for the code point at [index] of [text], a surrogate pair
+  /// included; returns the index after it.
+  int _writeCharAt(String text, int index) {
+    final codeUnit = text.codeUnitAt(index);
+    if (_isHighSurrogate(codeUnit) && index + 1 < text.length) {
+      final low = text.codeUnitAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        writeChar(0x10000 + ((codeUnit - 0xd800) << 10) + (low - 0xdc00));
+        return index + 2;
+      }
+    }
+    writeChar(codeUnit);
+    return index + 1;
+  }
+
+  static bool _isHighSurrogate(int codeUnit) =>
+      codeUnit >= 0xd800 && codeUnit <= 0xdbff;
 
   /// Writes a single character to the _terminal. Escape sequences or special
   /// characters are not interpreted and directly added to the buffer.
@@ -178,8 +354,11 @@ class Buffer {
       return cellWidth;
     }
     if (cellWidth == 0) {
-      if (!terminal.graphemeClusterMode || _joinsPreviousGrapheme(codePoint)) {
+      if (!terminal.graphemeClusterMode) {
         _addCombiningCharacter(codePoint);
+      } else if (_joinsPreviousGrapheme(codePoint, cellWidth)) {
+        _joinLine.addCombiningCharacterTo(
+            _joinIndex, _joinCombining, codePoint);
       }
       return cellWidth;
     }
@@ -194,12 +373,19 @@ class Buffer {
     if (mayJoinPreviousGrapheme && _joinRegionalIndicator(codePoint)) {
       return cellWidth;
     }
-    if (mayJoinPreviousGrapheme && _joinsPreviousGrapheme(codePoint)) {
+    if (mayJoinPreviousGrapheme &&
+        _joinsPreviousGrapheme(codePoint, cellWidth)) {
+      final line = _joinLine;
       final previousWidth = _joinedPreviousGraphemeWidth(codePoint, cellWidth);
-      if (previousWidth == 2 && !_setPreviousGraphemeWidth(2)) {
+      // Only widening the cell moves it, or the cursor; a cell that is wide
+      // already - an emoji the next code point of its sequence joins - takes
+      // the code point where [_joinsPreviousGrapheme] found it.
+      if (previousWidth == 2 && line.getWidth(_joinIndex) != 2) {
+        if (!_setPreviousGraphemeWidth(2)) return cellWidth;
+        _addCombiningCharacter(codePoint);
         return cellWidth;
       }
-      _addCombiningCharacter(codePoint);
+      line.addCombiningCharacterTo(_joinIndex, _joinCombining, codePoint);
       return cellWidth;
     }
 
@@ -252,12 +438,13 @@ class Buffer {
   void _addCombiningCharacter(int codePoint) {
     if (_cursorX == 0) return;
 
+    final line = currentLine;
     var index = min(_cursorX - 1, viewWidth - 1);
-    if (index > 0 && currentLine.getWidth(index) == 0) {
+    if (index > 0 && line.getWidth(index) == 0) {
       index--;
     }
-    if (currentLine.getCodePoint(index) == 0) return;
-    currentLine.addCombiningCharacter(index, codePoint);
+    if (line.getCodePoint(index) == 0) return;
+    line.addCombiningCharacter(index, codePoint);
   }
 
   bool _resizePreviousGrapheme(int variationSelector) {
@@ -281,9 +468,11 @@ class Buffer {
 
   bool _setPreviousGraphemeWidth(int desiredWidth) {
     final index = _previousCellIndex();
-    if (index == null || currentLine.getCodePoint(index) == 0) return false;
+    // The line the cell is on, until a wrap below moves to the next one.
+    final line = currentLine;
+    if (index == null || line.getCodePoint(index) == 0) return false;
 
-    final width = currentLine.getWidth(index);
+    final width = line.getWidth(index);
     if (desiredWidth == width) return true;
     if (desiredWidth > viewWidth) return false;
 
@@ -292,7 +481,7 @@ class Buffer {
       if (index + 1 >= rightLimit) {
         if (!terminal.autoWrapMode) return false;
 
-        final sourceLine = currentLine;
+        final sourceLine = line;
         final cellData = CellData.empty();
         sourceLine.getCellData(index, cellData);
         final combining = sourceLine.getCombiningCharacters(index);
@@ -311,16 +500,16 @@ class Buffer {
         _cursorX = destinationIndex + 2;
         return true;
       }
-      currentLine.clearWideCellAt(index + 1, terminal.cursor);
-      currentLine.setWidth(index, 2);
-      currentLine.setCell(index + 1, 0, 0, terminal.cursor);
+      line.clearWideCellAt(index + 1, terminal.cursor);
+      line.setWidth(index, 2);
+      line.setCell(index + 1, 0, 0, terminal.cursor);
       if (_cursorX == index + 1) _cursorX++;
       return true;
     }
 
     if (desiredWidth == 1 && width == 2) {
-      currentLine.setWidth(index, 1);
-      currentLine.eraseCell(index + 1, terminal.cursor);
+      line.setWidth(index, 1);
+      line.eraseCell(index + 1, terminal.cursor);
       if (_cursorX == index + 2) _cursorX--;
       return true;
     }
@@ -335,13 +524,63 @@ class Buffer {
     return index;
   }
 
-  bool _joinsPreviousGrapheme(int codePoint) {
-    final index = _previousCellIndex();
-    if (index == null) return false;
+  /// The cell whose cluster the code point joins, once
+  /// [_joinsPreviousGrapheme] has said it does: the cell
+  /// [_addCombiningCharacter] would look up again.
+  var _joinIndex = 0;
 
-    final base = currentLine.getCodePoint(index);
+  /// The line holding [_joinIndex] and that cell's combining string, for the
+  /// same caller: what joining the code point would read again otherwise.
+  late BufferLine _joinLine;
+  String? _joinCombining;
+
+  /// [cellWidth] is `wcwidth(codePoint)`, which [writeChar] has already
+  /// looked up - for an astral code point that is a binary search.
+  bool _joinsPreviousGrapheme(int codePoint, int cellWidth) {
+    // [_previousCellIndex] with one lookup of the line for it and the reads
+    // below: [currentLine] goes through the circular buffer each time.
+    if (_cursorX == 0) return false;
+    final line = currentLine;
+    var index = min(_cursorX - 1, viewWidth - 1);
+    if (index > 0 && line.getWidth(index) == 0) index--;
+    _joinIndex = index;
+    final base = line.getCodePoint(index);
     if (base == 0) return false;
-    final combining = currentLine.getCombiningCharacters(index);
+    final combining = line.getCombiningCharacters(index);
+    _joinLine = line;
+    _joinCombining = combining;
+
+    final last = combining == null ? base : _lastRune(combining);
+
+    // A wide code point never extends a cluster - the emoji modifiers are the
+    // only wide Extend characters, and the check below owns them - and is
+    // never a Hangul V or T, a regional indicator or an Indic consonant. That
+    // leaves three rules that can join it to the cluster before, each decided
+    // by the last code point stored: GB9b when that is Prepend, GB6 when it is
+    // a leading jamo, GB11 when it is ZWJ. Every other case breaks, so CJK,
+    // kana, emoji and Hangul syllables skip segmentation here, after a plain
+    // base and after a cluster such as an emoji with VS16 or a modifier alike.
+    // Neither check below can return true for such a code point: the Indic
+    // one needs an Indic code point.
+    if (cellWidth == 2 &&
+        !_isEmojiModifier(codePoint) &&
+        last != 0x200d &&
+        !isGraphemePrepend(last) &&
+        !isHangulLeadingJamo(last)) {
+      return false;
+    }
+
+    // GB9, GB9a: a mark - Extend, ZWJ or SpacingMark - joins whatever comes
+    // before it unless that is a control (GB4), so neither the cluster nor
+    // the base matters, only the last code point stored - and a cell can end
+    // in a control: U+2028 is width 1, and with mode 2027 off any zero-width
+    // code point is stored. The two checks below agree: the Indic one only
+    // ever returns true, and no emoji modifier is among these marks.
+    if ((cellWidth == 0 && zeroWidthExtends(codePoint) ||
+            cellWidth == 1 && isIndicVowelSign(codePoint)) &&
+        !isGraphemeControl(last)) {
+      return true;
+    }
 
     if (_isWideIndicConjunct(base, combining, codePoint)) return true;
 
@@ -354,6 +593,9 @@ class Buffer {
         }
       }
       if (_isEmojiModifierBase(modifierBase) == false) return false;
+      // Past that check a modifier is a mark like the ones above: it has
+      // Grapheme_Cluster_Break Extend and joins anything but a control (GB9).
+      if (!isGraphemeControl(last)) return true;
     }
 
     // Almost all terminal output is ASCII, where a new printable code point
@@ -366,14 +608,44 @@ class Buffer {
     // Cyrillic one - drops the characters after it into grapheme
     // segmentation, at three string allocations each.
     if (combining == null && isSingleCellPrintable(codePoint)) return false;
-    if (combining == null &&
-        unicodeV11.wcwidth(base) == 2 &&
-        unicodeV11.wcwidth(codePoint) == 2 &&
-        _isEmojiModifier(codePoint) == false &&
-        _isHangul(base) == false &&
-        _isHangul(codePoint) == false) {
+    // A letter of [isNarrowLetter] extends nothing and is no Hangul jamo,
+    // regional indicator or Extended_Pictographic code point, so of the rules
+    // that join a character to the cluster before it only two are left: GB9b,
+    // when the cluster ends in a Prepend code point, and GB9c, when the letter
+    // is an Indic consonant and the cluster holds a conjunct linker. Without
+    // either, it starts a new grapheme. This comes after the Indic conjunct
+    // check above, which can join a pair that GB9c does not.
+    if (cellWidth == 1 &&
+        isNarrowLetter(codePoint) &&
+        !isGraphemePrepend(last) &&
+        !_hasConjunctLinker(combining)) {
       return false;
     }
+
+    // Regional indicators and Extended_Pictographic code points (emoji and
+    // the symbols with an emoji form) extend nothing, so the rules that can
+    // join one to the cluster before are few, and each is decided by the
+    // cluster's last code points: GB9b after Prepend, GB12 and GB13 for a
+    // regional indicator after an odd run of them, GB11 for a pictograph
+    // after ExtPict Extend* ZWJ. Without these, every flag and every emoji
+    // with a ZWJ or VS16 in it came down to segmentation, at three string
+    // allocations a code point. They come after the exits above so that the
+    // code points those settle - wide emoji among them - do not pay for them.
+    // What they cannot decide - a cell holding a sequence the rules do not
+    // expect, which mode 2027 switched off and on can leave behind - still
+    // goes to segmentation.
+    if (_isRegionalIndicator(codePoint)) {
+      final joins = _regionalIndicatorJoins(base, combining, last);
+      if (joins != null) return joins;
+    } else if (isExtendedPictographic(codePoint)) {
+      final joins = _pictographJoins(base, combining, last);
+      if (joins != null) return joins;
+    }
+
+    // A lone low surrogate as the base has no high one before it to pair
+    // with, so segmentation breaks after it - and package:characters throws
+    // on a string that opens with one.
+    if (base >= 0xdc00 && base <= 0xdfff) return false;
 
     final previous = String.fromCharCode(base) + (combining ?? '');
     final storedGraphemes = previous.characters;
@@ -384,6 +656,84 @@ class Buffer {
 
     final extensionCandidate = 'a$character';
     return extensionCandidate.characters.length == 1;
+  }
+
+  /// Whether a regional indicator joins the cluster `base + combining`, which
+  /// ends in [last]; null where only segmentation can tell.
+  static bool? _regionalIndicatorJoins(int base, String? combining, int last) {
+    if (_isSurrogate(base)) return null;
+    if (isGraphemePrepend(last)) return true;
+    if (!_isRegionalIndicator(last)) return false;
+    // One regional indicator: the second of a flag. Two: a flag, which a third
+    // does not join.
+    if (combining == null) return true;
+    if (_isRegionalIndicator(base) && combining.length == 2) return false;
+    return null;
+  }
+
+  /// Whether an Extended_Pictographic code point joins the cluster
+  /// `base + combining`, which ends in [last]; null where only segmentation
+  /// can tell.
+  static bool? _pictographJoins(int base, String? combining, int last) {
+    if (_isSurrogate(base)) return null;
+    if (isGraphemePrepend(last)) return true;
+    if (last != 0x200d) return false;
+    if (combining == null) return null;
+    // GB11: ExtPict Extend* ZWJ, with Extend narrowed to the marks emoji
+    // sequences hold - variation selectors, skin tone modifiers, tags.
+    // Walked back from the ZWJ a code unit at a time, pairing a low surrogate
+    // with the high one before it as [String.runes] does: a list of the runes
+    // cost an allocation for every pictograph of every ZWJ sequence.
+    var end = combining.length - 1;
+    while (end > 0) {
+      var rune = combining.codeUnitAt(--end);
+      if (rune >= 0xdc00 && rune <= 0xdfff && end > 0) {
+        final lead = combining.codeUnitAt(end - 1);
+        if (lead >= 0xd800 && lead <= 0xdbff) {
+          end--;
+          rune = 0x10000 + ((lead - 0xd800) << 10) + (rune - 0xdc00);
+        }
+      }
+      if (!_isEmojiSequenceMark(rune)) {
+        return isExtendedPictographic(rune) ? true : null;
+      }
+    }
+    if (_isEmojiSequenceMark(base)) return null;
+    return isExtendedPictographic(base) ? true : null;
+  }
+
+  /// `string.runes.last` without the [Runes] object: a low surrogate pairs
+  /// with a high one before it, any other code unit stands for itself.
+  static int _lastRune(String string) {
+    final last = string.codeUnitAt(string.length - 1);
+    if (last >= 0xdc00 && last <= 0xdfff && string.length > 1) {
+      final lead = string.codeUnitAt(string.length - 2);
+      if (lead >= 0xd800 && lead <= 0xdbff) {
+        return 0x10000 + ((lead - 0xd800) << 10) + (last - 0xdc00);
+      }
+    }
+    return last;
+  }
+
+  static bool _isEmojiSequenceMark(int codePoint) =>
+      codePoint >= 0xfe00 && codePoint <= 0xfe0f ||
+      _isEmojiModifier(codePoint) ||
+      codePoint >= 0xe0020 && codePoint <= 0xe007f;
+
+  /// A lone surrogate as a cell's base - only malformed UTF-16 puts one there
+  /// - can pair with a lone low surrogate at the start of its combining
+  /// string once the two are one string, as segmentation sees them. The rules
+  /// above read the base and the combining string apart, so they leave such a
+  /// cell to segmentation.
+  static bool _isSurrogate(int codePoint) =>
+      codePoint >= 0xd800 && codePoint <= 0xdfff;
+
+  static bool _hasConjunctLinker(String? combining) {
+    if (combining == null) return false;
+    for (final rune in combining.runes) {
+      if (isConjunctLinker(rune)) return true;
+    }
+    return false;
   }
 
   int _joinedPreviousGraphemeWidth(int codePoint, int cellWidth) {
@@ -452,13 +802,6 @@ class Buffer {
     return codePoint >= 0x1F3FB && codePoint <= 0x1F3FF;
   }
 
-  static bool _isHangul(int codePoint) {
-    return codePoint >= 0x1100 && codePoint <= 0x11FF ||
-        codePoint >= 0xA960 && codePoint <= 0xA97F ||
-        codePoint >= 0xAC00 && codePoint <= 0xD7A3 ||
-        codePoint >= 0xD7B0 && codePoint <= 0xD7FF;
-  }
-
   static bool _isEmojiModifierBase(int codePoint) {
     return switch (codePoint) {
       0x261D || 0x26F9 || >= 0x270A && <= 0x270D => true,
@@ -487,9 +830,10 @@ class Buffer {
     if (!_isRegionalIndicator(codePoint)) return false;
     final index = _previousCellIndex();
     if (index == null) return false;
-    if (!_isRegionalIndicator(currentLine.getCodePoint(index)) ||
-        currentLine.getCombiningCharacters(index) != null ||
-        currentLine.getWidth(index) != 1) {
+    final line = currentLine;
+    if (!_isRegionalIndicator(line.getCodePoint(index)) ||
+        line.getCombiningCharacters(index) != null ||
+        line.getWidth(index) != 1) {
       return false;
     }
 
@@ -540,7 +884,9 @@ class Buffer {
 
   void _wrapInput() {
     index();
-    setCursorX(_marginLeft);
+    // What setCursorX(_marginLeft) comes to, the left margin being at or left
+    // of the right one.
+    _cursorX = _marginLeft;
     currentLine.isWrapped = true;
   }
 
@@ -686,7 +1032,7 @@ class Buffer {
   void fillRect(int char, int top, int left, int bottom, int right) {
     final rect = _normalizeRect(top, left, bottom, right);
     if (rect == null) return;
-    if (unicodeV11.wcwidth(char) != 1) return;
+    if (unicodeV11.wcwidth(char) != 1 || _isSurrogate(char)) return;
 
     for (var row = rect.top; row <= rect.bottom; row++) {
       final line = lines[row + scrollBack];
@@ -939,7 +1285,7 @@ class Buffer {
       if (i >= absoluteMarginTop + count) {
         lines.move(i - count, i);
       } else {
-        lines[i] = _newEmptyLine();
+        lines[i] = _newScrolledLine();
       }
     }
   }
@@ -948,13 +1294,13 @@ class Buffer {
     if (_canScrollUpByPushingLines) {
       final linesToPush = min(count, _marginBottom + 1);
       for (var i = 0; i < linesToPush; i++) {
-        lines.push(_newEmptyLine());
+        lines.push(_newScrolledLine());
         // Rows below the scroll region keep their place on screen.
         if (_marginBottom < viewHeight - 1) {
           for (var row = viewHeight - 1; row > _marginBottom; row--) {
             lines.move(row - 1 + scrollBack, row + scrollBack);
           }
-          lines[absoluteMarginBottom] = _newEmptyLine();
+          lines[absoluteMarginBottom] = _newScrolledLine();
         }
       }
       return;
@@ -964,7 +1310,7 @@ class Buffer {
       if (i <= absoluteMarginBottom - count) {
         lines.move(i + count, i);
       } else {
-        lines[i] = _newEmptyLine();
+        lines[i] = _newScrolledLine();
       }
     }
   }
@@ -993,7 +1339,9 @@ class Buffer {
         // every row below the bottom margin down.
         scrollUp(1);
       } else {
-        moveCursorY(1);
+        // What moveCursorY(1) comes to here: inside the margins and above the
+        // bottom one, there is no limit to meet.
+        _cursorY++;
       }
       return;
     }
@@ -1004,7 +1352,7 @@ class Buffer {
       if (isAltBuffer) {
         scrollUp(1);
       } else {
-        lines.push(_newEmptyLine());
+        lines.push(_newScrolledLine());
       }
     } else {
       // there're still lines so we simply move cursor down.
@@ -1070,8 +1418,13 @@ class Buffer {
   }
 
   void setCursorX(int cursorX) {
-    _cursorX =
-        cursorX.clamp(_minimumCursorX(cursorX), _maximumCursorX(cursorX));
+    final minimum = _minimumCursorX(cursorX);
+    final maximum = _maximumCursorX(cursorX);
+    _cursorX = cursorX < minimum
+        ? minimum
+        : cursorX > maximum
+            ? maximum
+            : cursorX;
   }
 
   void setCursorY(int cursorY) {
@@ -1177,27 +1530,30 @@ class Buffer {
   }
 
   void setCursor(int cursorX, int cursorY) {
+    var minimumCursorX = 0;
+    var maximumCursorX = viewWidth - 1;
     var maxCursorY = viewHeight - 1;
 
     if (terminal.originMode) {
+      cursorX += _marginLeft;
       cursorY += _marginTop;
+      minimumCursorX = _marginLeft;
+      maximumCursorX = _marginRight;
       maxCursorY = _marginBottom;
     }
 
-    final minimumCursorX = switch (terminal.originMode) {
-      true => _marginLeft,
-      false => 0,
-    };
-    final maximumCursorX = switch (terminal.originMode) {
-      true => _marginRight,
-      false => viewWidth - 1,
-    };
-    if (terminal.originMode) {
-      cursorX += _marginLeft;
-    }
-
-    _cursorX = cursorX.clamp(minimumCursorX, maximumCursorX);
-    _cursorY = cursorY.clamp(0, maxCursorY);
+    // Compared rather than clamped: every cursor move in full-screen output
+    // comes through here, and int.clamp is a call that checks its bounds.
+    _cursorX = cursorX < minimumCursorX
+        ? minimumCursorX
+        : cursorX > maximumCursorX
+            ? maximumCursorX
+            : cursorX;
+    _cursorY = cursorY < 0
+        ? 0
+        : cursorY > maxCursorY
+            ? maxCursorY
+            : cursorY;
   }
 
   void moveCursor(int offsetX, int offsetY) {
@@ -1216,11 +1572,15 @@ class Buffer {
     _savedCursorStyle.underlineColor = terminal.cursor.underlineColor;
     _savedCursorStyle.attrs = terminal.cursor.attrs;
     _savedCursorStyle.hyperlinkId = terminal.cursor.hyperlinkId;
-    charset.save();
+    _savedCharset.copyFrom(charset);
   }
 
   void clearSavedCursorHyperlink() {
     _savedCursorStyle.hyperlinkId = 0;
+  }
+
+  void resetSavedCharset() {
+    _savedCharset.reset();
   }
 
   /// Restore cursor position, charmap and text attributes.
@@ -1232,7 +1592,7 @@ class Buffer {
     terminal.cursor.underlineColor = _savedCursorStyle.underlineColor;
     terminal.cursor.attrs = _savedCursorStyle.attrs;
     terminal.cursor.hyperlinkId = _savedCursorStyle.hyperlinkId;
-    charset.restore();
+    charset.copyFrom(_savedCharset);
     return _savedOriginMode;
   }
 
@@ -1279,11 +1639,9 @@ class Buffer {
   }
 
   void carriageReturn() {
-    final left = switch (terminal.originMode || _cursorX >= _marginLeft) {
-      true => _marginLeft,
-      false => 0,
-    };
-    setCursorX(left);
+    // What setCursorX comes to for either target, the left margin being at or
+    // left of the right one.
+    _cursorX = terminal.originMode || _cursorX >= _marginLeft ? _marginLeft : 0;
   }
 
   int _minimumCursorX(int targetX) {
@@ -1435,7 +1793,7 @@ class Buffer {
     _savedOriginMode = false;
     _savedCursorStyle.reset();
     _savedCursorStyle.hyperlinkId = 0;
-    charset.reset();
+    _savedCharset.reset();
     resetVerticalMargins();
     resetHorizontalMargins();
   }
@@ -1529,11 +1887,11 @@ class Buffer {
 
     for (var i = 0; i < linesToMove; i++) {
       final index = absoluteMarginBottom - i;
-      lines[index] = lines.swap(index - linesToInsert, _newEmptyLine());
+      lines[index] = lines.swap(index - linesToInsert, _newScrolledLine());
     }
 
     for (var i = linesToMove; i < linesToInsert; i++) {
-      lines[absoluteCursorY + i] = _newEmptyLine();
+      lines[absoluteCursorY + i] = _newScrolledLine();
     }
   }
 
@@ -1580,7 +1938,7 @@ class Buffer {
     }
 
     for (var i = 0; i < count; i++) {
-      lines[absoluteMarginBottom - i] = _newEmptyLine();
+      lines[absoluteMarginBottom - i] = _newScrolledLine();
     }
   }
 
@@ -1752,6 +2110,19 @@ class Buffer {
   /// is not specified.
   BufferLine _newEmptyLine([int? width]) {
     final line = BufferLine(width ?? viewWidth);
+    if (_spareStorage case final storage?) {
+      _spareStorage = null;
+      line.adoptStorage(storage);
+    }
+    return line;
+  }
+
+  /// A new line for one that scrolling, IL or DL opens: blank in the current
+  /// background, as an erase leaves it (bce).
+  BufferLine _newScrolledLine() {
+    final line = _newEmptyLine();
+    final style = terminal.cursor;
+    if (style.background != 0) line.eraseRange(0, viewWidth, style);
     return line;
   }
 

@@ -1,6 +1,7 @@
 import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
 import 'package:test/test.dart';
+import 'package:xterm3/src/utils/debugger.dart';
 import 'package:xterm3/xterm.dart';
 
 @GenerateNiceMocks([MockSpec<EscapeHandler>()])
@@ -529,4 +530,174 @@ void main() {
       verify(handler.resetDynamicColor(19)).called(1);
     });
   });
+
+  test('each character taken one at a time is a token of its own', () {
+    // Wide and astral characters are taken in the same head-block scan as
+    // runs and sequences; each must still start its own token.
+    final debugger = TerminalDebugger()..write('漢😀\x1b[1m字');
+
+    expect(
+      [for (final c in debugger.commands) (c.start, c.end, c.chars)],
+      [(0, 1, '漢'), (1, 2, '😀'), (2, 6, '\x1b[1m'), (6, 7, '字')],
+    );
+  });
+
+  // Pins what CSI handlers receive for parameter lists of every shape. These
+  // were recorded from the parser as it stood before its parameter storage
+  // changed, and must keep passing unchanged: the storage is an internal
+  // detail, the parameters a handler sees are not.
+  group('CSI parameters reach handlers unchanged', () {
+    List<String> calls(String input) {
+      final debugger = TerminalDebugger()..write(input);
+      return [for (final c in debugger.commands) ...c.explanation];
+    }
+
+    test('no parameters and one parameter', () {
+      expect(calls('\x1b[m\x1b[H\x1b[A\x1b[r'), [
+        'resetCursorStyle',
+        'setCursor(0, 0)',
+        'moveCursorY(-1)',
+        'setMargins(0, null)',
+      ]);
+      expect(calls('\x1b[5A\x1b[7m\x1b[3J'), [
+        'moveCursorY(-5)',
+        'setCursorInverse',
+        'eraseScrollbackOnly',
+      ]);
+    });
+
+    test('32 parameters are all kept', () {
+      expect(calls('\x1b[${'1;' * 31}3m'), [
+        ...List.filled(31, 'setCursorBold'),
+        'setCursorItalic',
+      ]);
+      expect(calls('\x1b[${';' * 31}3m'), [
+        ...List.filled(31, 'resetCursorStyle'),
+        'setCursorItalic',
+      ]);
+    });
+
+    test('parameters past the 32nd are dropped', () {
+      expect(calls('\x1b[${'1;' * 32}3m'), List.filled(32, 'setCursorBold'));
+      expect(calls('\x1b[${'1;' * 99}3m'), List.filled(32, 'setCursorBold'));
+      expect(
+        calls('\x1b[${';' * 40}3m'),
+        List.filled(32, 'resetCursorStyle'),
+      );
+    });
+
+    test('a sequence longer than 256 code units is not dispatched', () {
+      expect(calls('\x1b[${'22;' * 99}3mX'), ['writeChar(X)']);
+    });
+
+    test('huge values are clamped to 65535', () {
+      expect(
+        calls('\x1b[99999999999999999999A'
+            '\x1b[65535;65536H'
+            '\x1b[38;2;99999;300;1m'
+            '\x1b[38;5;65536m'
+            '\x1b[12345678901234567890;1m'),
+        [
+          'moveCursorY(-65535)',
+          'setCursor(65534, 65534)',
+          'unsupportedStyle(65535)',
+          'setCursorBold',
+        ],
+      );
+    });
+
+    test('empty parameters read as 0', () {
+      expect(
+        calls('\x1b[;5H\x1b[1;;3m\x1b[;m\x1b[;;m\x1b[1;m\x1b[;1m'),
+        [
+          'setCursor(4, 0)',
+          'setCursorBold',
+          'resetCursorStyle',
+          'setCursorItalic',
+          ...List.filled(5, 'resetCursorStyle'),
+          'setCursorBold',
+          'resetCursorStyle',
+          'resetCursorStyle',
+          'setCursorBold',
+        ],
+      );
+    });
+
+    test('mixed ; and : separators', () {
+      expect(
+        calls('\x1b[4:3;38:2::10:20:30;58:5:9m'
+            '\x1b[38:2:1:2:3m'
+            '\x1b[48;2;1;2;3m'
+            '\x1b[38:2:0:1:2:3m'
+            '\x1b[4:3:1m'
+            '\x1b[38;5;1:2m'),
+        [
+          'setCursorUndercurl',
+          'setForegroundColorRgb(10, 20, 30)',
+          'setUnderlineColor256(9)',
+          'setForegroundColorRgb(1, 2, 3)',
+          'setBackgroundColorRgb(1, 2, 3)',
+          'setForegroundColorRgb(1, 2, 3)',
+          'setCursorUndercurl',
+          'setCursorBold',
+          'setForegroundColor256(1)',
+          'setCursorFaint',
+        ],
+      );
+    });
+
+    test('a long sequence leaves nothing behind for the next one', () {
+      final colons = List.generate(32, (i) => i + 1).join(':');
+      expect(
+        calls('\x1b[38:2:${colons}m'
+            '\x1b[38:5m\x1b[4m\x1b[38;2;1m\x1b[58:2::1:2m\x1b[1;2H'),
+        [
+          'setForegroundColorRgb(2, 3, 4)',
+          'setCursorBlink',
+          'setCursorBlink',
+          'setCursorInverse',
+          'setCursorInvisible',
+          'setCursorStrikethrough',
+          for (var i = 10; i <= 20; i++) 'unsupportedStyle($i)',
+          'setCursorDoubleUnderline',
+          'unsetCursorBold',
+          'unsetCursorFaint',
+          'unsetCursorItalic',
+          'unsetCursorUnderline',
+          'unsetCursorBlink',
+          'unsupportedStyle(26)',
+          'unsetCursorInverse',
+          'unsetCursorInvisible',
+          'unsetCursorStrikethrough',
+          'setForegroundColor16(0)',
+          'setCursorUnderline',
+          'setUnderlineColorRgb(0, 1, 2)',
+          'setCursor(1, 0)',
+        ],
+      );
+    });
+
+    test('a private device status report gets its parameters as a list', () {
+      expect(calls('\x1b[?6n\x1b[?63;1n\x1b[?6;2n\x1b[?15n\x1b[?n'), [
+        'sendPrivateDeviceStatusReport([6])',
+        'sendPrivateDeviceStatusReport([63, 1])',
+        'sendPrivateDeviceStatusReport([15])',
+      ]);
+
+      final handler = _DsrRecorder();
+      EscapeParser(handler).write('\x1b[?63;1n');
+      final params = handler.received!;
+      expect(params, [63, 1]);
+      // An ordinary growable list, as it always was.
+      params.add(7);
+      expect(params, [63, 1, 7]);
+    });
+  });
+}
+
+class _DsrRecorder extends MockEscapeHandler {
+  List<int>? received;
+
+  @override
+  void sendPrivateDeviceStatusReport(List<int> params) => received = params;
 }

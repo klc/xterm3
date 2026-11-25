@@ -82,4 +82,9 @@ coverage/
 example2/
 test/src/failures/
 
-/graphify-out
+# Benchmark material kept on disk, out of the repository: terminal captures
+# the paint benchmarks and gen_parser_corpus.py read, the Ghostty-gap plan and
+# its raw measurements, and the CLI harness lock file.
+script/term_compare/paint_spike/captures/
+doc/benchmarks/2026-11-20-ghostty-gap/
+script/term_compare/cli_e2e/pubspec.lock

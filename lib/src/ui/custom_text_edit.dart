@@ -81,6 +81,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   /// collapsed editing value; it must not reach the terminal twice.
   String? _actionCommittedText;
 
+  /// Whether a newline action came since the last editing value. For the
+  /// newline return key the iOS engine sends the action and then lets UIKit
+  /// insert "\n" as well (`shouldChangeTextInRange` returns YES for
+  /// UIReturnKeyDefault). Enter was sent for the action, so that "\n" is
+  /// dropped. Android sends only the action.
+  bool _newlineActionPending = false;
+
   /// The content of an open, not-yet-resolved composing range in
   /// [deleteDetection] mode - see [_updateEditingValueWithDeleteDetection].
   /// Non-null exactly while such a range is open and its fate (genuine
@@ -361,6 +368,19 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     final previousText = _currentEditingState.text;
     _currentEditingState = value;
 
+    // Only the very next editing value can be the inserted "\n", see
+    // [_newlineActionPending]. It replaces the marked text, or follows the
+    // text the action committed on an engine that leaves that in place.
+    final afterNewlineAction = _newlineActionPending;
+    _newlineActionPending = false;
+    final delta = _textDelta(value);
+    if (afterNewlineAction &&
+        (delta == '\n' || delta == '${_actionCommittedText ?? ''}\n')) {
+      _actionCommittedText = null;
+      _resetEditingState();
+      return;
+    }
+
     if (widget.deleteDetection) {
       _updateEditingValueWithDeleteDetection(value);
       return;
@@ -370,6 +390,11 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       _updateEditingValueDesktop(value);
       return;
     }
+
+    // The guard lives for exactly this call, composing or not, see
+    // [_updateEditingValueWithDeleteDetection].
+    final actionCommittedText = _actionCommittedText;
+    _actionCommittedText = null;
 
     // Get input after composing is done
     if (!_currentEditingState.composing.isCollapsed) {
@@ -382,11 +407,9 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
     widget.onComposing(null);
 
     final textDelta = _textDelta(_currentEditingState);
-    final actionCommittedText = _actionCommittedText;
 
     if (actionCommittedText != null) {
       if (textDelta == actionCommittedText) {
-        _actionCommittedText = null;
         _resetEditingState();
         return;
       }
@@ -395,7 +418,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       // This is uncommon, but it prevents losing a character if an IME batches
       // the next edit with its final composition commit.
       if (textDelta.startsWith(actionCommittedText)) {
-        _actionCommittedText = null;
         final remainingText = textDelta.substring(actionCommittedText.length);
         if (remainingText.isNotEmpty) {
           widget.onInsert(remainingText);
@@ -403,8 +425,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
         _resetEditingState();
         return;
       }
-
-      _actionCommittedText = null;
     }
 
     if (_currentEditingState.text.length < _initEditingState.text.length) {
@@ -570,7 +590,13 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return;
     }
 
-    if (text != _initEditingState.text) {
+    // A keyboard can move the caret into the sentinel without changing the
+    // text (HeliBoard's space-bar swipe, an iOS two-finger select). Left
+    // there, the next character is inserted before the end and the diff
+    // above reads the wrong characters, so the caret is put back as well.
+    if (text != _initEditingState.text ||
+        value.selection.baseOffset != initLength ||
+        value.selection.extentOffset != initLength) {
       _resetEditingState();
     }
   }
@@ -589,6 +615,8 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   void _updateEditingValueDesktop(TextEditingValue value) {
     final text = value.text;
     final composing = value.composing;
+    final actionCommittedText = _actionCommittedText;
+    _actionCommittedText = null;
 
     if (!composing.isCollapsed) {
       _syncSent(text.substring(0, composing.start.clamp(0, text.length)));
@@ -597,8 +625,6 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
       return;
     }
 
-    final actionCommittedText = _actionCommittedText;
-    _actionCommittedText = null;
     if (actionCommittedText != null && text == actionCommittedText) {
       widget.onComposing(null);
       _resetPending = true;
@@ -698,6 +724,7 @@ class CustomTextEditState extends State<CustomTextEdit> with TextInputClient {
   @override
   void performAction(TextInputAction action) {
     _commitComposingTextForAction();
+    _newlineActionPending = action == TextInputAction.newline;
     widget.onAction(action);
   }
 

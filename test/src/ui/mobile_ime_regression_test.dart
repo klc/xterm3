@@ -390,6 +390,107 @@ void main() {
     },
   );
 
+  // A keyboard can move the caret inside the sentinel without changing the
+  // text: HeliBoard's space-bar swipe calls setSelection, an iOS two-finger
+  // select calls setSelectedTextRange. The next commitText then inserts at
+  // that caret, not at the end of the sentinel.
+  group('Caret moved inside the sentinel (deleteDetection: true)', () {
+    int setEditingStateCalls(WidgetTester tester) => tester.testTextInput.log
+        .where((call) => call.method == 'TextInput.setEditingState')
+        .length;
+
+    /// Moves the caret like the keyboard, then commits [typed] the way the
+    /// engine does: at its own caret, which is the keyboard's unless the
+    /// framework set the editing state in between.
+    void moveCaretThenCommit(
+      WidgetTester tester,
+      TextSelection selection,
+      String typed,
+    ) {
+      tester.testTextInput.log.clear();
+      var engine = TextEditingValue(text: '  ', selection: selection);
+      tester.testTextInput.updateEditingValue(engine);
+      if (setEditingStateCalls(tester) > 0) {
+        engine = TextEditingValue.fromJSON(tester.testTextInput.editingState!);
+      }
+      final text = engine.selection.textBefore(engine.text) +
+          typed +
+          engine.selection.textAfter(engine.text);
+      tester.testTextInput.updateEditingValue(
+        TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(
+            offset: engine.selection.start + typed.length,
+          ),
+        ),
+      );
+    }
+
+    final selections = {
+      'caret 1': const TextSelection.collapsed(offset: 1),
+      'caret 0': const TextSelection.collapsed(offset: 0),
+      'select all': const TextSelection(baseOffset: 0, extentOffset: 2),
+    };
+    for (final MapEntry(key: name, value: selection) in selections.entries) {
+      testWidgets('$name, then a typed character sends that character', (
+        tester,
+      ) async {
+        final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+
+        moveCaretThenCommit(tester, selection, 'l');
+
+        expect(output.join(), 'l');
+      });
+    }
+
+    testWidgets('a selection-only change puts the caret back at the end', (
+      tester,
+    ) async {
+      final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+      tester.testTextInput.log.clear();
+
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: '  ',
+          selection: TextSelection.collapsed(offset: 1),
+        ),
+      );
+
+      expect(output, isEmpty);
+      expect(setEditingStateCalls(tester), 1);
+      final state = tester.testTextInput.editingState!;
+      expect(state['text'], '  ');
+      expect(state['selectionBase'], 2);
+      expect(state['selectionExtent'], 2);
+    });
+
+    testWidgets(
+        'typing and backspace are unchanged, and the sentinel with '
+        'the caret at the end is left alone', (tester) async {
+      final (output, _) = await pumpTerminal(tester, deleteDetection: true);
+
+      compose(tester, '  ', 'l', collapsed: true);
+      compose(tester, '  ', 's', collapsed: true);
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: ' ',
+          selection: TextSelection.collapsed(offset: 1),
+        ),
+      );
+      expect(output.join(), 'ls\x7f');
+
+      tester.testTextInput.log.clear();
+      tester.testTextInput.updateEditingValue(
+        const TextEditingValue(
+          text: '  ',
+          selection: TextSelection.collapsed(offset: 2),
+        ),
+      );
+      expect(output.join(), 'ls\x7f');
+      expect(setEditingStateCalls(tester), 0);
+    });
+  });
+
   group('commitComposing (input from outside the keyboard)', () {
     testWidgets(
       'flushes an open composition so the next out-of-band key lands after it',
@@ -465,5 +566,245 @@ void main() {
 
       expect(output.join(), 'htop\r');
     });
+
+    group('deleteDetection: false', () {
+      testWidgets('ignores the IME echo of a committed composition', (
+        tester,
+      ) async {
+        final (output, viewKey) = await pumpTerminal(tester);
+
+        compose(tester, '', 'www', collapsed: false);
+        expect(viewKey.currentState!.commitComposing(), isTrue);
+        compose(tester, '', 'www', collapsed: true);
+
+        expect(output.join(), 'www');
+      });
+
+      // No echo came, so the guard must not outlive the next editing value,
+      // even when that value is still composing.
+      testWidgets('keeps the same word composed again after a commit', (
+        tester,
+      ) async {
+        final (output, viewKey) = await pumpTerminal(tester);
+
+        compose(tester, '', 'www', collapsed: false);
+        expect(viewKey.currentState!.commitComposing(), isTrue);
+        compose(tester, '', 'w', collapsed: false);
+        compose(tester, '', 'ww', collapsed: false);
+        compose(tester, '', 'www', collapsed: false);
+        compose(tester, '', 'www', collapsed: true);
+
+        expect(output.join(), 'wwwwww');
+      });
+
+      testWidgets('keeps a composed word that starts with the committed one', (
+        tester,
+      ) async {
+        final (output, viewKey) = await pumpTerminal(tester);
+
+        compose(tester, '', 'cd', collapsed: false);
+        expect(viewKey.currentState!.commitComposing(), isTrue);
+        compose(tester, '', 'c', collapsed: false);
+        compose(tester, '', 'cd', collapsed: false);
+        compose(tester, '', 'cd ', collapsed: true);
+
+        expect(output.join(), 'cdcd ');
+      });
+
+      testWidgets('keeps the word composed after an action commit', (
+        tester,
+      ) async {
+        final (output, _) = await pumpTerminal(tester);
+
+        compose(tester, '', 'ls', collapsed: false);
+        await tester.testTextInput.receiveAction(TextInputAction.newline);
+        compose(tester, '', 'l', collapsed: false);
+        compose(tester, '', 'lsblk', collapsed: false);
+        compose(tester, '', 'lsblk ', collapsed: true);
+
+        expect(output.join(), 'ls\rlsblk ');
+      });
+    });
+  });
+
+  // For a newline return key the iOS engine sends performAction(newline) and
+  // then lets UIKit insert "\n" too (shouldChangeTextInRange returns YES for
+  // UIReturnKeyDefault). Android sends only the action.
+  group('Return key (newline action)', () {
+    final iOS = TargetPlatformVariant.only(TargetPlatform.iOS);
+
+    for (final deleteDetection in [true, false]) {
+      final prefix = deleteDetection ? '  ' : '';
+
+      group('deleteDetection: $deleteDetection', () {
+        testWidgets('iOS sends one CR, not CR LF', (tester) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          compose(tester, prefix, 'l', collapsed: true);
+          compose(tester, prefix, 's', collapsed: true);
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, '\n', collapsed: true);
+
+          expect(output.join(), 'ls\r');
+          expect(tester.testTextInput.editingState?['text'], prefix);
+
+          compose(tester, prefix, 'a', collapsed: true);
+          expect(output.join(), 'ls\ra');
+        }, variant: iOS);
+
+        // insertText replaces the marked range with "\n"; an engine that
+        // replaced only the selection would leave the marked text before it.
+        for (final inserted in ['\n', '日本\n']) {
+          testWidgets(
+            'iOS commits an open composition and sends one CR '
+            '(inserted: ${inserted.replaceAll('\n', r'\n')})',
+            (tester) async {
+              final (output, _) = await pumpTerminal(
+                tester,
+                deleteDetection: deleteDetection,
+              );
+
+              compose(tester, prefix, '日本', collapsed: false);
+              await tester.testTextInput.receiveAction(TextInputAction.newline);
+              compose(tester, prefix, inserted, collapsed: true);
+
+              expect(output.join(), '日本\r');
+            },
+            variant: iOS,
+          );
+        }
+
+        testWidgets('Android sends one CR and keeps the next key', (
+          tester,
+        ) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          compose(tester, prefix, 'l', collapsed: true);
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, 's', collapsed: true);
+
+          expect(output.join(), 'l\rs');
+        });
+
+        testWidgets('a newline that does not follow the action is sent', (
+          tester,
+        ) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, 'a', collapsed: true);
+          compose(tester, prefix, '\n', collapsed: true);
+
+          expect(output.join(), '\ra\n');
+        }, variant: iOS);
+
+        testWidgets('multi-line text right after the action is pasted', (
+          tester,
+        ) async {
+          final (output, _) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+
+          await tester.testTextInput.receiveAction(TextInputAction.newline);
+          compose(tester, prefix, 'a\nb', collapsed: true);
+
+          expect(output.join(), '\ra\rb');
+        }, variant: iOS);
+      });
+    }
+  });
+
+  // The keyboard's own paste (iOS paste: -> insertText, Android's context-menu
+  // paste, a clipboard commitText) arrives as an editing value, not as a paste
+  // intent, so text that is not safe to type must be sent as a paste.
+  group('Paste through the keyboard', () {
+    for (final deleteDetection in [true, false]) {
+      final prefix = deleteDetection ? '  ' : '';
+
+      group('deleteDetection: $deleteDetection', () {
+        Future<List<String>> pumpWithBracketedPaste(
+          WidgetTester tester, {
+          bool bracketedPaste = true,
+        }) async {
+          final (output, viewKey) = await pumpTerminal(
+            tester,
+            deleteDetection: deleteDetection,
+          );
+          if (bracketedPaste) {
+            viewKey.currentState!.widget.terminal.write('\x1b[?2004h');
+          }
+          return output;
+        }
+
+        testWidgets('multi-line text is wrapped in bracketed paste', (
+          tester,
+        ) async {
+          final output = await pumpWithBracketedPaste(tester);
+
+          compose(tester, prefix, 'rm -rf ~/tmp/x\necho done\n',
+              collapsed: true);
+
+          expect(
+            output.join(),
+            '\x1b[200~rm -rf ~/tmp/x\necho done\n\x1b[201~',
+          );
+        });
+
+        testWidgets('a bracketed paste terminator in the text is stripped', (
+          tester,
+        ) async {
+          final output = await pumpWithBracketedPaste(tester);
+
+          compose(tester, prefix, 'ls\x1b[201~\nid\n', collapsed: true);
+
+          expect(output.join(), '\x1b[200~ls\nid\n\x1b[201~');
+        });
+
+        testWidgets('without bracketed paste, line breaks are sent as CR', (
+          tester,
+        ) async {
+          final output = await pumpWithBracketedPaste(
+            tester,
+            bracketedPaste: false,
+          );
+
+          compose(tester, prefix, 'a\nb\n', collapsed: true);
+
+          expect(output.join(), 'a\rb\r');
+        });
+
+        // Swipe word, autocorrect commit, emoji ZWJ sequence, CJK commit.
+        for (final typed in ['hello', 'the ', '👨‍👩‍👧', '日本語']) {
+          testWidgets('typed text "$typed" is sent as is', (tester) async {
+            final output = await pumpWithBracketedPaste(tester);
+
+            compose(tester, prefix, typed, collapsed: true);
+
+            expect(output.join(), typed);
+          });
+        }
+      });
+    }
+
+    testWidgets('macOS: multi-line text is wrapped in bracketed paste', (
+      tester,
+    ) async {
+      final (output, viewKey) = await pumpTerminal(tester);
+      viewKey.currentState!.widget.terminal.write('\x1b[?2004h');
+
+      compose(tester, '', 'a\nb', collapsed: true);
+
+      expect(output.join(), '\x1b[200~a\nb\x1b[201~');
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
   });
 }

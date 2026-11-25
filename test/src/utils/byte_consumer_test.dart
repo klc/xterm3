@@ -68,11 +68,11 @@ void main() {
   test('releases consumed prefixes while preserving pending input', () {
     final consumer = ByteConsumer()..add('${'x' * 1024}pending');
 
-    consumer.consumeAsciiCodeUnits(1024);
+    consumer.consumeHeadTo(1024);
     consumer.unrefConsumedBlocks();
 
     expect(consumer.currentBlock, 'pending');
-    expect(consumer.currentCodeUnitOffset, 0);
+    expect(consumer.headOffset, 0);
     expect(_consumeAll(consumer), 'pending'.runes);
   });
 
@@ -109,55 +109,190 @@ void main() {
     expect(_consumeAll(consumer), 'a😀b😁c'.runes);
   });
 
-  test('single-cell runs span Latin-1, Greek and Cyrillic', () {
-    final consumer = ByteConsumer()..add('göz строка\u{0301}');
+  test('a run carried on from a wide character takes single-cell text too', () {
+    final consumer = ByteConsumer()..add('ab中文、ＡＢcd😀ef\u{0301}');
 
-    // Stops at the combining acute, which is not a single-cell character.
-    expect(consumer.printableTextRunLength, 'göz строка'.length);
-    // The ASCII-only scan stops at the first accented letter instead.
-    expect(consumer.printableAsciiRunLength, 1);
+    consumer.consumeHeadTo(2);
+    expect(consumer.consume(), '中'.codeUnitAt(0));
+    expect(consumer.headBlock, 'ab中文、ＡＢcd😀ef\u{0301}');
+    expect(consumer.headOffset, 3);
+    final before = consumer.totalConsumed;
+    // From there to the combining acute, the emoji counted as one.
+    expect(consumer.consumeTextRunInHead(), 'ab中文、ＡＢcd😀ef'.length);
+    expect(consumer.totalConsumed - before, '文、ＡＢcd😀ef'.runes.length);
+    expect(consumer.consume(), 0x0301);
   });
 
-  test('single-cell runs span dashes, box drawing and braille', () {
-    final consumer = ByteConsumer()..add('a \u{2014} ┌──┐ ▁▂▃ ⣿⣀\u{4E00}');
-
-    expect(consumer.printableTextRunLength, 'a \u{2014} ┌──┐ ▁▂▃ ⣿⣀'.length);
-  });
-
-  test('single-cell runs stop at characters that need the slow path', () {
-    // Soft hyphen and the zero width joiner are zero width; CJK is outside
-    // the ranges; an emoji is a surrogate pair.
-    for (final text in [
-      'a\u{00AD}b',
-      'a\u{200D}b',
-      'a\u{4E00}b',
-      'a\u{1F600}b'
+  test('a run carried on from a wide character stops at the slow path', () {
+    // A voicing mark (Extend), a skin tone, a ZWJ, a regional indicator, a
+    // Hangul leading jamo and ESC end it; the end of the head block too.
+    for (final (text, end) in [
+      ('中か\u{3099}a', 2),
+      ('中😀\u{1F3FB}', 3),
+      ('中😀\u200d😀', 3),
+      ('中\u{1F1FA}\u{1F1F8}', 1),
+      ('中a\u{1100}가', 2),
+      ('中a中\x1b[m', 3),
+      ('中a😀', 4),
     ]) {
-      final consumer = ByteConsumer()..add(text);
-      expect(consumer.printableTextRunLength, 1, reason: text);
+      final consumer = ByteConsumer()
+        ..add(text)
+        ..add('中');
+      expect(consumer.consume(), '中'.codeUnitAt(0), reason: text);
+      expect(consumer.consumeTextRunInHead(), end, reason: text);
     }
   });
 
-  test('consumes printable ASCII runs without crossing controls or blocks', () {
+  test('consumes scanned runs without crossing controls or blocks', () {
     final consumer = ByteConsumer()
       ..add('abc\x1b')
       ..add('def');
 
     expect(consumer.printableAsciiRunLength, 3);
     expect(consumer.currentBlock, 'abc\x1b');
-    expect(consumer.currentCodeUnitOffset, 0);
+    expect(consumer.headOffset, 0);
 
-    consumer.consumeAsciiCodeUnits(3);
+    consumer.consumeHeadTo(3);
     expect(consumer.totalConsumed, 3);
     expect(consumer.consume(), 0x1b);
     expect(consumer.printableAsciiRunLength, 3);
+    expect(consumer.headBlock, 'def');
 
-    consumer.consumeAsciiCodeUnits(3);
+    consumer.consumeHeadTo(3);
     expect(consumer.totalConsumed, 7);
     expect(consumer, isEmpty);
 
     consumer.rollback(3);
     expect(_consumeAll(consumer), 'def'.runes);
+  });
+  // ByteConsumer keeps the head block's string in a field (see the class
+  // comment). These cover each place where the head block changes.
+  group('the cached head block follows the queue', () {
+    test('when a block is added after a partial consume', () {
+      final consumer = ByteConsumer()..add('ab');
+      expect(consumer.consume(), 0x61);
+      consumer.add('cd');
+
+      expect(consumer.currentBlock, 'ab');
+      expect(consumer.headOffset, 1);
+      expect(consumer.printableAsciiRunLength, 1);
+      expect(consumer.consume(), 0x62);
+      expect(consumer.currentBlock, 'cd');
+      expect(consumer.printableAsciiRunLength, 2);
+      expect(_consumeAll(consumer), 'cd'.runes);
+    });
+
+    test('when a block is added to an emptied queue', () {
+      final consumer = ByteConsumer()..add('ab');
+      _consumeAll(consumer);
+      consumer.unrefConsumedBlocks();
+      consumer.add('xyz');
+
+      expect(consumer.currentBlock, 'xyz');
+      expect(consumer.headOffset, 0);
+      expect(consumer.printableAsciiRunLength, 3);
+      consumer.consumeHeadTo(2);
+      expect(consumer.consume(), 0x7a);
+      expect(consumer, isEmpty);
+    });
+
+    test('when a rollback crosses a block edge', () {
+      final consumer = ByteConsumer()
+        ..add('ab')
+        ..add('cd');
+      consumer.consumeHeadTo(2);
+      expect(consumer.consume(), 0x63);
+      expect(consumer.currentBlock, 'cd');
+
+      consumer.rollback(2);
+      expect(consumer.currentBlock, 'ab');
+      expect(consumer.headOffset, 1);
+      expect(consumer.printableAsciiRunLength, 1);
+      expect(_consumeAll(consumer), 'bcd'.runes);
+    });
+
+    test('when a rollback crosses a block edge inside a surrogate pair', () {
+      final consumer = ByteConsumer()
+        ..add('a😀')
+        ..add('😁');
+      consumer.consume();
+      consumer.consume();
+      consumer.consume();
+      consumer.rollback(2);
+      expect(consumer.currentBlock, 'a😀');
+      expect(consumer.headOffset, 1);
+      expect(_consumeAll(consumer), '😀😁'.runes);
+    });
+
+    test('when peeking at the last code unit of a block', () {
+      final consumer = ByteConsumer()
+        ..add('xa')
+        ..add('b');
+      consumer.consume();
+      expect(consumer.peek(), 0x61);
+      expect(consumer.currentBlock, 'xa');
+      expect(consumer.headOffset, 1);
+      expect(consumer.consume(), 0x61);
+      expect(consumer.peek(), 0x62);
+      expect(consumer.currentBlock, 'b');
+      expect(consumer.headOffset, 0);
+      expect(_consumeAll(consumer), 'b'.runes);
+    });
+
+    test('when unref cuts the head block and more is added', () {
+      final consumer = ByteConsumer()..add('abc');
+      consumer.consume();
+      consumer.consume();
+      consumer.unrefConsumedBlocks();
+      expect(consumer.currentBlock, 'c');
+      expect(consumer.headOffset, 0);
+
+      consumer.add('de');
+      expect(consumer.printableAsciiRunLength, 1);
+      expect(_consumeAll(consumer), 'cde'.runes);
+    });
+
+    test('when an unfinished sequence is put back and the next write lands',
+        () {
+      // What EscapeParser.write does when a chunk ends inside a sequence.
+      final consumer = ByteConsumer()..add('x\x1b[1');
+      expect(consumer.consume(), 0x78);
+      consumer.consume();
+      consumer.consume();
+      consumer.consume();
+      consumer.rollback(3);
+      consumer.unrefConsumedBlocks();
+      expect(consumer.currentBlock, '\x1b[1');
+
+      consumer.add('m');
+      expect(_consumeAll(consumer), '\x1b[1m'.runes);
+    });
+
+    test('when it is reset', () {
+      final consumer = ByteConsumer()
+        ..add('ab')
+        ..add('cd');
+      consumer.consume();
+      consumer.reset();
+      expect(consumer, isEmpty);
+
+      consumer.add('z');
+      expect(consumer.currentBlock, 'z');
+      expect(_consumeAll(consumer), 'z'.runes);
+    });
+
+    test('when a consume runs past the end', () {
+      final consumer = ByteConsumer();
+      expect(consumer.consume, throwsStateError);
+
+      consumer.add('a');
+      consumer.consume();
+      expect(consumer.consume, throwsStateError);
+
+      consumer.add('b');
+      expect(consumer.currentBlock, 'b');
+      expect(_consumeAll(consumer), 'b'.runes);
+    });
   });
 }
 

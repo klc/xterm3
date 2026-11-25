@@ -56,6 +56,37 @@ void main() {
     expect(match!.text, 'https://example.com/foo');
   });
 
+  test('urlAt trims punctuation uncovered by a wrapping bracket', () {
+    final terminal = Terminal()..resize(60, 2);
+    terminal.write('(see https://example.com/docs.) end');
+
+    final match = terminal.urlAt(const CellOffset(12, 0));
+
+    expect(match!.text, 'https://example.com/docs');
+    expect(match.range.end, const CellOffset(29, 0));
+  });
+
+  const trimCases = {
+    '(see https://example.com/docs!) end': 'https://example.com/docs',
+    '(see https://example.com/docs). end': 'https://example.com/docs',
+    '[https://example.com/docs] end': 'https://example.com/docs',
+    '{https://example.com/docs}': 'https://example.com/docs',
+    'see https://example.com/Foo_(bar) end': 'https://example.com/Foo_(bar)',
+    '(see https://example.com/Foo_(bar)). end': 'https://example.com/Foo_(bar)',
+    'go http://[::1] end': 'http://[::1]',
+    'go http://[::1]:8080/x end': 'http://[::1]:8080/x',
+    'see https://example.com/{id} end': 'https://example.com/{id}',
+    'see https://example.com/a[0] end': 'https://example.com/a[0]',
+  };
+  for (final MapEntry(key: line, value: url) in trimCases.entries) {
+    test('urlAt trims "$line" to "$url"', () {
+      final terminal = Terminal()..resize(60, 2);
+      terminal.write(line);
+
+      expect(terminal.urlAt(const CellOffset(12, 0))!.text, url);
+    });
+  }
+
   test('urlAt spans soft-wrapped rows', () {
     final terminal = Terminal()..resize(15, 3);
     terminal.write('see https://example.com/foo end');
@@ -72,4 +103,20 @@ void main() {
 
     expect(terminal.urlAt(const CellOffset(1, 1)), isNull);
   });
+
+  // Untrusted output: one long logical line whose match ends in a huge run of
+  // unbalanced closers. Trimming must stay linear, not rescan per closer.
+  for (final closer in [']', ')']) {
+    test('urlAt trims 100k trailing "$closer" in linear time', () {
+      final terminal = Terminal(maxLines: 10000)..resize(80, 24);
+      terminal.write('http://a${closer * 100000}');
+
+      final stopwatch = Stopwatch()..start();
+      final match = terminal.urlAt(const CellOffset(3, 0));
+      stopwatch.stop();
+
+      expect(match!.text, 'http://a');
+      expect(stopwatch.elapsedMilliseconds, lessThan(500));
+    });
+  }
 }

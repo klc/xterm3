@@ -67,23 +67,36 @@ extension TerminalUrlDetection on Terminal {
 }
 
 int _trimTrailingPunctuation(String text, int start, int end) {
-  var trimmedEnd = end;
-  while (
-      trimmedEnd > start && _trimmableTrailing.contains(text[trimmedEnd - 1])) {
-    trimmedEnd--;
+  const openerOf = {')': '(', ']': '[', '}': '{'};
+  // Opens minus closes of each bracket kind over [start, trimmedEnd), kept in
+  // step as trimmedEnd moves left so no closer has to rescan the match.
+  final netOpens = {'(': 0, '[': 0, '{': 0};
+  for (var i = start; i < end; i++) {
+    final c = text[i];
+    if (netOpens.containsKey(c)) netOpens[c] = netOpens[c]! + 1;
+    final open = openerOf[c];
+    if (open != null) netOpens[open] = netOpens[open]! - 1;
   }
-  // A trailing ')' is kept when it closes an earlier '(' inside the match
-  // (e.g. a wiki URL like `.../Foo_(bar)`), and trimmed otherwise (e.g. a
-  // URL wrapped in parentheses by the surrounding prose).
-  while (trimmedEnd > start && text[trimmedEnd - 1] == ')') {
-    // Scan everything before this candidate ')' — excluding itself — for an
-    // '(' that it would balance.
-    var unclosedOpens = 0;
-    for (var i = start; i < trimmedEnd - 1; i++) {
-      if (text[i] == '(') unclosedOpens++;
-      if (text[i] == ')') unclosedOpens--;
+  var trimmedEnd = end;
+  // Repeat until nothing changes: trimming a closer can uncover punctuation,
+  // and trimming punctuation can uncover a closer (e.g. `(see .../docs.)`).
+  while (trimmedEnd > start) {
+    final last = text[trimmedEnd - 1];
+    if (_trimmableTrailing.contains(last)) {
+      trimmedEnd--;
+      continue;
     }
+    // A trailing ')', ']' or '}' is kept when it closes an earlier opener of
+    // the same kind inside the match (e.g. a wiki URL like `.../Foo_(bar)` or
+    // an IPv6 host like `http://[::1]`), and trimmed otherwise (e.g. a URL
+    // wrapped in brackets by the surrounding prose).
+    final open = openerOf[last];
+    if (open == null) break;
+    // Count everything before this candidate closer — excluding itself, hence
+    // the +1 — for an opener that it would balance.
+    final unclosedOpens = netOpens[open]! + 1;
     if (unclosedOpens > 0) break;
+    netOpens[open] = unclosedOpens;
     trimmedEnd--;
   }
   return trimmedEnd;

@@ -10,6 +10,14 @@ analyzer:
     # that have nothing to do with this package; the harness is checked by
     # running it.
     - script/cross_bench/**
+    # The end-to-end bench on flutter_pty2 3.x, which neither this package
+    # nor `example/` (^1.0.0) depends on, so its imports do not resolve from
+    # either. It is only ever built copied into `example/lib/` with an
+    # override; the recipe is in script/term_compare/spike_pty3.sh.
+    - script/term_compare/pty3/**
+    # The command-line end-to-end bench: its own package, on a local
+    # flutter_pty2 3.x checkout (see its pubspec), resolved by nothing here.
+    - script/term_compare/cli_e2e/**
     - build/**
 
 linter:

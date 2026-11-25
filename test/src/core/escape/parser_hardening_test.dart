@@ -64,6 +64,59 @@ void main() {
     });
   });
 
+  group('unfinished ESC sequence written in many chunks', () {
+    // An ESC with an intermediate byte, a charset designation and ESC # wait
+    // for their final byte through DEL, C0 controls and (the first)
+    // intermediates. Each write used to read the whole sequence again, so a
+    // BEL in it rang once more with every later write.
+    for (final (name, start, filler) in [
+      ('ESC + intermediates', '\x1b ${' ' * 4096}', ' '),
+      ('ESC ( + DEL', '\x1b(${'\x7f' * 4096}', '\x7f'),
+    ]) {
+      test('$name: a BEL in each write rings once', () {
+        var bells = 0;
+        final terminal = Terminal(onBell: () => bells++);
+
+        terminal.write(start);
+        for (var i = 0; i < 100; i++) {
+          terminal.write('\x07$filler');
+        }
+        terminal.write('Xafter');
+
+        expect(bells, 100);
+        expect(terminal.buffer.lines[0].getText(), 'after');
+      });
+    }
+
+    // Past the limit (256 bytes) the sequence ends as it does when written
+    // whole, wherever the writes cut it.
+    const limit = 256;
+    final del = '\x7f' * (limit + 50);
+    for (final (input, line, expected) in [
+      ('\x1b($del' '0q', 0, '─'),
+      ('\x1b#$del' '8', 0, 'E' * 80),
+      ('\x1b${' ' * (limit + 50)}Fafter', 0, 'after'),
+    ]) {
+      final chunkings = [
+        [input],
+        input.split(''),
+        for (var cut = limit - 1; cut <= limit + 3; cut++)
+          [input.substring(0, cut), input.substring(cut)],
+      ];
+      for (final chunks in chunkings) {
+        test(
+            'over-long ${input.substring(1, 2)} ends the same in '
+            '${chunks.length} writes of ${chunks.first.length}', () {
+          final terminal = Terminal();
+          for (final chunk in chunks) {
+            terminal.write(chunk);
+          }
+          expect(terminal.buffer.lines[line].getText(), expected);
+        });
+      }
+    }
+  });
+
   group('SGR colon truecolor', () {
     test('without colour space followed by more parameters', () {
       final terminal = Terminal();

@@ -234,4 +234,72 @@ void main() {
       expect(terminal.buffer.lines[i].length, 13);
     }
   });
+
+  // EL 1, ECH and DCH can empty an auto-wrapped continuation row while it
+  // keeps isWrapped. Reflow must keep that row after its content.
+  group('reflow() keeps an emptied continuation row after its content', () {
+    for (final (name, input, cursorX) in [
+      ('EL 1', '0123456789ABCDE\x1b[1K', 5),
+      ('ECH', '0123456789ABCDE\r\x1b[10X', 0),
+      ('DCH', '0123456789X\b\x1b[P', 0),
+    ]) {
+      Terminal start() => Terminal(maxLines: 100)
+        ..resize(10, 4)
+        ..write('hello\r\n$input');
+
+      test('$name, grow', () {
+        final t = start()..resize(20, 4);
+        final lines = t.buffer.lines;
+
+        expect(lines[1].toString(), '0123456789');
+        expect(lines[1].isWrapped, isFalse);
+        expect(lines[2].toString(), '');
+        expect(lines[2].isWrapped, isTrue);
+        expect(t.buffer.cursorX, cursorX);
+        expect(t.buffer.absoluteCursorY, 2);
+
+        t.write('Z');
+        expect(lines[2].toString(), '${' ' * cursorX}Z');
+
+        t.resize(30, 4);
+        expect(t.buffer.getText().trimRight(),
+            'hello\n0123456789${' ' * cursorX}Z');
+      });
+
+      test('$name, shrink', () {
+        final t = start()..resize(7, 4);
+        final lines = t.buffer.lines;
+
+        expect(lines[1].toString(), '0123456');
+        expect(lines[1].isWrapped, isFalse);
+        expect(lines[2].toString(), '789');
+        expect(lines[2].isWrapped, isTrue);
+        expect(lines[3].toString(), '');
+        expect(lines[3].isWrapped, isTrue);
+        expect(t.buffer.cursorX, cursorX);
+        expect(t.buffer.absoluteCursorY, 3);
+
+        t.write('Z');
+        expect(lines[3].toString(), '${' ' * cursorX}Z');
+
+        t.resize(10, 4);
+        expect(t.buffer.getText().trimRight(),
+            'hello\n0123456789${' ' * cursorX}Z');
+      });
+
+      test('$name, repeated resizes', () {
+        final t = start();
+        for (final width in [20, 30, 10, 7, 10]) {
+          t.resize(width, 4);
+          final y = t.buffer.absoluteCursorY;
+          expect(t.buffer.getText().trimRight(), 'hello\n0123456789',
+              reason: 'width $width');
+          expect(t.buffer.lines[y].toString(), '', reason: 'width $width');
+          expect(t.buffer.lines[y].isWrapped, isTrue, reason: 'width $width');
+          expect(t.buffer.lines[y - 1].toString(), endsWith('789'),
+              reason: 'width $width');
+        }
+      });
+    }
+  });
 }
