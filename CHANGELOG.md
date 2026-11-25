@@ -1,3 +1,12 @@
+## [6.6.0] - 2026-11-25
+
+The stable release of the two pre-releases below, with no code changes since
+`6.6.0-beta.2`. Coming from 6.5.0, this is everything under `6.6.0-beta.1`
+(a faster write path, the opt-in glyph atlas, `Terminal.writeBytes`) and
+`6.6.0-beta.2` (fixes in touch, IME and keyboard input, and hardening
+against untrusted output); read the *Changed behaviour* notes of both before
+upgrading.
+
 ## [6.6.0-beta.2] - 2026-11-23
 
 A second pre-release: bug fixes found while reviewing beta.1 in real use, most

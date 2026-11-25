@@ -3776,7 +3776,7 @@ void main() {
     terminal.write('\x1b[>0q');
 
     expect(output, [
-      '\x1bP>|xterm3 6.6.0-beta.2\x1b\\',
+      '\x1bP>|xterm3 6.6.0\x1b\\',
       '\x1bP>|lumide-term 1.0\x1b\\',
     ]);
   });
